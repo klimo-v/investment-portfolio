@@ -41,7 +41,9 @@ module.exports = {
       assets: [],
       optimization: false,
       outputHashing: 'none',
-      generatePackageJson: true,
+      // generatePackageJson требует pnpm-lock.yaml и нужен только для деплоя;
+      // для локального запуска отключено (см. README про production-сборку).
+      generatePackageJson: false,
     }),
   ],
 };
