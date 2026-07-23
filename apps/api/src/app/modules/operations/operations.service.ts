@@ -2,10 +2,12 @@ import { randomUUID } from 'node:crypto';
 import { Inject, Injectable } from '@nestjs/common';
 import {
   calculatePositions,
+  calculateTrades,
   OperationSchema,
   type Operation,
   type Position,
   type DashboardSummary,
+  type Trade,
 } from '@core';
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
 import { operations, instruments, systems, quotes, type OperationRow } from '../../../db/schema';
@@ -109,6 +111,74 @@ export class OperationsService {
         currentPrice,
         currentValueRub,
         pnlRub,
+      });
+    }
+    return result;
+  }
+
+  /**
+   * Сделки собираются движком из операций (docs/02-data-model.md §2.5): сделка
+   * открывается первой покупкой и закрывается, когда остаток уходит в ноль.
+   * Открытые сделки обогащаем текущей ценой/P&L, как и позиции.
+   */
+  async trades(): Promise<Trade[]> {
+    const ops = this.list();
+    const instrumentRows = this.db.select().from(instruments).all();
+    const quoteRows = this.db.select().from(quotes).all();
+    const instrumentById = new Map(instrumentRows.map((i) => [i.id, i]));
+    const quoteByInstrument = new Map(quoteRows.map((q) => [q.instrumentId, q]));
+
+    const result: Trade[] = [];
+    for (const t of calculateTrades(ops)) {
+      const instrument = instrumentById.get(t.instrumentId);
+      const currency = instrument?.currency ?? 'RUB';
+      const quote = quoteByInstrument.get(t.instrumentId);
+
+      let currentPrice: string | null = null;
+      let currentValueRub: string | null = null;
+
+      if (quote && t.quantity.gt(0)) {
+        currentPrice = quote.price;
+        const fx = await this.quotesService.getFxRate(currency);
+        const valueRub = Number(t.quantity) * Number(quote.price) * fx;
+        currentValueRub = valueRub.toFixed(2);
+      }
+      // P&L = реализованный (по проданной части) + нереализованный (по остатку) + выплаты
+      const unrealizedRub = currentValueRub ? Number(currentValueRub) - Number(t.investedRub) : 0;
+      const pnlRub = (
+        Number(t.realizedPnlRub) +
+        unrealizedRub +
+        Number(t.dividendsRub) +
+        Number(t.couponsRub)
+      ).toFixed(2);
+
+      result.push({
+        id: t.operationIds[0],
+        instrumentId: t.instrumentId,
+        ticker: instrument?.ticker ?? t.instrumentId,
+        systemId: t.systemId,
+        portfolioId: t.portfolioId,
+        type: instrument?.type ?? 'Stock',
+        currency,
+        status: t.status,
+        quantity: t.quantity.toString(),
+        qtyBought: t.qtyBought.toString(),
+        qtySold: t.qtySold.toString(),
+        avgBuyPrice: t.avgBuyPrice.toFixed(2),
+        investedCcy: t.investedCcy.toFixed(2),
+        investedRub: t.investedRub.toFixed(2),
+        proceedsCcy: t.proceedsCcy.toFixed(2),
+        proceedsRub: t.proceedsRub.toFixed(2),
+        realizedPnlCcy: t.realizedPnlCcy.toFixed(2),
+        realizedPnlRub: t.realizedPnlRub.toFixed(2),
+        dividendsRub: t.dividendsRub.toFixed(2),
+        couponsRub: t.couponsRub.toFixed(2),
+        currentPrice,
+        currentValueRub,
+        pnlRub,
+        openedAt: t.openedAt,
+        closedAt: t.closedAt,
+        operationIds: t.operationIds,
       });
     }
     return result;

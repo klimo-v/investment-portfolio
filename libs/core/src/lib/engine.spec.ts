@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import Decimal from 'decimal.js';
-import { calculatePositions, unrealizedPnl } from './engine';
+import { calculatePositions, calculateTrades, unrealizedPnl } from './engine';
 import type { Operation } from './schemas';
 
 /**
@@ -117,5 +117,85 @@ describe('Transfer не искажает P&L', () => {
     // Transfer пропущен → позиция как будто только покупка
     expect(positions).toHaveLength(1);
     expect(positions[0].quantity.toString()).toBe('10');
+  });
+});
+
+describe('calculateTrades — закрытые/открытые/частично закрытые', () => {
+  it('закрытая сделка SBER: покупка 1600@310.99 + продажа 1600@317', () => {
+    const [trade] = calculateTrades([
+      op({
+        id: 'o1',
+        date: '2025-02-27',
+        instrumentId: 'SBER',
+        operationType: 'Buy',
+        quantity: '1600',
+        price: '310.99',
+        fee: '199.03',
+      }),
+      op({
+        id: 'o2',
+        date: '2025-03-07',
+        instrumentId: 'SBER',
+        operationType: 'Sell',
+        quantity: '1600',
+        price: '317',
+        fee: '202.88',
+      }),
+    ]);
+    expect(trade.status).toBe('Closed');
+    expect(trade.investedCcy.toString()).toBe('0');
+    expect(trade.proceedsCcy.toFixed(2)).toBe('506997.12');
+    expect(trade.realizedPnlCcy.toFixed(2)).toBe('9214.09');
+    expect(trade.qtyBought.toString()).toBe('1600');
+    expect(trade.qtySold.toString()).toBe('1600');
+    expect(trade.quantity.toString()).toBe('0');
+    expect(trade.openedAt).toBe('2025-02-27');
+    expect(trade.closedAt).toBe('2025-03-07');
+    expect(trade.operationIds).toEqual(['o1', 'o2']);
+  });
+
+  it('частично закрытая сделка остаётся в статусе Partial без closedAt', () => {
+    const [trade] = calculateTrades([
+      op({ id: 'o1', instrumentId: 'X', operationType: 'Buy', quantity: '100', price: '10' }),
+      op({ id: 'o2', instrumentId: 'X', operationType: 'Buy', quantity: '100', price: '20' }),
+      op({ id: 'o3', instrumentId: 'X', operationType: 'Sell', quantity: '50', price: '30' }),
+    ]);
+    expect(trade.status).toBe('Partial');
+    expect(trade.closedAt).toBeNull();
+    expect(trade.quantity.toString()).toBe('150');
+    expect(trade.qtyBought.toString()).toBe('200');
+    expect(trade.qtySold.toString()).toBe('50');
+    expect(trade.realizedPnlCcy.toString()).toBe('750');
+  });
+
+  it('открытая сделка без продаж не попадает в закрытые', () => {
+    const trades = calculateTrades([
+      op({ id: 'o1', instrumentId: 'Y', operationType: 'Buy', quantity: '10', price: '100' }),
+    ]);
+    expect(trades).toHaveLength(1);
+    expect(trades[0].status).toBe('Open');
+    expect(trades[0].closedAt).toBeNull();
+  });
+
+  it('повторное открытие после закрытия создаёт новую сделку', () => {
+    const trades = calculateTrades([
+      op({ id: 'o1', date: '2025-01-01', instrumentId: 'Z', operationType: 'Buy', quantity: '10', price: '100' }),
+      op({ id: 'o2', date: '2025-01-05', instrumentId: 'Z', operationType: 'Sell', quantity: '10', price: '110' }),
+      op({ id: 'o3', date: '2025-02-01', instrumentId: 'Z', operationType: 'Buy', quantity: '5', price: '120' }),
+    ]);
+    expect(trades).toHaveLength(2);
+    const [first, second] = trades;
+    expect(first.status).toBe('Closed');
+    expect(first.operationIds).toEqual(['o1', 'o2']);
+    expect(second.status).toBe('Open');
+    expect(second.operationIds).toEqual(['o3']);
+  });
+
+  it('дивиденд накапливается в открытую сделку', () => {
+    const [trade] = calculateTrades([
+      op({ id: 'o1', instrumentId: 'LKOH', operationType: 'Buy', quantity: '29', price: '7105.17' }),
+      op({ id: 'o2', instrumentId: 'LKOH', operationType: 'Dividend', quantity: '1', price: '31733' }),
+    ]);
+    expect(trade.dividendsRub.toFixed(2)).toBe('31733.00');
   });
 });

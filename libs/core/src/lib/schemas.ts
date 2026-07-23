@@ -130,3 +130,43 @@ export const DashboardSummarySchema = z.object({
   }),
 });
 export type DashboardSummary = z.infer<typeof DashboardSummarySchema>;
+
+/** Статус сделки: открыта / частично закрыта / закрыта по остатку количества */
+export const TradeStatus = z.enum(['Open', 'Partial', 'Closed']);
+export type TradeStatus = z.infer<typeof TradeStatus>;
+
+/**
+ * Сделка (docs/02-data-model.md §2.5, docs/03-ux-plan.md шаг 2).
+ * Не вводится руками — собирается движком из операций одного инструмента:
+ * открывается первой покупкой, закрывается когда остаток уходит в ноль.
+ */
+export const TradeSchema = z.object({
+  id: z.string(),
+  instrumentId: z.string(),
+  ticker: z.string(),
+  systemId: z.string(),
+  portfolioId: z.string(),
+  type: InstrumentType,
+  currency: z.string(),
+  status: TradeStatus,
+  quantity: decimalString, // остаток (0 у закрытой сделки)
+  qtyBought: decimalString,
+  qtySold: decimalString,
+  avgBuyPrice: decimalString,
+  investedCcy: decimalString,
+  investedRub: decimalString,
+  proceedsCcy: decimalString,
+  proceedsRub: decimalString,
+  realizedPnlCcy: decimalString,
+  realizedPnlRub: decimalString,
+  dividendsRub: decimalString,
+  couponsRub: decimalString,
+  currentPrice: decimalString.nullable(),
+  currentValueRub: decimalString.nullable(),
+  pnlRub: decimalString.nullable(), // реализованный + нереализованный + выплаты
+  openedAt: z.string(),
+  closedAt: z.string().nullable(),
+  /** id операций, из которых собрана сделка — для раскрытия строки в UI */
+  operationIds: z.array(z.string()),
+});
+export type Trade = z.infer<typeof TradeSchema>;

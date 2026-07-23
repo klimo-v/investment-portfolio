@@ -6,8 +6,10 @@ import {
   PositionSchema,
   OperationSchema,
   DashboardSummarySchema,
+  TradeSchema,
   type Operation,
   type Position,
+  type Trade,
 } from '@core';
 
 /**
@@ -40,6 +42,15 @@ export class OperationApi {
     { parse: z.array(PositionSchema).parse },
   );
 
+  /** Сделки: открытые/частично закрытые/закрытые, собранные из операций */
+  readonly trades = httpResource(
+    () => {
+      this.reloadTrigger();
+      return '/api/operations/trades';
+    },
+    { parse: z.array(TradeSchema).parse },
+  );
+
   /** Агрегаты для дашборда */
   readonly summary = httpResource(
     () => {
@@ -68,4 +79,4 @@ export class OperationApi {
   }
 }
 
-export type { Operation, Position };
+export type { Operation, Position, Trade };
