@@ -81,8 +81,20 @@ export const operations = sqliteTable('operations', {
     .default(sql`(datetime('now'))`),
 });
 
+/** Кэш котировок (текущие цены инструментов) */
+export const quotes = sqliteTable('quotes', {
+  instrumentId: text('instrument_id')
+    .primaryKey()
+    .references(() => instruments.id),
+  price: text('price').notNull(),
+  currency: text('currency').notNull(),
+  source: text('source', { enum: ['moex', 'cbr', 'binance', 'manual'] }).notNull(),
+  asOf: text('as_of').notNull(),
+});
+
 export type SystemRow = typeof systems.$inferSelect;
 export type PortfolioRow = typeof portfolios.$inferSelect;
 export type InstrumentRow = typeof instruments.$inferSelect;
 export type OperationRow = typeof operations.$inferSelect;
 export type NewOperationRow = typeof operations.$inferInsert;
+export type QuoteRow = typeof quotes.$inferSelect;

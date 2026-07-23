@@ -1,7 +1,14 @@
 import { Injectable, inject, signal } from '@angular/core';
 import { HttpClient, httpResource } from '@angular/common/http';
+import { firstValueFrom } from 'rxjs';
 import { z } from 'zod';
-import { PositionSchema, OperationSchema, type Operation, type Position } from '@core';
+import {
+  PositionSchema,
+  OperationSchema,
+  DashboardSummarySchema,
+  type Operation,
+  type Position,
+} from '@core';
 
 /**
  * API-клиент операций и позиций (FSD: entities).
@@ -33,16 +40,31 @@ export class OperationApi {
     { parse: z.array(PositionSchema).parse },
   );
 
+  /** Агрегаты для дашборда */
+  readonly summary = httpResource(
+    () => {
+      this.reloadTrigger();
+      return '/api/operations/summary';
+    },
+    { parse: DashboardSummarySchema.parse },
+  );
+
   /** Добавить операцию (мутация через HttpClient), затем перезагрузить ресурсы */
   async add(operation: Operation): Promise<Operation> {
-    const created = await new Promise<Operation>((resolve, reject) => {
-      this.http.post<Operation>('/api/operations', operation).subscribe({
-        next: resolve,
-        error: reject,
-      });
-    });
+    const created = await firstValueFrom(
+      this.http.post<Operation>('/api/operations', operation),
+    );
     this.reloadTrigger.update((n) => n + 1);
     return created;
+  }
+
+  /** Обновить котировки с рынка (MOEX/ЦБ), затем пересчитать позиции */
+  async refreshQuotes(): Promise<{ updated: number; total: number }> {
+    const result = await firstValueFrom(
+      this.http.post<{ updated: number; total: number }>('/api/quotes/refresh', {}),
+    );
+    this.reloadTrigger.update((n) => n + 1);
+    return result;
   }
 }
 

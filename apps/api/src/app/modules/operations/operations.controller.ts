@@ -1,5 +1,5 @@
 import { Body, Controller, Get, Post } from '@nestjs/common';
-import type { Operation, Position } from '@core';
+import type { Operation, Position, DashboardSummary } from '@core';
 import { OperationsService } from './operations.service';
 
 /**
@@ -21,7 +21,12 @@ export class OperationsController {
   }
 
   @Get('positions')
-  positions(): Position[] {
+  positions(): Promise<Position[]> {
     return this.service.positions();
+  }
+
+  @Get('summary')
+  summary(): Promise<DashboardSummary> {
+    return this.service.summary();
   }
 }

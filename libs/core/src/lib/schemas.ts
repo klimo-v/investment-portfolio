@@ -90,3 +90,43 @@ export const PositionSchema = z.object({
   pnlRub: decimalString.nullable(),
 });
 export type Position = z.infer<typeof PositionSchema>;
+
+/**
+ * Агрегаты для дашборда (docs/03-ux-plan.md, шаг 4).
+ * Логика построения графика — из portfolio_dashboard.html пользователя:
+ * помесячные поток (депозиты/выводы) и доход (дивиденды/купоны/реализ. P&L),
+ * P&L по системам, breakdown прибыль/убыток по инструментам.
+ */
+export const DashboardSummarySchema = z.object({
+  // временной ряд по месяцам (для комбо-графика)
+  timeline: z.array(
+    z.object({
+      period: z.string(), // YYYY-MM
+      flow: z.number(), // поток кэша (депозит + / вывод −)
+      income: z.number(), // доход (дивиденды + купоны)
+    }),
+  ),
+  // P&L по системам (столбцы)
+  bySystem: z.array(
+    z.object({
+      systemId: z.string(),
+      name: z.string(),
+      investedRub: z.number(),
+      pnlRub: z.number(),
+    }),
+  ),
+  // breakdown прибыль/убыток по инструментам (бары)
+  breakdown: z.array(
+    z.object({
+      ticker: z.string(),
+      pnlRub: z.number(),
+    }),
+  ),
+  totals: z.object({
+    investedRub: z.number(),
+    currentValueRub: z.number(),
+    pnlRub: z.number(),
+    dividendsRub: z.number(),
+  }),
+});
+export type DashboardSummary = z.infer<typeof DashboardSummarySchema>;
