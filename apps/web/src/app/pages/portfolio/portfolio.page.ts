@@ -3,7 +3,9 @@ import { MatCardModule } from '@angular/material/card';
 import { MatTableModule } from '@angular/material/table';
 import { MatButtonModule } from '@angular/material/button';
 import { MatIconModule } from '@angular/material/icon';
+import { MatDialog } from '@angular/material/dialog';
 import { OperationApi } from '../../entities/operation/operation.api';
+import { ManagePortfoliosDialog } from '../../features/manage-portfolios/manage-portfolios.dialog';
 import { formatMoney, pnlColorClass } from '@web-shared';
 
 /**
@@ -17,10 +19,16 @@ import { formatMoney, pnlColorClass } from '@web-shared';
   template: `
     <div class="header">
       <h1 class="page-title">Портфель</h1>
-      <button mat-stroked-button (click)="refresh()" [disabled]="refreshing()">
-        <mat-icon>refresh</mat-icon>
-        {{ refreshing() ? 'Обновление…' : 'Обновить цены' }}
-      </button>
+      <div class="actions">
+        <button mat-stroked-button (click)="managePortfolios()">
+          <mat-icon>account_balance</mat-icon>
+          Портфели
+        </button>
+        <button mat-stroked-button (click)="refresh()" [disabled]="refreshing()">
+          <mat-icon>refresh</mat-icon>
+          {{ refreshing() ? 'Обновление…' : 'Обновить цены' }}
+        </button>
+      </div>
     </div>
 
     <div class="totals">
@@ -86,6 +94,10 @@ import { formatMoney, pnlColorClass } from '@web-shared';
         justify-content: space-between;
         align-items: center;
       }
+      .actions {
+        display: flex;
+        gap: 8px;
+      }
       .totals {
         display: flex;
         gap: 16px;
@@ -111,6 +123,7 @@ import { formatMoney, pnlColorClass } from '@web-shared';
 })
 export class PortfolioPage {
   protected readonly api = inject(OperationApi);
+  private readonly dialog = inject(MatDialog);
 
   protected readonly columns = ['ticker', 'qty', 'avg', 'current', 'value', 'pnl'];
   protected readonly refreshing = signal(false);
@@ -147,6 +160,10 @@ export class PortfolioPage {
 
   protected pnlClass(value: number): string {
     return pnlColorClass(value);
+  }
+
+  protected managePortfolios(): void {
+    this.dialog.open(ManagePortfoliosDialog, { autoFocus: false });
   }
 
   protected async refresh(): Promise<void> {

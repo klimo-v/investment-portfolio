@@ -1,9 +1,13 @@
-import { Inject, Injectable } from '@nestjs/common';
+import { randomUUID } from 'node:crypto';
+import { BadRequestException, Inject, Injectable } from '@nestjs/common';
+import { eq, sql } from 'drizzle-orm';
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
+import { PortfolioSchema } from '@core';
 import {
   systems,
   portfolios,
   instruments,
+  operations,
   type SystemRow,
   type PortfolioRow,
   type InstrumentRow,
@@ -28,5 +32,43 @@ export class PortfoliosService {
 
   listInstruments(): InstrumentRow[] {
     return this.db.select().from(instruments).all();
+  }
+
+  /** Валидация тела через Zod (CLAUDE.md §8), затем запись в БД */
+  createPortfolio(raw: unknown): PortfolioRow {
+    const parsed = PortfolioSchema.parse(raw);
+    const id = parsed.id ?? randomUUID();
+
+    this.db
+      .insert(portfolios)
+      .values({
+        id,
+        name: parsed.name,
+        broker: parsed.broker,
+        baseCurrency: parsed.baseCurrency,
+      })
+      .run();
+
+    return { id, name: parsed.name, broker: parsed.broker, baseCurrency: parsed.baseCurrency };
+  }
+
+  /**
+   * Удаление портфеля. Отклоняем, если на него уже ссылаются операции —
+   * иначе пользователь потеряет журнал сделок без явного предупреждения.
+   */
+  deletePortfolio(id: string): void {
+    const [{ count }] = this.db
+      .select({ count: sql<number>`count(*)` })
+      .from(operations)
+      .where(eq(operations.portfolioId, id))
+      .all();
+
+    if (count > 0) {
+      throw new BadRequestException(
+        `Нельзя удалить портфель: с ним связано операций — ${count}. Сначала удалите или перенесите операции.`,
+      );
+    }
+
+    this.db.delete(portfolios).where(eq(portfolios.id, id)).run();
   }
 }

@@ -1,4 +1,4 @@
-import { Controller, Get } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Post } from '@nestjs/common';
 import type { SystemRow, PortfolioRow, InstrumentRow } from '../../../db/schema';
 import { PortfoliosService } from './portfolios.service';
 
@@ -14,6 +14,17 @@ export class PortfoliosController {
   @Get('portfolios')
   portfolios(): PortfolioRow[] {
     return this.service.listPortfolios();
+  }
+
+  @Post('portfolios')
+  createPortfolio(@Body() body: unknown): PortfolioRow {
+    return this.service.createPortfolio(body);
+  }
+
+  @Delete('portfolios/:id')
+  deletePortfolio(@Param('id') id: string): { deleted: true } {
+    this.service.deletePortfolio(id);
+    return { deleted: true };
   }
 
   @Get('instruments')

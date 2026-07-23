@@ -71,6 +71,15 @@ export const InstrumentSchema = z.object({
 });
 export type Instrument = z.infer<typeof InstrumentSchema>;
 
+/** Портфель / брокерский счёт (справочник, docs/02-data-model.md §2.3) */
+export const PortfolioSchema = z.object({
+  id: z.string().min(1).optional(),
+  name: z.string().min(1),
+  broker: z.string().min(1),
+  baseCurrency: z.string().min(1).default('RUB'),
+});
+export type Portfolio = z.infer<typeof PortfolioSchema>;
+
 /** Позиция (вычисляется движком, не вводится руками) */
 export const PositionSchema = z.object({
   instrumentId: z.string(),
