@@ -1,5 +1,41 @@
-.DS_Store
+# dependencies
 node_modules/
-dist/
+.pnpm-store/
+
+# nx
 .nx/
+tmp/
+dist/
+out-tsc/
+
+# angular
+.angular/
+
+# testing
+coverage/
+
+# logs
 *.log
+
+# IDE
+.idea/
+.vscode/*
+!.vscode/extensions.json
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# local data / secrets
+*.local
+.env
+.env.*
+!.env.example
+*.sqlite
+*.sqlite3
+data/
+_tmp_*
+
+# local agent settings
+.claude/
