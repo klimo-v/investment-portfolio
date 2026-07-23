@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { Inject, Injectable } from '@nestjs/common';
+import { eq } from 'drizzle-orm';
 import {
   calculatePositions,
   calculateTrades,
@@ -58,6 +59,11 @@ export class OperationsService {
       .run();
 
     return { ...parsed, id };
+  }
+
+  /** Удалить операцию по id (безвозвратно — пересчёт позиций/сделок исключит её). */
+  delete(id: string): void {
+    this.db.delete(operations).where(eq(operations.id, id)).run();
   }
 
   /**

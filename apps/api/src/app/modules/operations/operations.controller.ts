@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Post } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Post } from '@nestjs/common';
 import type { Operation, Position, DashboardSummary, Trade } from '@core';
 import { OperationsService } from './operations.service';
 
@@ -18,6 +18,12 @@ export class OperationsController {
   @Post()
   add(@Body() body: unknown): Operation {
     return this.service.add(body);
+  }
+
+  @Delete(':id')
+  delete(@Param('id') id: string): { deleted: true } {
+    this.service.delete(id);
+    return { deleted: true };
   }
 
   @Get('positions')

@@ -69,6 +69,12 @@ export class OperationApi {
     return created;
   }
 
+  /** Удалить одну или несколько операций (безвозвратно), затем перезагрузить ресурсы */
+  async remove(ids: string[]): Promise<void> {
+    await Promise.all(ids.map((id) => firstValueFrom(this.http.delete<{ deleted: true }>(`/api/operations/${id}`))));
+    this.reloadTrigger.update((n) => n + 1);
+  }
+
   /** Обновить котировки с рынка (MOEX/ЦБ), затем пересчитать позиции */
   async refreshQuotes(): Promise<{ updated: number; total: number }> {
     const result = await firstValueFrom(
