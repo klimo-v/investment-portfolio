@@ -22,9 +22,10 @@ describe.skipIf(!hasFixture)('parseTbankXlsx — реальный отчёт Т-
   beforeAll(async () => {
     const workbook = new ExcelJS.Workbook();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    await workbook.xlsx.load(readFileSync(fixture) as any);
+    // ignoreNodes: mergeCells — см. import.service.ts, тот же разбор без него ~30с
+    await workbook.xlsx.load(readFileSync(fixture) as any, { ignoreNodes: ['mergeCells'] });
     rows = parseTbankXlsx(workbook.worksheets[0]);
-  }, 60_000); // реальный файл ~1200 строк — разбор дольше дефолтных 10с
+  }, 10_000);
 
   it('извлекает все сделки раздела 1.1: 788 Покупка + 134 Продажа = 922', () => {
     const trades = rows.filter((r) => r.tradeType === 'Покупка' || r.tradeType === 'Продажа');

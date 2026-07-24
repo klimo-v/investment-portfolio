@@ -22,6 +22,8 @@ export interface PreviewRow {
 export interface PreviewResult {
   rows: PreviewRow[];
   summary: { total: number; ok: number; warn: number; error: number; duplicate: number };
+  /** Id уже распарсенного на сервере файла — передать в следующий preview()/commit() вместо content */
+  uploadId: string;
 }
 
 export type ImportFormat = 'csv' | 'html' | 'xlsx';
@@ -40,22 +42,26 @@ export interface ImportOptions {
   tickerSystemOverrides?: Record<string, string>;
 }
 
+/**
+ * Что переслать на бэк: либо `content` (первый вызов на файл), либо `uploadId`
+ * из ответа предыдущего preview() — тогда бэк переиспользует уже распарсенные
+ * строки вместо повторной пересылки/разбора всего файла (важно для больших
+ * xlsx-отчётов: правка портфеля/системы/тикер-выбора иначе гоняла бы файл целиком
+ * на каждый чих).
+ */
+export type ImportRequest = { content?: string; uploadId?: string } & ImportOptions;
+
 @Injectable({ providedIn: 'root' })
 export class ImportApi {
   private readonly http = inject(HttpClient);
 
-  preview(content: string, opts: ImportOptions): Promise<PreviewResult> {
-    return firstValueFrom(
-      this.http.post<PreviewResult>('/api/import/preview', { content, ...opts }),
-    );
+  preview(req: ImportRequest): Promise<PreviewResult> {
+    return firstValueFrom(this.http.post<PreviewResult>('/api/import/preview', req));
   }
 
-  commit(content: string, opts: ImportOptions): Promise<{ batchId: string; imported: number }> {
+  commit(req: ImportRequest): Promise<{ batchId: string; imported: number }> {
     return firstValueFrom(
-      this.http.post<{ batchId: string; imported: number }>('/api/import/commit', {
-        content,
-        ...opts,
-      }),
+      this.http.post<{ batchId: string; imported: number }>('/api/import/commit', req),
     );
   }
 

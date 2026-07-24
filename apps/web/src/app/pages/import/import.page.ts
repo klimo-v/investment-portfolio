@@ -289,12 +289,20 @@ export class ImportPage {
   private readonly tickerSystemChoices = signal<Record<string, string>>({});
 
   private fileContent = '';
+  /**
+   * Id файла, уже распарсенного бэком (из ответа preview()). Пока он есть,
+   * правки батч-разметки/тикер-выбора шлют его вместо содержимого файла —
+   * иначе для большого xlsx-отчёта каждый чих пересылал бы весь файл заново
+   * и заново гонял бы его через парсер (docs/04-roadmap.md §3.1).
+   */
+  private uploadId: string | undefined;
 
   protected onFile(event: Event): void {
     this.errorMessage.set('');
     this.lastBatch.set(null);
     this.preview.set(null);
     this.tickerSystemChoices.set({});
+    this.uploadId = undefined;
     const input = event.target as HTMLInputElement;
     const file = input.files?.[0];
     if (!file) return;
@@ -347,10 +355,11 @@ export class ImportPage {
 
   /** Предпросмотр запускается автоматически, когда есть файл и достаточно разметки */
   private async tryPreview(): Promise<void> {
-    if (!this.fileContent || !this.batchReady()) return;
+    if ((!this.fileContent && !this.uploadId) || !this.batchReady()) return;
     this.errorMessage.set('');
     try {
-      const result = await this.api.preview(this.fileContent, this.options());
+      const result = await this.api.preview(this.request());
+      this.uploadId = result.uploadId;
       this.preview.set(result);
     } catch {
       this.errorMessage.set('Не удалось разобрать файл. Проверьте формат.');
@@ -362,9 +371,10 @@ export class ImportPage {
     this.importing.set(true);
     this.errorMessage.set('');
     try {
-      const result = await this.api.commit(this.fileContent, this.options());
+      const result = await this.api.commit(this.request());
       this.lastBatch.set(result);
       this.preview.set(null);
+      this.uploadId = undefined; // батч закоммичен — кэш файла на бэке уже очищен
     } catch {
       this.errorMessage.set('Не удалось импортировать. Попробуйте ещё раз.');
     } finally {
@@ -383,8 +393,11 @@ export class ImportPage {
     }
   }
 
-  private options() {
+  /** Content шлём только пока нет uploadId — дальше бэк переиспользует уже распарсенные строки */
+  private request() {
     return {
+      content: this.uploadId ? undefined : this.fileContent,
+      uploadId: this.uploadId,
       format: this.format(),
       systemId: this.systemId(),
       portfolioId: this.portfolioId(),
