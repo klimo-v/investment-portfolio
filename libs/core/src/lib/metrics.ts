@@ -12,6 +12,25 @@ export interface CashFlow {
 }
 
 const MS_PER_YEAR = 365 * 24 * 60 * 60 * 1000;
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
+
+/**
+ * Минимальный охват потоков для аннуализации (docs/05-review-usability.md §2).
+ * XIRR экстраполирует доходность окна на год — на окне короче ~месяца эта
+ * экстраполяция становится статистическим шумом (пара недель роста на 2%
+ * превращается в тысячи процентов годовых), хотя формула отработала верно.
+ * Ниже порога считаем результат неопределённым, а не показываем мусорное число.
+ */
+const MIN_SPAN_DAYS_FOR_XIRR = 30;
+
+/**
+ * Потолок «правдоподобной» годовой доходности (docs/05-review-usability.md §2).
+ * Даже на многомесячном окне XIRR может улететь в тысячи процентов, если один
+ * поток (например, крупная покупка за пару дней до даты оценки) успел дать
+ * быстрый прирост — решение математически верное, но как «годовая доходность»
+ * бессмысленное. Выше потолка считаем результат недостоверным и не показываем.
+ */
+const MAX_PLAUSIBLE_RATE = 5; // +500% годовых
 
 function toTime(date: string): number {
   return new Date(`${date}T00:00:00Z`).getTime();
@@ -21,7 +40,9 @@ function toTime(date: string): number {
  * XIRR — внутренняя норма доходности с учётом дат и неравномерных вложений
  * (денежно-взвешенная годовая доходность). Возвращает долю (0.184 = +18.4% годовых)
  * или null, если решение не определено (нет и притока, и оттока — доходность
- * посчитать не от чего).
+ * посчитать не от чего), окно между первым и последним потоком короче
+ * MIN_SPAN_DAYS_FOR_XIRR, либо результат превышает MAX_PLAUSIBLE_RATE —
+ * в обоих случаях аннуализация была бы статистическим шумом, а не сигналом.
  *
  * Знак потоков: покупка/ввод денег — отрицательный (капитал ушёл в позицию),
  * продажа/дивиденд/итоговая стоимость остатка — положительный. Ньютон с откатом
@@ -32,6 +53,9 @@ export function xirr(flows: CashFlow[], guess = 0.1): number | null {
   if (!flows.some((f) => f.amount > 0) || !flows.some((f) => f.amount < 0)) return null;
 
   const t0 = Math.min(...flows.map((f) => toTime(f.date)));
+  const t1 = Math.max(...flows.map((f) => toTime(f.date)));
+  if ((t1 - t0) / MS_PER_DAY < MIN_SPAN_DAYS_FOR_XIRR) return null;
+
   const years = (date: string): number => (toTime(date) - t0) / MS_PER_YEAR;
 
   const npv = (rate: number): number =>
@@ -42,6 +66,10 @@ export function xirr(flows: CashFlow[], guess = 0.1): number | null {
       return sum - (y * f.amount) / Math.pow(1 + rate, y + 1);
     }, 0);
 
+  /** Отбрасывает неправдоподобные решения (см. MAX_PLAUSIBLE_RATE) вместо их показа */
+  const plausible = (rate: number): number | null =>
+    Math.abs(rate) > MAX_PLAUSIBLE_RATE ? null : rate;
+
   // Ньютон-Рафсон
   let rate = guess;
   for (let i = 0; i < 100; i++) {
@@ -50,7 +78,7 @@ export function xirr(flows: CashFlow[], guess = 0.1): number | null {
     if (!Number.isFinite(value) || !Number.isFinite(deriv) || deriv === 0) break;
     const next = rate - value / deriv;
     if (!Number.isFinite(next) || next <= -0.9999) break;
-    if (Math.abs(next - rate) < 1e-8) return next;
+    if (Math.abs(next - rate) < 1e-8) return plausible(next);
     rate = next;
   }
 
@@ -63,7 +91,7 @@ export function xirr(flows: CashFlow[], guess = 0.1): number | null {
   for (let i = 0; i < 200; i++) {
     const mid = (lo + hi) / 2;
     const fMid = npv(mid);
-    if (Math.abs(fMid) < 1e-7) return mid;
+    if (Math.abs(fMid) < 1e-7) return plausible(mid);
     if (fLo * fMid < 0) {
       hi = mid;
     } else {
@@ -71,7 +99,7 @@ export function xirr(flows: CashFlow[], guess = 0.1): number | null {
       fLo = fMid;
     }
   }
-  return (lo + hi) / 2;
+  return plausible((lo + hi) / 2);
 }
 
 /**

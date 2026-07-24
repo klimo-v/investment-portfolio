@@ -40,7 +40,7 @@ const C = {
  */
 const DEPOSIT_ANNUAL_RATE = 0.16;
 
-type Period = 'all' | 'ytd' | '1y' | '3m';
+type Period = 'all' | 'ytd' | '1y';
 
 interface EffRow extends Effectiveness {
   id: string;
@@ -85,9 +85,8 @@ interface EffRow extends Effectiveness {
           [value]="period()"
           (change)="period.set($event.value)"
           hideSingleSelectionIndicator
-          matTooltip="Период сужает графики динамики и поток по месяцам. Вложено/ROI/XIRR/просадка — всегда по всей истории остатка: без этого расчёт был бы бессмысленным (виден только хвост истории без своего «входа»)."
+          matTooltip="Период сужает журнал операций: Вложено/Текущая стоимость/P&L/ROI/XIRR/просадка считаются заново по выбранному окну. На коротком окне XIRR (годовые проценты) может быть не определён — это статистический шум, а не ошибка."
         >
-          <mat-button-toggle value="3m">3 мес</mat-button-toggle>
           <mat-button-toggle value="ytd">YTD</mat-button-toggle>
           <mat-button-toggle value="1y">1 год</mat-button-toggle>
           <mat-button-toggle value="all">Всё время</mat-button-toggle>
@@ -417,8 +416,7 @@ export class DashboardPage {
     const till = new Date().toISOString().slice(0, 10);
     const from = new Date();
     if (p === 'ytd') from.setMonth(0, 1);
-    else if (p === '1y') from.setFullYear(from.getFullYear() - 1);
-    else from.setMonth(from.getMonth() - 3);
+    else from.setFullYear(from.getFullYear() - 1);
     return { from: from.toISOString().slice(0, 10), till };
   });
 

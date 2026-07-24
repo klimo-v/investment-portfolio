@@ -233,20 +233,23 @@ export class OperationsService {
    * портфелям (ROI/XIRR/реализ./нереализ./див.доходность — docs/05-review-usability.md
    * §1), breakdown по тикерам.
    *
-   * Глобальный фильтр (§2/§3): system/portfolio сужают ВСЮ историю операций —
-   * позиции/сделки/эффективность считаются корректно, т.к. видят полный набор
-   * покупок, формирующих текущий остаток. Период (from/till), наоборот, узко
-   * ограничивает только помесячный timeline (поток/доход за окно) — если им же
-   * обрезать операции, из которых считаются позиции, отвалятся покупки до начала
-   * окна, и текущий остаток/ROI/XIRR станут мусором (виден только хвост истории
-   * без своего «входа» — отсюда нереальные значения вроде XIRR в тысячи процентов).
+   * Глобальный фильтр (§2/§3): system/portfolio/период сужают журнал операций ещё до
+   * расчёта — позиции, сделки, timeline и totals считаются уже по срезу. Период —
+   * это честный «что происходило в этом окне» (как в любом BI-фильтре по дате), а
+   * не попытка восстановить историческую стоимость остатка «на дату» (для этого
+   * нужны были бы исторические цены по каждому инструменту, которых нет). Побочный
+   * эффект короткого окна — XIRR, экстраполированный на короткий срок, может дать
+   * неадекватные годовые проценты; от этого страхует минимальный охват потоков
+   * внутри xirr() (libs/core/metrics.ts) — при слишком коротком окне она вернёт null.
    */
   async summary(filter: SummaryFilter = {}): Promise<DashboardSummary> {
     const allOps = this.list();
     const ops = allOps.filter(
       (o) =>
         (!filter.systemId || o.systemId === filter.systemId) &&
-        (!filter.portfolioId || o.portfolioId === filter.portfolioId),
+        (!filter.portfolioId || o.portfolioId === filter.portfolioId) &&
+        (!filter.from || o.date >= filter.from) &&
+        (!filter.till || o.date <= filter.till),
     );
     const positions = await this.positions(ops);
     const trades = calculateTrades(ops);
@@ -256,13 +259,9 @@ export class OperationsService {
     const portfolioName = new Map(portfolioRows.map((p) => [p.id, p.name]));
     const today = new Date().toISOString().slice(0, 10);
 
-    // временной ряд по месяцам: поток кэша и доход (дивиденды/купоны) —
-    // единственное место, где применяется период (from/till)
-    const periodOps = ops.filter(
-      (o) => (!filter.from || o.date >= filter.from) && (!filter.till || o.date <= filter.till),
-    );
+    // временной ряд по месяцам: поток кэша и доход (дивиденды/купоны)
     const monthly = new Map<string, { flow: number; income: number }>();
-    for (const op of periodOps) {
+    for (const op of ops) {
       const period = op.date.slice(0, 7); // YYYY-MM
       const bucket = monthly.get(period) ?? { flow: 0, income: 0 };
       const amount = Number(op.quantity) * Number(op.price) * Number(op.fxRate);
