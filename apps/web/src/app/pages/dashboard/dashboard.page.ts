@@ -5,7 +5,7 @@ import { MatButtonToggleModule } from '@angular/material/button-toggle';
 import { MatTooltipModule } from '@angular/material/tooltip';
 import { BaseChartDirective } from 'ng2-charts';
 import type { ChartConfiguration } from 'chart.js';
-import type { Effectiveness } from '@core';
+import { maxDrawdown, type Effectiveness } from '@core';
 import { OperationApi } from '../../entities/operation/operation.api';
 import { SnapshotApi } from '../../entities/snapshot/snapshot.api';
 import { formatMoney, formatPercent, pnlColorClass } from '@web-shared';
@@ -15,7 +15,7 @@ import { formatMoney, formatPercent, pnlColorClass } from '@web-shared';
  * Кроме комбо-графиков строит метрики ЭФФЕКТИВНОСТИ: доходность в % и годовых
  * (XIRR), реализ./нереализ. P&L, дивидендная доходность — по портфелю и в разрезе
  * систем/портфелей, чтобы их можно было сравнивать (абсолютный P&L сравнивать
- * нельзя).
+ * нельзя). Плюс max drawdown из снимков стоимости.
  */
 
 /** Палитра из portfolio_dashboard.html */
@@ -80,6 +80,15 @@ interface EffRow extends Effectiveness {
           <mat-card-subtitle>Дивиденды + купоны</mat-card-subtitle>
           <mat-card-title>{{ money(totals().dividendsRub) }}</mat-card-title>
           <div class="sub">доходность {{ pctOrDash(totals().dividendYieldPct) }}</div>
+        </mat-card>
+        <mat-card>
+          <mat-card-subtitle
+            >Макс. просадка
+            <span class="hint" matTooltip="Наибольшее падение стоимости портфеля от пика к дну по снимкам">?</span></mat-card-subtitle
+          >
+          <mat-card-title [class]="cls(maxDrawdownPct())">
+            {{ hasDrawdown() ? pctOrDash(maxDrawdownPct()) : '—' }}
+          </mat-card-title>
         </mat-card>
       </div>
 
@@ -327,9 +336,20 @@ export class DashboardPage {
       : s.byPortfolio.map((r) => ({ ...r, id: r.portfolioId }));
   });
 
+  /** Снимки по возрастанию даты (для просадки и графика динамики) */
+  private readonly snaps = computed(() =>
+    [...(this.snapshots.list.value() ?? [])].sort((a, b) => a.date.localeCompare(b.date)),
+  );
+
+  protected readonly hasDrawdown = computed(() => this.snaps().length >= 2);
+  /** Макс. просадка стоимости портфеля по снимкам (доля ≤ 0 → в %) */
+  protected readonly maxDrawdownPct = computed(
+    () => maxDrawdown(this.snaps().map((s) => s.currentValueRub)) * 100,
+  );
+
   /** Линия динамики: Вложено (серый) vs Текущая стоимость (синий) по датам снимков */
   protected readonly valueChart = computed<ChartConfiguration<'line'>>(() => {
-    const s = this.snapshots.list.value() ?? [];
+    const s = this.snaps();
     return {
       type: 'line',
       data: {
