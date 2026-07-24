@@ -70,6 +70,8 @@ interface NavItem {
         background: #fafafa;
       }
       .content {
+        display: flex;
+        flex-direction: column;
         padding: 24px;
         box-sizing: border-box;
         height: 100%;

@@ -203,7 +203,14 @@ interface Group {
   `,
   styles: [
     `
+      :host {
+        display: flex;
+        flex-direction: column;
+        flex: 1;
+        min-height: 0;
+      }
       .header {
+        flex: 0 0 auto;
         display: flex;
         justify-content: space-between;
         align-items: center;
@@ -213,6 +220,7 @@ interface Group {
         gap: 8px;
       }
       .filters {
+        flex: 0 0 auto;
         display: flex;
         gap: 16px;
         margin: 8px 0 0;
@@ -221,6 +229,7 @@ interface Group {
         min-width: 200px;
       }
       .totals {
+        flex: 0 0 auto;
         display: flex;
         gap: 16px;
         margin-bottom: 16px;
@@ -234,6 +243,9 @@ interface Group {
         grid-template-columns: 2fr 1fr;
         gap: 16px;
         align-items: start;
+        flex: 1;
+        min-height: 0;
+        overflow: auto;
       }
       .tables {
         display: flex;

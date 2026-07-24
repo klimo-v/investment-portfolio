@@ -25,7 +25,7 @@ import type { Trade } from '@core';
     } @else if (api.trades.error()) {
       <p class="error">Не удалось загрузить сделки. Запущен ли API?</p>
     } @else {
-      <mat-tab-group>
+      <mat-tab-group class="tabs">
         <mat-tab [label]="'Открытые (' + openTrades().length + ')'">
           <ng-container [ngTemplateOutlet]="table" [ngTemplateOutletContext]="{ rows: openTrades() }" />
         </mat-tab>
@@ -40,6 +40,7 @@ import type { Trade } from '@core';
         @if (rows.length === 0) {
           <p class="empty">Сделок нет.</p>
         } @else {
+        <div class="table-scroll">
           <table mat-table [dataSource]="rows" multiTemplateDataRows>
             <ng-container matColumnDef="status">
               <th mat-header-cell *matHeaderCellDef>Статус</th>
@@ -100,7 +101,7 @@ import type { Trade } from '@core';
               </td>
             </ng-container>
 
-            <tr mat-header-row *matHeaderRowDef="columns"></tr>
+            <tr mat-header-row *matHeaderRowDef="columns; sticky: true"></tr>
             <tr
               mat-row
               *matRowDef="let row; columns: columns"
@@ -109,17 +110,49 @@ import type { Trade } from '@core';
             ></tr>
             <tr mat-row *matRowDef="let row; columns: ['detail']" class="detail-row"></tr>
           </table>
+        </div>
         }
       </mat-card>
     </ng-template>
   `,
   styles: [
     `
+      :host {
+        display: flex;
+        flex-direction: column;
+        flex: 1;
+        min-height: 0;
+      }
+      .tabs {
+        flex: 1;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+      }
+      .tabs ::ng-deep .mat-mdc-tab-body-wrapper,
+      .tabs ::ng-deep .mat-mdc-tab-body,
+      .tabs ::ng-deep .mat-mdc-tab-body-content {
+        flex: 1;
+        min-height: 0;
+        height: 100%;
+      }
       .table-card {
         margin-top: 16px;
+        height: calc(100% - 16px);
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+      }
+      .table-scroll {
+        flex: 1;
+        min-height: 0;
+        overflow: auto;
       }
       table {
         width: 100%;
+      }
+      th {
+        background: white;
       }
       .clickable-row {
         cursor: pointer;

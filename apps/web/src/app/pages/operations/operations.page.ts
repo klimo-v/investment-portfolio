@@ -106,7 +106,14 @@ import { ReassignOperationsDialog } from '../../features/reassign-operations/rea
   `,
   styles: [
     `
+      :host {
+        display: flex;
+        flex-direction: column;
+        flex: 1;
+        min-height: 0;
+      }
       .header {
+        flex: 0 0 auto;
         display: flex;
         justify-content: space-between;
         align-items: center;
@@ -115,8 +122,16 @@ import { ReassignOperationsDialog } from '../../features/reassign-operations/rea
         display: flex;
         gap: 8px;
       }
+      mat-card {
+        display: flex;
+        flex-direction: column;
+        flex: 1;
+        min-height: 0;
+        overflow: hidden;
+      }
       .table-scroll {
-        max-height: calc(100vh - 200px);
+        flex: 1;
+        min-height: 0;
         overflow: auto;
       }
       table {
