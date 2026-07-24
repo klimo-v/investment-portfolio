@@ -5,6 +5,7 @@ import { MatButtonModule } from '@angular/material/button';
 import { MatIconModule } from '@angular/material/icon';
 import { MatFormFieldModule } from '@angular/material/form-field';
 import { MatSelectModule } from '@angular/material/select';
+import { MatTooltipModule } from '@angular/material/tooltip';
 import { MatDialog } from '@angular/material/dialog';
 import { BaseChartDirective } from 'ng2-charts';
 import type { ChartConfiguration } from 'chart.js';
@@ -66,6 +67,7 @@ interface Group {
     MatIconModule,
     MatFormFieldModule,
     MatSelectModule,
+    MatTooltipModule,
     BaseChartDirective,
   ],
   template: `
@@ -112,6 +114,13 @@ interface Group {
       <mat-card>
         <mat-card-subtitle>Текущая стоимость (₽)</mat-card-subtitle>
         <mat-card-title>{{ valueTotal() }}</mat-card-title>
+      </mat-card>
+      <mat-card>
+        <mat-card-subtitle
+          >Получено дивидендов/купонов (₽)
+          <span class="hint-icon" [matTooltip]="dividendsHint">?</span>
+        </mat-card-subtitle>
+        <mat-card-title>{{ dividendsTotal() }}</mat-card-title>
       </mat-card>
       <mat-card>
         <mat-card-subtitle>P&L (₽)</mat-card-subtitle>
@@ -247,6 +256,18 @@ interface Group {
       .group-total {
         color: rgba(0, 0, 0, 0.6);
       }
+      .hint-icon {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 14px;
+        height: 14px;
+        border-radius: 50%;
+        border: 1px solid rgba(0, 0, 0, 0.4);
+        color: rgba(0, 0, 0, 0.6);
+        font-size: 10px;
+        cursor: help;
+      }
       .pie {
         padding: 16px;
       }
@@ -280,6 +301,17 @@ export class PortfolioPage {
 
   protected readonly columns = ['ticker', 'qty', 'avg', 'current', 'value', 'pnl'];
   protected readonly refreshing = signal(false);
+
+  /**
+   * Дивиденды/купоны — это уже полученный кэш, не переоценка позиции, поэтому
+   * не входят в «Текущую стоимость» (она — рыночная цена держимых бумаг), но
+   * входят в P&L. Без этой карточки разница между «Вложено/Текущая» и P&L
+   * выглядит как «пропавшие деньги» — реальный вопрос пользователя.
+   */
+  protected readonly dividendsHint =
+    'Дивиденды и купоны, уже выплаченные вам, — это кэш, не переоценка бумаги. ' +
+    'Они не входят в «Текущую стоимость» (там только рыночная цена держимых позиций), ' +
+    'но входят в P&L. Поэтому P&L может быть положительным, даже если рынок просел.';
 
   protected readonly systemFilter = signal<string | null>(null);
   protected readonly portfolioFilter = signal<string | null>(null);
@@ -380,6 +412,14 @@ export class PortfolioPage {
   );
 
   protected readonly pnlTotal = computed(() => formatMoney(this.pnlTotalRaw().toFixed(2), 'RUB'));
+
+  protected readonly dividendsTotal = computed(() => {
+    const total = this.positions().reduce(
+      (acc, p) => acc + Number(p.dividendsRub) + Number(p.couponsRub),
+      0,
+    );
+    return formatMoney(total.toFixed(2), 'RUB');
+  });
 
   protected pnlClass(value: number): string {
     return pnlColorClass(value);
