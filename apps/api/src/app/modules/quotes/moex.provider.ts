@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import Decimal from 'decimal.js';
 import type { PriceProvider, Quote } from './price-provider';
 
 /**
@@ -7,6 +8,12 @@ import type { PriceProvider, Quote } from './price-provider';
  *
  * Формат ответа ISS: секции вида { columns: [...], data: [[...]] }.
  * Цену берём из секции marketdata (LAST по основному режиму торгов).
+ *
+ * Облигации MOEX котирует в % от номинала, а не в рублях (напр. LAST=82.80
+ * значит 82.80% от номинала, а не 82.80 ₽) — для рынка bonds домножаем на
+ * FACEVALUE из секции securities, иначе текущая стоимость/P&L считаются
+ * в разы заниженными по сравнению со средней ценой покупки (та уже в рублях,
+ * см. apps/api/.../tbank-xlsx-report.ts).
  */
 
 interface IssSection {
@@ -14,6 +21,7 @@ interface IssSection {
   data: (string | number | null)[][];
 }
 interface IssResponse {
+  securities?: IssSection;
   marketdata?: IssSection;
 }
 
@@ -47,26 +55,38 @@ export class MoexProvider implements PriceProvider {
   }
 
   private async fetchLast(market: string, ticker: string): Promise<string | null> {
-    const url =
-      `https://iss.moex.com/iss/${market}/securities/${encodeURIComponent(ticker)}.json` +
-      `?iss.meta=off&iss.only=marketdata&marketdata.columns=SECID,LAST`;
+    const isBonds = market.endsWith('/bonds');
+    const only = isBonds
+      ? 'iss.only=securities,marketdata&securities.columns=SECID,FACEVALUE&marketdata.columns=SECID,LAST'
+      : 'iss.only=marketdata&marketdata.columns=SECID,LAST';
+    const url = `https://iss.moex.com/iss/${market}/securities/${encodeURIComponent(ticker)}.json?iss.meta=off&${only}`;
     try {
       const res = await fetch(url);
       if (!res.ok) return null;
       const json = (await res.json()) as IssResponse;
       const md = json.marketdata;
       if (!md) return null;
-      const secidIdx = md.columns.indexOf('SECID');
       const lastIdx = md.columns.indexOf('LAST');
-      if (secidIdx < 0 || lastIdx < 0) return null;
+      if (lastIdx < 0) return null;
       // выбираем первую строку с ненулевым LAST
+      let last: string | number | null | undefined;
       for (const row of md.data) {
-        const last = row[lastIdx];
-        if (last !== null && last !== undefined && last !== '') {
-          return String(last);
+        if (row[lastIdx] !== null && row[lastIdx] !== undefined && row[lastIdx] !== '') {
+          last = row[lastIdx];
+          break;
         }
       }
-      return null;
+      if (last === undefined || last === null) return null;
+
+      if (!isBonds) return String(last);
+
+      // облигация: LAST — % от номинала, переводим в рубли через FACEVALUE
+      const sec = json.securities;
+      const faceValueIdx = sec?.columns.indexOf('FACEVALUE') ?? -1;
+      const faceValue = faceValueIdx >= 0 ? sec?.data[0]?.[faceValueIdx] : null;
+      if (faceValue === null || faceValue === undefined || faceValue === '') return null;
+
+      return new Decimal(last).div(100).mul(faceValue).toString();
     } catch {
       return null;
     }
