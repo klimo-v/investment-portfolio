@@ -48,6 +48,7 @@ import { ReassignOperationsDialog } from '../../features/reassign-operations/rea
       <p class="error">Не удалось загрузить операции. Запущен ли API?</p>
     } @else {
       <mat-card>
+        <div class="table-scroll">
         <table mat-table [dataSource]="rows()">
           <ng-container matColumnDef="select">
             <th mat-header-cell *matHeaderCellDef>
@@ -92,9 +93,10 @@ import { ReassignOperationsDialog } from '../../features/reassign-operations/rea
             <th mat-header-cell *matHeaderCellDef>Цена</th>
             <td mat-cell *matCellDef="let r">{{ r.price }}</td>
           </ng-container>
-          <tr mat-header-row *matHeaderRowDef="columns"></tr>
+          <tr mat-header-row *matHeaderRowDef="columns; sticky: true"></tr>
           <tr mat-row *matRowDef="let row; columns: columns"></tr>
         </table>
+        </div>
 
         @if (rows().length === 0) {
           <p class="empty">Операций пока нет. Добавьте первую или импортируйте отчёт брокера.</p>
@@ -113,8 +115,15 @@ import { ReassignOperationsDialog } from '../../features/reassign-operations/rea
         display: flex;
         gap: 8px;
       }
+      .table-scroll {
+        max-height: calc(100vh - 200px);
+        overflow: auto;
+      }
       table {
         width: 100%;
+      }
+      th {
+        background: white;
       }
       .error {
         color: #c62828;

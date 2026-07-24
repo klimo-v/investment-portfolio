@@ -65,8 +65,14 @@ interface NavItem {
       .shell {
         height: calc(100vh - 64px);
       }
+      mat-sidenav {
+        border-right: 1px solid rgba(0, 0, 0, 0.12);
+        background: #fafafa;
+      }
       .content {
         padding: 24px;
+        box-sizing: border-box;
+        height: 100%;
       }
     `,
   ],
