@@ -3,12 +3,15 @@ import { MatCardModule } from '@angular/material/card';
 import { MatTableModule } from '@angular/material/table';
 import { MatButtonToggleModule } from '@angular/material/button-toggle';
 import { MatTooltipModule } from '@angular/material/tooltip';
+import { MatFormFieldModule } from '@angular/material/form-field';
+import { MatSelectModule } from '@angular/material/select';
 import { BaseChartDirective } from 'ng2-charts';
 import type { ChartConfiguration } from 'chart.js';
 import { maxDrawdown, type Effectiveness } from '@core';
 import { OperationApi } from '../../entities/operation/operation.api';
 import { SnapshotApi } from '../../entities/snapshot/snapshot.api';
 import { BenchmarkApi } from '../../entities/benchmark/benchmark.api';
+import { ReferenceApi } from '../../entities/reference/reference.api';
 import { formatMoney, formatPercent, pnlColorClass } from '@web-shared';
 
 /**
@@ -37,6 +40,8 @@ const C = {
  */
 const DEPOSIT_ANNUAL_RATE = 0.16;
 
+type Period = 'all' | 'ytd' | '1y' | '3m';
+
 interface EffRow extends Effectiveness {
   id: string;
   name: string;
@@ -45,9 +50,49 @@ interface EffRow extends Effectiveness {
 @Component({
   selector: 'app-dashboard-page',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [MatCardModule, MatTableModule, MatButtonToggleModule, MatTooltipModule, BaseChartDirective],
+  imports: [
+    MatCardModule,
+    MatTableModule,
+    MatButtonToggleModule,
+    MatTooltipModule,
+    MatFormFieldModule,
+    MatSelectModule,
+    BaseChartDirective,
+  ],
   template: `
-    <h1 class="page-title">Дашборд</h1>
+    <div class="header">
+      <h1 class="page-title">Дашборд</h1>
+      <div class="filters">
+        <mat-form-field appearance="outline" subscriptSizing="dynamic">
+          <mat-label>Система</mat-label>
+          <mat-select [value]="systemFilter()" (selectionChange)="systemFilter.set($event.value)">
+            <mat-option [value]="null">Все</mat-option>
+            @for (s of reference.systems.value(); track s.id) {
+              <mat-option [value]="s.id">{{ s.name }}</mat-option>
+            }
+          </mat-select>
+        </mat-form-field>
+        <mat-form-field appearance="outline" subscriptSizing="dynamic">
+          <mat-label>Портфель</mat-label>
+          <mat-select [value]="portfolioFilter()" (selectionChange)="portfolioFilter.set($event.value)">
+            <mat-option [value]="null">Все</mat-option>
+            @for (p of reference.portfolios.value(); track p.id) {
+              <mat-option [value]="p.id">{{ p.name }}</mat-option>
+            }
+          </mat-select>
+        </mat-form-field>
+        <mat-button-toggle-group
+          [value]="period()"
+          (change)="period.set($event.value)"
+          hideSingleSelectionIndicator
+        >
+          <mat-button-toggle value="3m">3 мес</mat-button-toggle>
+          <mat-button-toggle value="ytd">YTD</mat-button-toggle>
+          <mat-button-toggle value="1y">1 год</mat-button-toggle>
+          <mat-button-toggle value="all">Всё время</mat-button-toggle>
+        </mat-button-toggle-group>
+      </div>
+    </div>
 
     @if (api.summary.isLoading()) {
       <p>Загрузка…</p>
@@ -162,6 +207,9 @@ interface EffRow extends Effectiveness {
           <p class="note">
             Рост ₽100, вложенных в начале периода: ваш портфель, индекс МосБиржи (IMOEX)
             и вклад под {{ depositRatePct }}% годовых. По снимкам стоимости.
+            @if (segmentFilterActive()) {
+              Снимки не разбиты по системам/портфелям — график показывает портфель целиком.
+            }
           </p>
           @if (benchmarkChart(); as bc) {
             <div class="chart-box">
@@ -177,6 +225,9 @@ interface EffRow extends Effectiveness {
 
         <mat-card class="wide">
           <h3>Стоимость портфеля во времени</h3>
+          @if (segmentFilterActive()) {
+            <p class="note">Снимки не разбиты по системам/портфелям — график показывает портфель целиком.</p>
+          }
           @if (snapshots.list.value()?.length) {
             <div class="chart-box">
               <canvas
@@ -237,6 +288,22 @@ interface EffRow extends Effectiveness {
   `,
   styles: [
     `
+      .header {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+        flex-wrap: wrap;
+        gap: 12px;
+      }
+      .filters {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        flex-wrap: wrap;
+      }
+      .filters mat-form-field {
+        width: 160px;
+      }
       .totals {
         display: flex;
         gap: 16px;
@@ -327,9 +394,33 @@ export class DashboardPage {
   protected readonly api = inject(OperationApi);
   protected readonly snapshots = inject(SnapshotApi);
   protected readonly benchmark = inject(BenchmarkApi);
+  protected readonly reference = inject(ReferenceApi);
 
   protected readonly depositRatePct = (DEPOSIT_ANNUAL_RATE * 100).toFixed(0);
   protected readonly groupBy = signal<'system' | 'portfolio'>('system');
+
+  /** Глобальный фильтр дашборда (docs/05-review-usability.md §2) */
+  protected readonly systemFilter = signal<string | null>(null);
+  protected readonly portfolioFilter = signal<string | null>(null);
+  protected readonly period = signal<Period>('all');
+
+  /** true, когда выбран конкретный система/портфель — снимки стоимости их не различают */
+  protected readonly segmentFilterActive = computed(
+    () => this.systemFilter() !== null || this.portfolioFilter() !== null,
+  );
+
+  /** Период → диапазон дат от/до; 'all' — без ограничения */
+  private readonly periodRange = computed<{ from?: string; till?: string }>(() => {
+    const p = this.period();
+    if (p === 'all') return {};
+    const till = new Date().toISOString().slice(0, 10);
+    const from = new Date();
+    if (p === 'ytd') from.setMonth(0, 1);
+    else if (p === '1y') from.setFullYear(from.getFullYear() - 1);
+    else from.setMonth(from.getMonth() - 3);
+    return { from: from.toISOString().slice(0, 10), till };
+  });
+
   protected readonly effColumns = [
     'name',
     'invested',
@@ -366,10 +457,16 @@ export class DashboardPage {
       : s.byPortfolio.map((r) => ({ ...r, id: r.portfolioId }));
   });
 
-  /** Снимки по возрастанию даты (для просадки и графика динамики) */
-  private readonly snaps = computed(() =>
-    [...(this.snapshots.list.value() ?? [])].sort((a, b) => a.date.localeCompare(b.date)),
-  );
+  /**
+   * Снимки по возрастанию даты, обрезанные под выбранный период (для просадки,
+   * бенчмарка и графика динамики). Снимки не разбиты по системам/портфелям
+   * (см. segmentFilterActive), поэтому system/portfolio фильтр их не сужает.
+   */
+  private readonly snaps = computed(() => {
+    const all = [...(this.snapshots.list.value() ?? [])].sort((a, b) => a.date.localeCompare(b.date));
+    const r = this.periodRange();
+    return all.filter((s) => (!r.from || s.date >= r.from) && (!r.till || s.date <= r.till));
+  });
 
   protected readonly hasDrawdown = computed(() => this.snaps().length >= 2);
   /** Макс. просадка стоимости портфеля по снимкам (доля ≤ 0 → в %) */
@@ -378,7 +475,19 @@ export class DashboardPage {
   );
 
   constructor() {
-    // Диапазон запроса истории индекса — от первого снимка до сегодня
+    // Прокидываем фильтр в OperationApi — summary() пересчитывается на сервере
+    effect(() => {
+      const r = this.periodRange();
+      this.api.summaryFilter.set({
+        systemId: this.systemFilter() ?? undefined,
+        portfolioId: this.portfolioFilter() ?? undefined,
+        from: r.from,
+        till: r.till,
+      });
+    });
+
+    // Диапазон запроса истории индекса — от первого (отфильтрованного по периоду)
+    // снимка до сегодня
     effect(() => {
       const s = this.snaps();
       if (s.length < 2) {

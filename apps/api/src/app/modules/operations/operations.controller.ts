@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Query } from '@nestjs/common';
 import type { Operation, Position, DashboardSummary, Trade } from '@core';
 import { OperationsService } from './operations.service';
 
@@ -37,9 +37,15 @@ export class OperationsController {
     return this.service.positions();
   }
 
+  /** Глобальный фильтр дашборда (docs/05-review-usability.md §2): система/портфель/период */
   @Get('summary')
-  summary(): Promise<DashboardSummary> {
-    return this.service.summary();
+  summary(
+    @Query('systemId') systemId?: string,
+    @Query('portfolioId') portfolioId?: string,
+    @Query('from') from?: string,
+    @Query('till') till?: string,
+  ): Promise<DashboardSummary> {
+    return this.service.summary({ systemId, portfolioId, from, till });
   }
 
   @Get('trades')

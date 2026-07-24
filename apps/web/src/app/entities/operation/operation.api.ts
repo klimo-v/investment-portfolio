@@ -13,6 +13,14 @@ import {
 } from '@core';
 import { SnapshotApi } from '../snapshot/snapshot.api';
 
+/** Глобальный фильтр дашборда (docs/05-review-usability.md §2): система/портфель/период */
+export interface SummaryFilter {
+  systemId?: string;
+  portfolioId?: string;
+  from?: string;
+  till?: string;
+}
+
 /**
  * API-клиент операций и позиций (FSD: entities).
  * Чтение — через httpResource (реактивно, на сигналах, с Zod-валидацией ответа).
@@ -53,11 +61,21 @@ export class OperationApi {
     { parse: z.array(TradeSchema).parse },
   );
 
-  /** Агрегаты для дашборда */
+  /** Глобальный фильтр сводки дашборда (система/портфель/период) — управляется страницей */
+  readonly summaryFilter = signal<SummaryFilter>({});
+
+  /** Агрегаты для дашборда, с учётом summaryFilter */
   readonly summary = httpResource(
     () => {
       this.reloadTrigger();
-      return '/api/operations/summary';
+      const f = this.summaryFilter();
+      const params = new URLSearchParams();
+      if (f.systemId) params.set('systemId', f.systemId);
+      if (f.portfolioId) params.set('portfolioId', f.portfolioId);
+      if (f.from) params.set('from', f.from);
+      if (f.till) params.set('till', f.till);
+      const qs = params.toString();
+      return qs ? `/api/operations/summary?${qs}` : '/api/operations/summary';
     },
     { parse: DashboardSummarySchema.parse },
   );

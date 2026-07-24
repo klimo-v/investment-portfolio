@@ -26,6 +26,16 @@ import {
 import { DB } from '../../db/drizzle.module';
 import { QuotesService } from '../quotes/quotes.service';
 
+/** Фильтр сводки дашборда (docs/05-review-usability.md §2/§3 — глобальный фильтр) */
+export interface SummaryFilter {
+  systemId?: string;
+  portfolioId?: string;
+  /** дата операции ≥ from (YYYY-MM-DD) */
+  from?: string;
+  /** дата операции ≤ till (YYYY-MM-DD) */
+  till?: string;
+}
+
 /**
  * Сервис операций — бизнес-логика (GRASP: Controller тонкий, логика здесь).
  * Хранение — Drizzle + SQLite (Фаза 1, docs/04-roadmap.md).
@@ -95,9 +105,10 @@ export class OperationsService {
   /**
    * Позиции считает общий движок из libs/core (DRY: одна логика фронт+бэк),
    * затем обогащаем текущей ценой из кэша котировок и пересчётом стоимости/P&L в RUB.
+   * Принимает список операций (по умолчанию — весь журнал), чтобы `summary()` мог
+   * посчитать позиции на отфильтрованном срезе (глобальный фильтр дашборда).
    */
-  async positions(): Promise<Position[]> {
-    const ops = this.list();
+  async positions(ops: Operation[] = this.list()): Promise<Position[]> {
     const instrumentRows = this.db.select().from(instruments).all();
     const quoteRows = this.db.select().from(quotes).all();
     const instrumentById = new Map(instrumentRows.map((i) => [i.id, i]));
@@ -221,10 +232,20 @@ export class OperationsService {
    * помесячный поток/доход для комбо-графика, метрики эффективности по системам и
    * портфелям (ROI/XIRR/реализ./нереализ./див.доходность — docs/05-review-usability.md
    * §1), breakdown по тикерам.
+   *
+   * Глобальный фильтр (§2/§3): system/portfolio/период сужают журнал операций ещё до
+   * расчёта — позиции, сделки, timeline и totals считаются уже по срезу.
    */
-  async summary(): Promise<DashboardSummary> {
-    const ops = this.list();
-    const positions = await this.positions();
+  async summary(filter: SummaryFilter = {}): Promise<DashboardSummary> {
+    const allOps = this.list();
+    const ops = allOps.filter(
+      (o) =>
+        (!filter.systemId || o.systemId === filter.systemId) &&
+        (!filter.portfolioId || o.portfolioId === filter.portfolioId) &&
+        (!filter.from || o.date >= filter.from) &&
+        (!filter.till || o.date <= filter.till),
+    );
+    const positions = await this.positions(ops);
     const trades = calculateTrades(ops);
     const systemRows = this.db.select().from(systems).all();
     const portfolioRows = this.db.select().from(portfolios).all();
