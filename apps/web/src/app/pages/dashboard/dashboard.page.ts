@@ -85,6 +85,7 @@ interface EffRow extends Effectiveness {
           [value]="period()"
           (change)="period.set($event.value)"
           hideSingleSelectionIndicator
+          matTooltip="Период сужает графики динамики и поток по месяцам. Вложено/ROI/XIRR/просадка — всегда по всей истории остатка: без этого расчёт был бы бессмысленным (виден только хвост истории без своего «входа»)."
         >
           <mat-button-toggle value="3m">3 мес</mat-button-toggle>
           <mat-button-toggle value="ytd">YTD</mat-button-toggle>

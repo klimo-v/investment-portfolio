@@ -233,17 +233,20 @@ export class OperationsService {
    * портфелям (ROI/XIRR/реализ./нереализ./див.доходность — docs/05-review-usability.md
    * §1), breakdown по тикерам.
    *
-   * Глобальный фильтр (§2/§3): system/portfolio/период сужают журнал операций ещё до
-   * расчёта — позиции, сделки, timeline и totals считаются уже по срезу.
+   * Глобальный фильтр (§2/§3): system/portfolio сужают ВСЮ историю операций —
+   * позиции/сделки/эффективность считаются корректно, т.к. видят полный набор
+   * покупок, формирующих текущий остаток. Период (from/till), наоборот, узко
+   * ограничивает только помесячный timeline (поток/доход за окно) — если им же
+   * обрезать операции, из которых считаются позиции, отвалятся покупки до начала
+   * окна, и текущий остаток/ROI/XIRR станут мусором (виден только хвост истории
+   * без своего «входа» — отсюда нереальные значения вроде XIRR в тысячи процентов).
    */
   async summary(filter: SummaryFilter = {}): Promise<DashboardSummary> {
     const allOps = this.list();
     const ops = allOps.filter(
       (o) =>
         (!filter.systemId || o.systemId === filter.systemId) &&
-        (!filter.portfolioId || o.portfolioId === filter.portfolioId) &&
-        (!filter.from || o.date >= filter.from) &&
-        (!filter.till || o.date <= filter.till),
+        (!filter.portfolioId || o.portfolioId === filter.portfolioId),
     );
     const positions = await this.positions(ops);
     const trades = calculateTrades(ops);
@@ -253,9 +256,13 @@ export class OperationsService {
     const portfolioName = new Map(portfolioRows.map((p) => [p.id, p.name]));
     const today = new Date().toISOString().slice(0, 10);
 
-    // временной ряд по месяцам: поток кэша и доход (дивиденды/купоны)
+    // временной ряд по месяцам: поток кэша и доход (дивиденды/купоны) —
+    // единственное место, где применяется период (from/till)
+    const periodOps = ops.filter(
+      (o) => (!filter.from || o.date >= filter.from) && (!filter.till || o.date <= filter.till),
+    );
     const monthly = new Map<string, { flow: number; income: number }>();
-    for (const op of ops) {
+    for (const op of periodOps) {
       const period = op.date.slice(0, 7); // YYYY-MM
       const bucket = monthly.get(period) ?? { flow: 0, income: 0 };
       const amount = Number(op.quantity) * Number(op.price) * Number(op.fxRate);
