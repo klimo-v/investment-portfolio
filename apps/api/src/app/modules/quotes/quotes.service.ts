@@ -41,18 +41,22 @@ export class QuotesService {
       const quote = await this.moex.getQuote(inst.ticker);
       if (!quote) continue;
 
+      // валюта — из своего справочника инструментов, а не от провайдера: MOEX ISS
+      // не отдаёт валюту котировки напрямую (для валютных облигаций типа USD
+      // цена в FACEVALUE может быть не в RUB), а инструмент уже хранит верную
+      // валюту (docs/02-data-model.md) — единый источник правды вместо догадки
       this.db
         .insert(quotes)
         .values({
           instrumentId: inst.id,
           price: quote.price,
-          currency: quote.currency,
+          currency: inst.currency,
           source: quote.source,
           asOf: quote.asOf,
         })
         .onConflictDoUpdate({
           target: quotes.instrumentId,
-          set: { price: quote.price, currency: quote.currency, asOf: quote.asOf },
+          set: { price: quote.price, currency: inst.currency, asOf: quote.asOf },
         })
         .run();
       updated++;
