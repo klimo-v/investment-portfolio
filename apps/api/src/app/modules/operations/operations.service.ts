@@ -5,6 +5,7 @@ import {
   calculatePositions,
   calculateTrades,
   OperationSchema,
+  OperationReassignSchema,
   type Operation,
   type Position,
   type DashboardSummary,
@@ -64,6 +65,21 @@ export class OperationsService {
   /** Удалить операцию по id (безвозвратно — пересчёт позиций/сделок исключит её). */
   delete(id: string): void {
     this.db.delete(operations).where(eq(operations.id, id)).run();
+  }
+
+  /**
+   * Переназначить операцию на другую систему и/или портфель (docs/04-roadmap.md §3.1) —
+   * например, при разборе отчёта, где сделки лежат в разных системах/на разных счетах
+   * брокера (обычный ↔ ИИС), а батч-разметки при импорте оказалось недостаточно.
+   * Валидация через Zod (CLAUDE.md §8); существование id проверяет FK-констрейнт БД.
+   */
+  reassign(id: string, raw: unknown): void {
+    const patch = OperationReassignSchema.parse(raw);
+    this.db
+      .update(operations)
+      .set(patch)
+      .where(eq(operations.id, id))
+      .run();
   }
 
   /**

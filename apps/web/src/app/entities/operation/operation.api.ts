@@ -75,6 +75,17 @@ export class OperationApi {
     this.reloadTrigger.update((n) => n + 1);
   }
 
+  /**
+   * Назначить систему и/или портфель нескольким операциям сразу (docs/04-roadmap.md
+   * §3.1 — разбор отчёта, где сделки принадлежат разным системам/счетам брокера).
+   */
+  async reassign(ids: string[], patch: { systemId?: string; portfolioId?: string }): Promise<void> {
+    await Promise.all(
+      ids.map((id) => firstValueFrom(this.http.patch<{ updated: true }>(`/api/operations/${id}`, patch))),
+    );
+    this.reloadTrigger.update((n) => n + 1);
+  }
+
   /** Обновить котировки с рынка (MOEX/ЦБ), затем пересчитать позиции */
   async refreshQuotes(): Promise<{ updated: number; total: number }> {
     const result = await firstValueFrom(

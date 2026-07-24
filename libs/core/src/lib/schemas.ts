@@ -59,6 +59,21 @@ export const OperationSchema = z.object({
 });
 export type Operation = z.infer<typeof OperationSchema>;
 
+/**
+ * Частичное переназначение операции на систему/портфель (docs/04-roadmap.md §3.1 —
+ * разбор отчёта, где сделки принадлежат разным системам и/или разным счетам брокера).
+ * Хотя бы одно поле обязательно.
+ */
+export const OperationReassignSchema = z
+  .object({
+    systemId: z.string().min(1).optional(),
+    portfolioId: z.string().min(1).optional(),
+  })
+  .refine((v) => v.systemId !== undefined || v.portfolioId !== undefined, {
+    message: 'Укажите systemId и/или portfolioId',
+  });
+export type OperationReassign = z.infer<typeof OperationReassignSchema>;
+
 /** Инструмент (справочник) */
 export const InstrumentSchema = z.object({
   id: z.string().min(1),
@@ -77,6 +92,11 @@ export const PortfolioSchema = z.object({
   name: z.string().min(1),
   broker: z.string().min(1),
   baseCurrency: z.string().min(1).default('RUB'),
+  /**
+   * Признак счёта из отчёта брокера (docs/04-roadmap.md §3.1) — заполняется
+   * автоматически при импорте, руками не редактируется, поэтому только для чтения.
+   */
+  accountRef: z.string().nullish(),
 });
 export type Portfolio = z.infer<typeof PortfolioSchema>;
 
