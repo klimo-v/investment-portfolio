@@ -42,12 +42,14 @@ describe.skipIf(!hasFixture)('parseTbankXlsx — реальный отчёт Т-
     expect(new Set(trades.map((r) => r.brokerRef)).size).toBe(trades.length);
   });
 
-  it('цена облигации переводится из % номинала в реальную (Сумма сделки / Количество)', () => {
-    // ОФЗ 52003, 06.07.2026: 20 шт., Сумма сделки 26864.59 → цена 1343.2295, комиссия 13.25
+  it('цена облигации переводится из % номинала в реальную БЕЗ учёта НКД (Сумма без НКД / Количество)', () => {
+    // ОФЗ 52003, 06.07.2026: 20 шт., Сумма без НКД 26500.19 → цена 1325.0095, комиссия 13.25.
+    // НЕ «Сумма сделки» (с НКД) — иначе цена покупки задрана относительно чистой
+    // текущей котировки MOEX, и P&L систематически занижен (см. пояснение в парсере).
     const bond = rows.find((r) => r.ticker === 'SU52003RMFS9' && r.date === '06.07.2026')!;
     expect(bond).toBeDefined();
     expect(bond.quantity).toBe('20');
-    expect(bond.price).toBe('1343.2295');
+    expect(bond.price).toBe('1325.0095');
     expect(bond.fee).toBe('13.25');
     expect(bond.instrumentType).toBe('Bond');
   });
@@ -109,7 +111,7 @@ async function buildSyntheticWorkbook(): Promise<ExcelJS.Worksheet> {
   ws.getCell(r, 18).value = 'паи БПИФ рфи Т-КапиталДенРынок';
   ws.getCell(r, 20).value = 'TMON@';
   ws.getCell(r, 27).value = 5;
-  ws.getCell(r, 35).value = 500;
+  ws.getCell(r, 29).value = 500; // Сумма без НКД — то, из чего теперь считается цена
   ws.getCell(r, 39).value = 'RUB';
   ws.getCell(r, 40).value = 1;
   ws.getCell(r, 46).value = 0;
