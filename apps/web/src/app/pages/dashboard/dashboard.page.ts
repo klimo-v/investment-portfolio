@@ -3,6 +3,7 @@ import { MatCardModule } from '@angular/material/card';
 import { BaseChartDirective } from 'ng2-charts';
 import type { ChartConfiguration } from 'chart.js';
 import { OperationApi } from '../../entities/operation/operation.api';
+import { SnapshotApi } from '../../entities/snapshot/snapshot.api';
 import { formatMoney, pnlColorClass } from '@web-shared';
 
 /**
@@ -53,6 +54,25 @@ const C = {
       </div>
 
       <div class="charts">
+        <mat-card class="wide">
+          <h3>Стоимость портфеля во времени</h3>
+          @if (snapshots.list.value()?.length) {
+            <div class="chart-box">
+              <canvas
+                baseChart
+                [type]="valueChart().type"
+                [data]="valueChart().data"
+                [options]="valueChart().options"
+              ></canvas>
+            </div>
+          } @else {
+            <p class="note">
+              Снимков пока нет — они появляются на странице «Портфель» при нажатии
+              «Обновить цены» (по одному снимку в день).
+            </p>
+          }
+        </mat-card>
+
         <mat-card>
           <h3>Поток и доход по месяцам</h3>
           <p class="note">
@@ -143,6 +163,7 @@ const C = {
 })
 export class DashboardPage {
   protected readonly api = inject(OperationApi);
+  protected readonly snapshots = inject(SnapshotApi);
 
   protected readonly totals = computed(
     () =>
@@ -153,6 +174,48 @@ export class DashboardPage {
         dividendsRub: 0,
       },
   );
+
+  /** Линия динамики: Вложено (серый) vs Текущая стоимость (синий) по датам снимков */
+  protected readonly valueChart = computed<ChartConfiguration<'line'>>(() => {
+    const s = this.snapshots.list.value() ?? [];
+    return {
+      type: 'line',
+      data: {
+        labels: s.map((r) => r.date),
+        datasets: [
+          {
+            label: 'Вложено',
+            data: s.map((r) => r.investedRub),
+            borderColor: C.gray,
+            backgroundColor: C.gray,
+            pointRadius: 2,
+            tension: 0.2,
+          },
+          {
+            label: 'Текущая стоимость',
+            data: s.map((r) => r.currentValueRub),
+            borderColor: C.blue,
+            backgroundColor: C.blue,
+            pointRadius: 2,
+            tension: 0.2,
+          },
+        ],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        interaction: { mode: 'index', intersect: false },
+        plugins: {
+          legend: { display: true },
+          tooltip: { callbacks: { label: (c) => `${c.dataset.label}: ${this.money(c.parsed.y)}` } },
+        },
+        scales: {
+          x: { grid: { display: false } },
+          y: { ticks: { callback: (v) => '₽' + Math.round(Number(v) / 1000) + 'k' } },
+        },
+      },
+    };
+  });
 
   /** Комбо по месяцам: столбцы Поток (серый) и Доход (зелёный/красный по знаку) */
   protected readonly timelineChart = computed<ChartConfiguration<'bar'>>(() => {

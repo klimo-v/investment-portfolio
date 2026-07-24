@@ -11,6 +11,7 @@ import {
   type Position,
   type Trade,
 } from '@core';
+import { SnapshotApi } from '../snapshot/snapshot.api';
 
 /**
  * API-клиент операций и позиций (FSD: entities).
@@ -20,6 +21,7 @@ import {
 @Injectable({ providedIn: 'root' })
 export class OperationApi {
   private readonly http = inject(HttpClient);
+  private readonly snapshotApi = inject(SnapshotApi);
 
   /** триггер перезагрузки: меняем значение → httpResource перезапрашивает */
   private readonly reloadTrigger = signal(0);
@@ -86,12 +88,17 @@ export class OperationApi {
     this.reloadTrigger.update((n) => n + 1);
   }
 
-  /** Обновить котировки с рынка (MOEX/ЦБ), затем пересчитать позиции */
+  /**
+   * Обновить котировки с рынка (MOEX/ЦБ), пересчитать позиции и снять снимок
+   * стоимости портфеля на сегодня (docs/04-roadmap.md Фаза 5) — снимок должен
+   * отражать свежую, а не старую цену, поэтому снимается сразу после обновления.
+   */
   async refreshQuotes(): Promise<{ updated: number; total: number }> {
     const result = await firstValueFrom(
       this.http.post<{ updated: number; total: number }>('/api/quotes/refresh', {}),
     );
     this.reloadTrigger.update((n) => n + 1);
+    await this.snapshotApi.capture();
     return result;
   }
 }

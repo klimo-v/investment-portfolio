@@ -7,5 +7,6 @@ import { QuotesModule } from '../quotes/quotes.module';
   imports: [QuotesModule],
   controllers: [OperationsController],
   providers: [OperationsService],
+  exports: [OperationsService],
 })
 export class OperationsModule {}

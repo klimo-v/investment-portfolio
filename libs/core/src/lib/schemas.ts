@@ -199,3 +199,18 @@ export const TradeSchema = z.object({
   operationIds: z.array(z.string()),
 });
 export type Trade = z.infer<typeof TradeSchema>;
+
+/**
+ * Снимок стоимости портфеля на дату (docs/04-roadmap.md, Фаза 5) — один снимок
+ * в день, пишется при обновлении котировок («Обновить цены»). Даёт линию
+ * динамики стоимости во времени, которой не хватает при разовом взгляде на
+ * «Вложено/Текущая стоимость/P&L» (см. дашборд).
+ */
+export const SnapshotSchema = z.object({
+  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Дата в формате YYYY-MM-DD'),
+  investedRub: z.number(),
+  currentValueRub: z.number(),
+  pnlRub: z.number(),
+  dividendsRub: z.number(),
+});
+export type Snapshot = z.infer<typeof SnapshotSchema>;

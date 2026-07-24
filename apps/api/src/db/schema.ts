@@ -100,9 +100,24 @@ export const quotes = sqliteTable('quotes', {
   asOf: text('as_of').notNull(),
 });
 
+/**
+ * Снимки стоимости портфеля во времени (docs/04-roadmap.md, Фаза 5) — один
+ * снимок в день (date — первичный ключ, upsert), пишется при обновлении
+ * котировок. Даёт линию динамики стоимости, которой нет при разовом взгляде
+ * на текущие Вложено/Текущая стоимость/P&L.
+ */
+export const portfolioSnapshots = sqliteTable('portfolio_snapshots', {
+  date: text('date').primaryKey(), // YYYY-MM-DD
+  investedRub: text('invested_rub').notNull(),
+  currentValueRub: text('current_value_rub').notNull(),
+  pnlRub: text('pnl_rub').notNull(),
+  dividendsRub: text('dividends_rub').notNull(),
+});
+
 export type SystemRow = typeof systems.$inferSelect;
 export type PortfolioRow = typeof portfolios.$inferSelect;
 export type InstrumentRow = typeof instruments.$inferSelect;
 export type OperationRow = typeof operations.$inferSelect;
 export type NewOperationRow = typeof operations.$inferInsert;
 export type QuoteRow = typeof quotes.$inferSelect;
+export type SnapshotRow = typeof portfolioSnapshots.$inferSelect;
