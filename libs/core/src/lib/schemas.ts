@@ -121,6 +121,25 @@ export const PositionSchema = z.object({
 export type Position = z.infer<typeof PositionSchema>;
 
 /**
+ * Метрики эффективности среза портфеля (docs/05-review-usability.md §1) — считаются
+ * движком метрик (libs/core/metrics.ts). Один и тот же набор для totals, разреза по
+ * системам и по портфелям, чтобы их можно было честно сравнивать между собой
+ * (абсолютный P&L в рублях сравнивать нельзя — большой счёт всегда «выигрывает»).
+ */
+export const EffectivenessSchema = z.object({
+  investedRub: z.number(), // вложено = себестоимость держимого остатка (сходится со сделками)
+  currentValueRub: z.number(), // рыночная стоимость остатка на сегодня
+  realizedPnlRub: z.number(), // зафиксированный результат по проданным частям
+  unrealizedPnlRub: z.number(), // бумажная переоценка удерживаемого остатка
+  dividendsRub: z.number(), // полученные дивиденды + купоны
+  pnlRub: z.number(), // realized + unrealized + dividends
+  roiPct: z.number().nullable(), // pnl / invested, %; null если вложено = 0 (всё закрыто)
+  dividendYieldPct: z.number().nullable(), // dividends / invested, %
+  xirrPct: z.number().nullable(), // годовая денежно-взвешенная доходность, %
+});
+export type Effectiveness = z.infer<typeof EffectivenessSchema>;
+
+/**
  * Агрегаты для дашборда (docs/03-ux-plan.md, шаг 4).
  * Логика построения графика — из portfolio_dashboard.html пользователя:
  * помесячные поток (депозиты/выводы) и доход (дивиденды/купоны/реализ. P&L),
@@ -135,13 +154,18 @@ export const DashboardSummarySchema = z.object({
       income: z.number(), // доход (дивиденды + купоны)
     }),
   ),
-  // P&L по системам (столбцы)
+  // P&L по системам (столбцы) + метрики эффективности среза
   bySystem: z.array(
-    z.object({
+    EffectivenessSchema.extend({
       systemId: z.string(),
       name: z.string(),
-      investedRub: z.number(),
-      pnlRub: z.number(),
+    }),
+  ),
+  // то же по портфелям/счетам
+  byPortfolio: z.array(
+    EffectivenessSchema.extend({
+      portfolioId: z.string(),
+      name: z.string(),
     }),
   ),
   // breakdown прибыль/убыток по инструментам (бары)
@@ -151,12 +175,7 @@ export const DashboardSummarySchema = z.object({
       pnlRub: z.number(),
     }),
   ),
-  totals: z.object({
-    investedRub: z.number(),
-    currentValueRub: z.number(),
-    pnlRub: z.number(),
-    dividendsRub: z.number(),
-  }),
+  totals: EffectivenessSchema,
 });
 export type DashboardSummary = z.infer<typeof DashboardSummarySchema>;
 

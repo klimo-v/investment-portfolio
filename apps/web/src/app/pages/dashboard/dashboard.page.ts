@@ -1,16 +1,21 @@
-import { ChangeDetectionStrategy, Component, computed, inject } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, inject, signal } from '@angular/core';
 import { MatCardModule } from '@angular/material/card';
+import { MatTableModule } from '@angular/material/table';
+import { MatButtonToggleModule } from '@angular/material/button-toggle';
+import { MatTooltipModule } from '@angular/material/tooltip';
 import { BaseChartDirective } from 'ng2-charts';
 import type { ChartConfiguration } from 'chart.js';
+import type { Effectiveness } from '@core';
 import { OperationApi } from '../../entities/operation/operation.api';
 import { SnapshotApi } from '../../entities/snapshot/snapshot.api';
-import { formatMoney, pnlColorClass } from '@web-shared';
+import { formatMoney, formatPercent, pnlColorClass } from '@web-shared';
 
 /**
- * Дашборд (docs/03-ux-plan.md, шаг 4).
- * Логика построения графиков — из portfolio_dashboard.html пользователя:
- * комбо-график с двумя осями (поток/доход столбцами), цвет по знаку, палитра C.
- * Данные — из нашего API (/api/operations/summary), не импортируются вручную.
+ * Дашборд (docs/03-ux-plan.md шаг 4; docs/05-review-usability.md §1).
+ * Кроме комбо-графиков строит метрики ЭФФЕКТИВНОСТИ: доходность в % и годовых
+ * (XIRR), реализ./нереализ. P&L, дивидендная доходность — по портфелю и в разрезе
+ * систем/портфелей, чтобы их можно было сравнивать (абсолютный P&L сравнивать
+ * нельзя).
  */
 
 /** Палитра из portfolio_dashboard.html */
@@ -22,10 +27,15 @@ const C = {
   red: '#e34948',
 };
 
+interface EffRow extends Effectiveness {
+  id: string;
+  name: string;
+}
+
 @Component({
   selector: 'app-dashboard-page',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [MatCardModule, BaseChartDirective],
+  imports: [MatCardModule, MatTableModule, MatButtonToggleModule, MatTooltipModule, BaseChartDirective],
   template: `
     <h1 class="page-title">Дашборд</h1>
 
@@ -36,7 +46,9 @@ const C = {
     } @else {
       <div class="totals">
         <mat-card>
-          <mat-card-subtitle>Вложено</mat-card-subtitle>
+          <mat-card-subtitle
+            >Вложено <span class="hint" matTooltip="Себестоимость держимого остатка — сходится с колонкой «Вложено» на странице «Сделки»">?</span></mat-card-subtitle
+          >
           <mat-card-title>{{ money(totals().investedRub) }}</mat-card-title>
         </mat-card>
         <mat-card>
@@ -46,12 +58,84 @@ const C = {
         <mat-card>
           <mat-card-subtitle>P&L</mat-card-subtitle>
           <mat-card-title [class]="cls(totals().pnlRub)">{{ money(totals().pnlRub) }}</mat-card-title>
+          <div class="sub">
+            реализ. <span [class]="cls(totals().realizedPnlRub)">{{ money(totals().realizedPnlRub) }}</span>
+            · нереализ. <span [class]="cls(totals().unrealizedPnlRub)">{{ money(totals().unrealizedPnlRub) }}</span>
+          </div>
+        </mat-card>
+        <mat-card>
+          <mat-card-subtitle
+            >ROI <span class="hint" matTooltip="P&L относительно вложенного (себестоимости держимого остатка)">?</span></mat-card-subtitle
+          >
+          <mat-card-title [class]="cls(totals().roiPct ?? 0)">{{ pctOrDash(totals().roiPct) }}</mat-card-title>
+        </mat-card>
+        <mat-card>
+          <mat-card-subtitle
+            >Доходность годовых (XIRR)
+            <span class="hint" matTooltip="Денежно-взвешенная годовая доходность с учётом дат вложений">?</span></mat-card-subtitle
+          >
+          <mat-card-title [class]="cls(totals().xirrPct ?? 0)">{{ pctOrDash(totals().xirrPct) }}</mat-card-title>
         </mat-card>
         <mat-card>
           <mat-card-subtitle>Дивиденды + купоны</mat-card-subtitle>
           <mat-card-title>{{ money(totals().dividendsRub) }}</mat-card-title>
+          <div class="sub">доходность {{ pctOrDash(totals().dividendYieldPct) }}</div>
         </mat-card>
       </div>
+
+      <mat-card class="eff">
+        <div class="eff-head">
+          <h3>Эффективность</h3>
+          <mat-button-toggle-group [value]="groupBy()" (change)="groupBy.set($event.value)" hideSingleSelectionIndicator>
+            <mat-button-toggle value="system">По системам</mat-button-toggle>
+            <mat-button-toggle value="portfolio">По портфелям</mat-button-toggle>
+          </mat-button-toggle-group>
+        </div>
+        @if (effRows().length === 0) {
+          <p class="note">Нет данных — добавьте операции и обновите цены.</p>
+        } @else {
+          <table mat-table [dataSource]="effRows()">
+            <ng-container matColumnDef="name">
+              <th mat-header-cell *matHeaderCellDef>Название</th>
+              <td mat-cell *matCellDef="let r">{{ r.name }}</td>
+            </ng-container>
+            <ng-container matColumnDef="invested">
+              <th mat-header-cell *matHeaderCellDef>Вложено</th>
+              <td mat-cell *matCellDef="let r">{{ money(r.investedRub) }}</td>
+            </ng-container>
+            <ng-container matColumnDef="value">
+              <th mat-header-cell *matHeaderCellDef>Стоимость</th>
+              <td mat-cell *matCellDef="let r">{{ money(r.currentValueRub) }}</td>
+            </ng-container>
+            <ng-container matColumnDef="realized">
+              <th mat-header-cell *matHeaderCellDef>Реализ. / Нереализ.</th>
+              <td mat-cell *matCellDef="let r">
+                <span [class]="cls(r.realizedPnlRub)">{{ money(r.realizedPnlRub) }}</span>
+                /
+                <span [class]="cls(r.unrealizedPnlRub)">{{ money(r.unrealizedPnlRub) }}</span>
+              </td>
+            </ng-container>
+            <ng-container matColumnDef="pnl">
+              <th mat-header-cell *matHeaderCellDef>P&L</th>
+              <td mat-cell *matCellDef="let r" [class]="cls(r.pnlRub)">{{ money(r.pnlRub) }}</td>
+            </ng-container>
+            <ng-container matColumnDef="roi">
+              <th mat-header-cell *matHeaderCellDef>ROI</th>
+              <td mat-cell *matCellDef="let r" [class]="cls(r.roiPct ?? 0)">{{ pctOrDash(r.roiPct) }}</td>
+            </ng-container>
+            <ng-container matColumnDef="xirr">
+              <th mat-header-cell *matHeaderCellDef>XIRR</th>
+              <td mat-cell *matCellDef="let r" [class]="cls(r.xirrPct ?? 0)">{{ pctOrDash(r.xirrPct) }}</td>
+            </ng-container>
+            <ng-container matColumnDef="divyield">
+              <th mat-header-cell *matHeaderCellDef>Див. дох.</th>
+              <td mat-cell *matCellDef="let r">{{ pctOrDash(r.dividendYieldPct) }}</td>
+            </ng-container>
+            <tr mat-header-row *matHeaderRowDef="effColumns"></tr>
+            <tr mat-row *matRowDef="let row; columns: effColumns"></tr>
+          </table>
+        }
+      </mat-card>
 
       <div class="charts">
         <mat-card class="wide">
@@ -124,8 +208,43 @@ const C = {
       }
       .totals mat-card {
         padding: 16px;
-        min-width: 180px;
+        min-width: 170px;
         flex: 1;
+      }
+      .sub {
+        margin-top: 4px;
+        font-size: 12px;
+        color: rgba(0, 0, 0, 0.6);
+      }
+      .hint {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 14px;
+        height: 14px;
+        border-radius: 50%;
+        border: 1px solid rgba(0, 0, 0, 0.4);
+        color: rgba(0, 0, 0, 0.6);
+        font-size: 10px;
+        cursor: help;
+      }
+      .eff {
+        padding: 16px;
+        margin-bottom: 16px;
+        overflow-x: auto;
+      }
+      .eff-head {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 8px;
+      }
+      .eff-head h3 {
+        margin: 0;
+        font-weight: 500;
+      }
+      .eff table {
+        width: 100%;
       }
       .charts {
         display: grid;
@@ -155,6 +274,12 @@ const C = {
       .chart-box.tall {
         height: 400px;
       }
+      .pnl-positive {
+        color: #2e7d32;
+      }
+      .pnl-negative {
+        color: #c62828;
+      }
       .error {
         color: #c62828;
       }
@@ -165,15 +290,42 @@ export class DashboardPage {
   protected readonly api = inject(OperationApi);
   protected readonly snapshots = inject(SnapshotApi);
 
-  protected readonly totals = computed(
-    () =>
-      this.api.summary.value()?.totals ?? {
-        investedRub: 0,
-        currentValueRub: 0,
-        pnlRub: 0,
-        dividendsRub: 0,
-      },
+  protected readonly groupBy = signal<'system' | 'portfolio'>('system');
+  protected readonly effColumns = [
+    'name',
+    'invested',
+    'value',
+    'realized',
+    'pnl',
+    'roi',
+    'xirr',
+    'divyield',
+  ];
+
+  private static readonly EMPTY: Effectiveness = {
+    investedRub: 0,
+    currentValueRub: 0,
+    realizedPnlRub: 0,
+    unrealizedPnlRub: 0,
+    dividendsRub: 0,
+    pnlRub: 0,
+    roiPct: null,
+    dividendYieldPct: null,
+    xirrPct: null,
+  };
+
+  protected readonly totals = computed<Effectiveness>(
+    () => this.api.summary.value()?.totals ?? DashboardPage.EMPTY,
   );
+
+  /** Строки таблицы эффективности — по системам или по портфелям */
+  protected readonly effRows = computed<EffRow[]>(() => {
+    const s = this.api.summary.value();
+    if (!s) return [];
+    return this.groupBy() === 'system'
+      ? s.bySystem.map((r) => ({ ...r, id: r.systemId }))
+      : s.byPortfolio.map((r) => ({ ...r, id: r.portfolioId }));
+  });
 
   /** Линия динамики: Вложено (серый) vs Текущая стоимость (синий) по датам снимков */
   protected readonly valueChart = computed<ChartConfiguration<'line'>>(() => {
@@ -310,6 +462,11 @@ export class DashboardPage {
 
   protected money(v: number | null): string {
     return formatMoney((v ?? 0).toFixed(2), 'RUB');
+  }
+
+  /** Процент или «—», если метрика не определена (например, вложено = 0) */
+  protected pctOrDash(v: number | null): string {
+    return v === null ? '—' : formatPercent(v);
   }
 
   protected cls(v: number): string {

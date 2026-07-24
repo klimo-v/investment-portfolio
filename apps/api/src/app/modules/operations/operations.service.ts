@@ -4,15 +4,25 @@ import { eq } from 'drizzle-orm';
 import {
   calculatePositions,
   calculateTrades,
+  xirr,
   OperationSchema,
   OperationReassignSchema,
+  type CashFlow,
+  type Effectiveness,
   type Operation,
   type Position,
   type DashboardSummary,
   type Trade,
 } from '@core';
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
-import { operations, instruments, systems, quotes, type OperationRow } from '../../../db/schema';
+import {
+  operations,
+  instruments,
+  systems,
+  portfolios,
+  quotes,
+  type OperationRow,
+} from '../../../db/schema';
 import { DB } from '../../db/drizzle.module';
 import { QuotesService } from '../quotes/quotes.service';
 
@@ -208,13 +218,19 @@ export class OperationsService {
 
   /**
    * Агрегаты для дашборда (логика построения — из portfolio_dashboard.html):
-   * помесячный поток/доход для комбо-графика, P&L по системам, breakdown по тикерам.
+   * помесячный поток/доход для комбо-графика, метрики эффективности по системам и
+   * портфелям (ROI/XIRR/реализ./нереализ./див.доходность — docs/05-review-usability.md
+   * §1), breakdown по тикерам.
    */
   async summary(): Promise<DashboardSummary> {
     const ops = this.list();
     const positions = await this.positions();
+    const trades = calculateTrades(ops);
     const systemRows = this.db.select().from(systems).all();
+    const portfolioRows = this.db.select().from(portfolios).all();
     const systemName = new Map(systemRows.map((s) => [s.id, s.name]));
+    const portfolioName = new Map(portfolioRows.map((p) => [p.id, p.name]));
+    const today = new Date().toISOString().slice(0, 10);
 
     // временной ряд по месяцам: поток кэша и доход (дивиденды/купоны)
     const monthly = new Map<string, { flow: number; income: number }>();
@@ -232,20 +248,35 @@ export class OperationsService {
       .sort((a, b) => a[0].localeCompare(b[0]))
       .map(([period, v]) => ({ period, flow: v.flow, income: v.income }));
 
-    // P&L по системам
-    const systemAgg = new Map<string, { investedRub: number; pnlRub: number }>();
-    for (const p of positions) {
-      const agg = systemAgg.get(p.systemId) ?? { investedRub: 0, pnlRub: 0 };
-      agg.investedRub += Number(p.investedRub);
-      agg.pnlRub += Number(p.pnlRub ?? 0);
-      systemAgg.set(p.systemId, agg);
-    }
-    const bySystem = [...systemAgg.entries()].map(([systemId, v]) => ({
-      systemId,
-      name: systemName.get(systemId) ?? systemId,
-      investedRub: v.investedRub,
-      pnlRub: v.pnlRub,
-    }));
+    // эффективность по системам: срез операций/позиций/сделок по systemId
+    const systemIds = [...new Set(positions.map((p) => p.systemId))];
+    const bySystem = systemIds
+      .map((systemId) => ({
+        systemId,
+        name: systemName.get(systemId) ?? systemId,
+        ...this.effectiveness(
+          ops.filter((o) => o.systemId === systemId),
+          positions.filter((p) => p.systemId === systemId),
+          trades.filter((t) => t.systemId === systemId),
+          today,
+        ),
+      }))
+      .sort((a, b) => b.pnlRub - a.pnlRub);
+
+    // эффективность по портфелям/счетам
+    const portfolioIds = [...new Set(positions.map((p) => p.portfolioId))];
+    const byPortfolio = portfolioIds
+      .map((portfolioId) => ({
+        portfolioId,
+        name: portfolioName.get(portfolioId) ?? portfolioId,
+        ...this.effectiveness(
+          ops.filter((o) => o.portfolioId === portfolioId),
+          positions.filter((p) => p.portfolioId === portfolioId),
+          trades.filter((t) => t.portfolioId === portfolioId),
+          today,
+        ),
+      }))
+      .sort((a, b) => b.pnlRub - a.pnlRub);
 
     // breakdown прибыль/убыток по инструментам (сортировка по величине P&L)
     const breakdown = positions
@@ -253,14 +284,69 @@ export class OperationsService {
       .map((p) => ({ ticker: p.ticker, pnlRub: Number(p.pnlRub) }))
       .sort((a, b) => b.pnlRub - a.pnlRub);
 
-    const totals = {
-      investedRub: positions.reduce((s, p) => s + Number(p.investedRub), 0),
-      currentValueRub: positions.reduce((s, p) => s + Number(p.currentValueRub ?? 0), 0),
-      pnlRub: positions.reduce((s, p) => s + Number(p.pnlRub ?? 0), 0),
-      dividendsRub: positions.reduce((s, p) => s + Number(p.dividendsRub) + Number(p.couponsRub), 0),
-    };
+    const totals = this.effectiveness(ops, positions, trades, today);
 
-    return { timeline, bySystem, breakdown, totals };
+    return { timeline, bySystem, byPortfolio, breakdown, totals };
+  }
+
+  /**
+   * Метрики эффективности среза (docs/05-review-usability.md §1). Реализованный P&L
+   * берём из сделок (движок @core), нереализованный и стоимость — из позиций,
+   * дивиденды — оттуда же. XIRR считаем по фактическим потокам: покупка — отток,
+   * продажа/дивиденд — приток, плюс терминальный приток текущей стоимости остатка
+   * на сегодня. ROI и дивидендную доходность нормируем на «Вложено» — себестоимость
+   * держимого остатка (сходится с колонкой «Вложено» на странице «Сделки»), а не на
+   * сумму всех покупок: при перезаходах в позицию она кратно завышена оборотом.
+   * У полностью закрытых срезов вложено = 0 → ROI не определён (null): годовую
+   * доходность там показывает XIRR.
+   */
+  private effectiveness(
+    ops: Operation[],
+    positions: Position[],
+    trades: ReturnType<typeof calculateTrades>,
+    today: string,
+  ): Effectiveness {
+    const flows: CashFlow[] = [];
+    for (const op of ops) {
+      const fx = Number(op.fxRate);
+      const gross = Number(op.quantity) * Number(op.price);
+      if (op.operationType === 'Buy') {
+        flows.push({ date: op.date, amount: -(gross + Number(op.fee)) * fx });
+      } else if (op.operationType === 'Sell') {
+        flows.push({ date: op.date, amount: (gross - Number(op.fee)) * fx });
+      } else if (op.operationType === 'Dividend' || op.operationType === 'Coupon') {
+        flows.push({ date: op.date, amount: gross * fx });
+      }
+    }
+
+    const currentValueRub = positions.reduce((s, p) => s + Number(p.currentValueRub ?? 0), 0);
+    const investedRub = positions.reduce((s, p) => s + Number(p.investedRub), 0);
+    const dividendsRub = positions.reduce(
+      (s, p) => s + Number(p.dividendsRub) + Number(p.couponsRub),
+      0,
+    );
+    const realizedPnlRub = trades.reduce((s, t) => s + t.realizedPnlRub.toNumber(), 0);
+    const unrealizedPnlRub = positions.reduce(
+      (s, p) => (p.currentValueRub === null ? s : s + (Number(p.currentValueRub) - Number(p.investedRub))),
+      0,
+    );
+    const pnlRub = realizedPnlRub + unrealizedPnlRub + dividendsRub;
+
+    // терминальный поток — стоимость остатка «как если бы продали сегодня»
+    if (currentValueRub > 0) flows.push({ date: today, amount: currentValueRub });
+    const rate = xirr(flows);
+
+    return {
+      investedRub,
+      currentValueRub,
+      realizedPnlRub,
+      unrealizedPnlRub,
+      dividendsRub,
+      pnlRub,
+      roiPct: investedRub > 0 ? (pnlRub / investedRub) * 100 : null,
+      dividendYieldPct: investedRub > 0 ? (dividendsRub / investedRub) * 100 : null,
+      xirrPct: rate === null ? null : rate * 100,
+    };
   }
 }
 
