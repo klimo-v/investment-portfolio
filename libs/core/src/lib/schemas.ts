@@ -179,6 +179,13 @@ export const DashboardSummarySchema = z.object({
 });
 export type DashboardSummary = z.infer<typeof DashboardSummarySchema>;
 
+/** Точка истории бенчмарка (индекс IMOEX) — для линии «Портфель vs рынок» */
+export const BenchmarkPointSchema = z.object({
+  date: z.string(), // YYYY-MM-DD
+  close: z.number(),
+});
+export type BenchmarkPoint = z.infer<typeof BenchmarkPointSchema>;
+
 /** Статус сделки: открыта / частично закрыта / закрыта по остатку количества */
 export const TradeStatus = z.enum(['Open', 'Partial', 'Closed']);
 export type TradeStatus = z.infer<typeof TradeStatus>;

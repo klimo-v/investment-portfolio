@@ -29,6 +29,14 @@ export class QuotesService {
   }
 
   /**
+   * История индекса-бенчмарка (IMOEX по умолчанию) за период — прокси к MOEX ISS,
+   * чтобы фронт не ходил на внешний источник напрямую (CORS + единая точка).
+   */
+  async benchmark(from: string, till: string, secid?: string) {
+    return this.moex.getIndexHistory(from, till, secid || 'IMOEX');
+  }
+
+  /**
    * Обновить цены по всем инструментам из справочника.
    * Возвращает количество успешно обновлённых.
    */

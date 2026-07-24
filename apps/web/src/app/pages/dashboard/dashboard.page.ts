@@ -1,4 +1,4 @@
-import { ChangeDetectionStrategy, Component, computed, inject, signal } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, effect, inject, signal } from '@angular/core';
 import { MatCardModule } from '@angular/material/card';
 import { MatTableModule } from '@angular/material/table';
 import { MatButtonToggleModule } from '@angular/material/button-toggle';
@@ -8,6 +8,7 @@ import type { ChartConfiguration } from 'chart.js';
 import { maxDrawdown, type Effectiveness } from '@core';
 import { OperationApi } from '../../entities/operation/operation.api';
 import { SnapshotApi } from '../../entities/snapshot/snapshot.api';
+import { BenchmarkApi } from '../../entities/benchmark/benchmark.api';
 import { formatMoney, formatPercent, pnlColorClass } from '@web-shared';
 
 /**
@@ -15,7 +16,7 @@ import { formatMoney, formatPercent, pnlColorClass } from '@web-shared';
  * Кроме комбо-графиков строит метрики ЭФФЕКТИВНОСТИ: доходность в % и годовых
  * (XIRR), реализ./нереализ. P&L, дивидендная доходность — по портфелю и в разрезе
  * систем/портфелей, чтобы их можно было сравнивать (абсолютный P&L сравнивать
- * нельзя). Плюс max drawdown из снимков стоимости.
+ * нельзя). Плюс max drawdown из снимков и линия «Портфель vs IMOEX/Депозит».
  */
 
 /** Палитра из portfolio_dashboard.html */
@@ -25,7 +26,16 @@ const C = {
   green: '#199e70',
   greenT: '#1baf7a',
   red: '#e34948',
+  violet: '#8e5bd8',
+  amber: '#e0a400',
 };
+
+/**
+ * Годовая ставка вклада-ориентира для линии «Депозит» (что было бы, положи те же
+ * деньги на вклад). Допущение — при желании выносится в настройки; ориентир —
+ * ключевая ставка периода.
+ */
+const DEPOSIT_ANNUAL_RATE = 0.16;
 
 interface EffRow extends Effectiveness {
   id: string;
@@ -147,6 +157,24 @@ interface EffRow extends Effectiveness {
       </mat-card>
 
       <div class="charts">
+        <mat-card class="wide">
+          <h3>Портфель против рынка</h3>
+          <p class="note">
+            Рост ₽100, вложенных в начале периода: ваш портфель, индекс МосБиржи (IMOEX)
+            и вклад под {{ depositRatePct }}% годовых. По снимкам стоимости.
+          </p>
+          @if (benchmarkChart(); as bc) {
+            <div class="chart-box">
+              <canvas baseChart [type]="bc.type" [data]="bc.data" [options]="bc.options"></canvas>
+            </div>
+          } @else {
+            <p class="note">
+              Нужно минимум два снимка стоимости и данные индекса. Снимки появляются на
+              странице «Портфель» при нажатии «Обновить цены».
+            </p>
+          }
+        </mat-card>
+
         <mat-card class="wide">
           <h3>Стоимость портфеля во времени</h3>
           @if (snapshots.list.value()?.length) {
@@ -298,7 +326,9 @@ interface EffRow extends Effectiveness {
 export class DashboardPage {
   protected readonly api = inject(OperationApi);
   protected readonly snapshots = inject(SnapshotApi);
+  protected readonly benchmark = inject(BenchmarkApi);
 
+  protected readonly depositRatePct = (DEPOSIT_ANNUAL_RATE * 100).toFixed(0);
   protected readonly groupBy = signal<'system' | 'portfolio'>('system');
   protected readonly effColumns = [
     'name',
@@ -347,6 +377,18 @@ export class DashboardPage {
     () => maxDrawdown(this.snaps().map((s) => s.currentValueRub)) * 100,
   );
 
+  constructor() {
+    // Диапазон запроса истории индекса — от первого снимка до сегодня
+    effect(() => {
+      const s = this.snaps();
+      if (s.length < 2) {
+        this.benchmark.range.set(null);
+        return;
+      }
+      this.benchmark.range.set({ from: s[0].date, till: new Date().toISOString().slice(0, 10) });
+    });
+  }
+
   /** Линия динамики: Вложено (серый) vs Текущая стоимость (синий) по датам снимков */
   protected readonly valueChart = computed<ChartConfiguration<'line'>>(() => {
     const s = this.snaps();
@@ -384,6 +426,65 @@ export class DashboardPage {
         scales: {
           x: { grid: { display: false } },
           y: { ticks: { callback: (v) => '₽' + Math.round(Number(v) / 1000) + 'k' } },
+        },
+      },
+    };
+  });
+
+  /**
+   * Линия «Портфель vs рынок»: рост ₽100 от начала периода. Портфель — по снимкам
+   * стоимости, IMOEX — по истории индекса (выравнивается на дату снимка: берём
+   * последнее закрытие на дату или раньше), Депозит — фиксированная ставка.
+   * null — если данных для сравнения недостаточно.
+   */
+  protected readonly benchmarkChart = computed<ChartConfiguration<'line'> | null>(() => {
+    const s = this.snaps();
+    const b = [...(this.benchmark.history.value() ?? [])].sort((a, b) => a.date.localeCompare(b.date));
+    if (s.length < 2 || b.length === 0) return null;
+
+    const baseValue = s[0].currentValueRub > 0 ? s[0].currentValueRub : s[0].investedRub;
+    if (baseValue <= 0) return null;
+
+    const closeOnOrBefore = (date: string): number => {
+      let close = b[0].close;
+      for (const p of b) {
+        if (p.date <= date) close = p.close;
+        else break;
+      }
+      return close;
+    };
+    const baseClose = closeOnOrBefore(s[0].date);
+    const baseTime = new Date(s[0].date + 'T00:00:00Z').getTime();
+    const dayMs = 24 * 60 * 60 * 1000;
+
+    const portfolio = s.map((r) => (r.currentValueRub / baseValue) * 100);
+    const imoex = s.map((r) => (closeOnOrBefore(r.date) / baseClose) * 100);
+    const deposit = s.map((r) => {
+      const years = (new Date(r.date + 'T00:00:00Z').getTime() - baseTime) / dayMs / 365;
+      return 100 * Math.pow(1 + DEPOSIT_ANNUAL_RATE, years);
+    });
+
+    return {
+      type: 'line',
+      data: {
+        labels: s.map((r) => r.date),
+        datasets: [
+          { label: 'Портфель', data: portfolio, borderColor: C.blue, backgroundColor: C.blue, pointRadius: 2, tension: 0.2 },
+          { label: 'IMOEX', data: imoex, borderColor: C.amber, backgroundColor: C.amber, pointRadius: 2, tension: 0.2 },
+          { label: 'Депозит', data: deposit, borderColor: C.gray, backgroundColor: C.gray, pointRadius: 0, borderDash: [6, 4], tension: 0 },
+        ],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        interaction: { mode: 'index', intersect: false },
+        plugins: {
+          legend: { display: true },
+          tooltip: { callbacks: { label: (c) => `${c.dataset.label}: ${Number(c.parsed.y).toFixed(1)}` } },
+        },
+        scales: {
+          x: { grid: { display: false } },
+          y: { ticks: { callback: (v) => Number(v).toFixed(0) } },
         },
       },
     };

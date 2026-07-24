@@ -1,4 +1,5 @@
-import { Controller, Get, Post } from '@nestjs/common';
+import { Controller, Get, Post, Query } from '@nestjs/common';
+import type { BenchmarkPoint } from '@core';
 import type { QuoteRow } from '../../../db/schema';
 import { QuotesService } from './quotes.service';
 
@@ -16,5 +17,18 @@ export class QuotesController {
   @Post('refresh')
   refresh(): Promise<{ updated: number; total: number }> {
     return this.service.refreshAll();
+  }
+
+  /**
+   * История индекса-бенчмарка (по умолчанию IMOEX) за период — для линии
+   * «Портфель vs рынок» на дашборде. Даты в формате YYYY-MM-DD.
+   */
+  @Get('benchmark')
+  benchmark(
+    @Query('from') from: string,
+    @Query('till') till: string,
+    @Query('secid') secid?: string,
+  ): Promise<BenchmarkPoint[]> {
+    return this.service.benchmark(from, till, secid);
   }
 }

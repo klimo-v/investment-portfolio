@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import Decimal from 'decimal.js';
+import type { BenchmarkPoint } from '@core';
 import type { PriceProvider, Quote } from './price-provider';
 
 /**
@@ -52,6 +53,45 @@ export class MoexProvider implements PriceProvider {
       }
     }
     return null;
+  }
+
+  /**
+   * История дневных закрытий индекса MOEX (по умолчанию IMOEX) за период —
+   * для линии бенчмарка «Портфель vs рынок» на дашборде (docs/05-review-usability.md
+   * §1). ISS отдаёт историю страницами по 100 строк, поэтому листаем через start,
+   * пока приходят данные. Возвращаем по возрастанию даты.
+   */
+  async getIndexHistory(from: string, till: string, secid = 'IMOEX'): Promise<BenchmarkPoint[]> {
+    const points: BenchmarkPoint[] = [];
+    for (let start = 0; start < 10000; start += 100) {
+      const url =
+        `https://iss.moex.com/iss/history/engines/stock/markets/index/securities/` +
+        `${encodeURIComponent(secid)}.json?iss.meta=off&iss.only=history` +
+        `&history.columns=TRADEDATE,CLOSE&from=${from}&till=${till}&start=${start}`;
+      let rows: (string | number | null)[][];
+      try {
+        const res = await fetch(url);
+        if (!res.ok) break;
+        const json = (await res.json()) as { history?: IssSection };
+        const section = json.history;
+        if (!section) break;
+        const dateIdx = section.columns.indexOf('TRADEDATE');
+        const closeIdx = section.columns.indexOf('CLOSE');
+        rows = section.data;
+        if (rows.length === 0) break;
+        for (const row of rows) {
+          const date = row[dateIdx];
+          const close = row[closeIdx];
+          if (typeof date === 'string' && close !== null && close !== undefined && close !== '') {
+            points.push({ date, close: Number(close) });
+          }
+        }
+      } catch {
+        break;
+      }
+      if (rows.length < 100) break;
+    }
+    return points;
   }
 
   private async fetchLast(market: string, ticker: string): Promise<string | null> {
