@@ -205,11 +205,12 @@ function currencyTradeRows(rows: string[][], ctx: AccountContext): RawRow[] {
   for (const c of rows) {
     // строка не должна быть сделкой ЦБ (у той Вид на индексе 6)
     if (c.length >= 12 && c.length < 16 && BUY_SELL.has(c[4]) && /^[A-Z]{3}RUB/.test(c[0])) {
-      const base = c[0].split('RUB')[0]; // GLDRUB_TOM → GLD
       out.push({
         date: c[1],
         instrumentType: 'Currency',
-        ticker: base,
+        // полный тикер (напр. GLDRUB_TOM), а не усечённый до 3 букв — так же
+        // заведён в справочнике инструментов и в MOEX ISS (moex.provider.ts)
+        ticker: c[0],
         currency: 'RUB',
         tradeType: c[4],
         quantity: clean(c[5]),

@@ -19,9 +19,9 @@ const find = (p: (r: RawRow) => boolean) => rows.filter(p);
 const buysSells = find((r) => r.tradeType === 'Покупка' || r.tradeType === 'Продажа');
 
 describe.skipIf(!hasFixture)('parseBrokerHtmlReport — отчёт SESPS', () => {
-  it('извлекает ровно 12 операций: 8 сделок ЦБ + 1 валютная (GLD) + 3 денежных (дивиденд, 2 депозита)', () => {
+  it('извлекает ровно 12 операций: 8 сделок ЦБ + 1 валютная (GLDRUB_TOM) + 3 денежных (дивиденд, 2 депозита)', () => {
     expect(rows).toHaveLength(12);
-    expect(buysSells).toHaveLength(9); // 8 ЦБ + 1 GLD
+    expect(buysSells).toHaveLength(9); // 8 ЦБ + 1 GLDRUB_TOM
     expect(find((r) => r.tradeType === 'Dividend')).toHaveLength(1);
     expect(find((r) => r.tradeType === 'Deposit')).toHaveLength(2);
   });
@@ -44,8 +44,8 @@ describe.skipIf(!hasFixture)('parseBrokerHtmlReport — отчёт SESPS', () =>
     expect(sber.instrumentType).toBe('Stock');
   });
 
-  it('валютная сделка GLD: база GLD, кол-во 10, цена 10075, комиссия брокера 604.5', () => {
-    const gld = find((r) => r.ticker === 'GLD')[0];
+  it('валютная сделка GLDRUB_TOM: полный тикер (не усечённый до GLD), кол-во 10, цена 10075, комиссия брокера 604.5', () => {
+    const gld = find((r) => r.ticker === 'GLDRUB_TOM')[0];
     expect(gld.tradeType).toBe('Покупка');
     expect(gld.date).toBe('16.07.2026');
     expect(gld.quantity).toBe('10.00');

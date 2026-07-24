@@ -27,7 +27,16 @@ db.insert(portfolios)
 
 db.insert(instruments)
   .values([
-    { id: 'SBER', ticker: 'SBER', type: 'Stock', currency: 'RUB', marketSource: 'moex' },
+    {
+      id: 'SBER',
+      ticker: 'SBER',
+      type: 'Stock',
+      currency: 'RUB',
+      // некоторые брокеры (Т-Банк, отдельная площадка) репортят эту же акцию по
+      // ISIN вместо тикера — резолвер инструмента ищет и по ISIN (apps/api/.../import.service.ts)
+      isin: 'RU0009029540',
+      marketSource: 'moex',
+    },
     { id: 'TMON', ticker: 'TMON', type: 'ETF', currency: 'RUB', marketSource: 'moex' },
     { id: 'LKOH', ticker: 'LKOH', type: 'Stock', currency: 'RUB', marketSource: 'moex' },
     { id: 'X5', ticker: 'X5', type: 'Stock', currency: 'RUB', marketSource: 'moex' },
@@ -45,6 +54,12 @@ db.insert(instruments)
       isin: 'RU000A10B4K3',
       marketSource: 'manual',
     },
+    // ОФЗ из xlsx-отчёта Т-Банка — тикер там уже SECID MOEX (не отдельный ISIN)
+    { id: 'SU52003RMFS9', ticker: 'SU52003RMFS9', type: 'Bond', currency: 'RUB', marketSource: 'moex' },
+    { id: 'SU29008RMFS8', ticker: 'SU29008RMFS8', type: 'Bond', currency: 'RUB', marketSource: 'moex' },
+    { id: 'SU52002RMFS1', ticker: 'SU52002RMFS1', type: 'Bond', currency: 'RUB', marketSource: 'moex' },
+    { id: 'SU52005RMFS4', ticker: 'SU52005RMFS4', type: 'Bond', currency: 'RUB', marketSource: 'moex' },
+    { id: 'SU29015RMFS3', ticker: 'SU29015RMFS3', type: 'Bond', currency: 'RUB', marketSource: 'moex' },
   ])
   .onConflictDoNothing()
   .run();
