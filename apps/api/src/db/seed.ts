@@ -72,12 +72,15 @@ db.insert(instruments)
       // торгуется на MOEX bonds под тем же SECID, что и ISIN — котировка доступна
       marketSource: 'moex',
     },
-    // ОФЗ из xlsx-отчёта Т-Банка — тикер там уже SECID MOEX (не отдельный ISIN)
-    { id: 'SU52003RMFS9', ticker: 'SU52003RMFS9', type: 'Bond', currency: 'RUB', marketSource: 'moex' },
-    { id: 'SU29008RMFS8', ticker: 'SU29008RMFS8', type: 'Bond', currency: 'RUB', marketSource: 'moex' },
-    { id: 'SU52002RMFS1', ticker: 'SU52002RMFS1', type: 'Bond', currency: 'RUB', marketSource: 'moex' },
-    { id: 'SU52005RMFS4', ticker: 'SU52005RMFS4', type: 'Bond', currency: 'RUB', marketSource: 'moex' },
-    { id: 'SU29015RMFS3', ticker: 'SU29015RMFS3', type: 'Bond', currency: 'RUB', marketSource: 'moex' },
+    // ОФЗ из xlsx-отчёта Т-Банка — тикер там SECID MOEX (не ISIN, хоть и похож
+    // форматом); настоящий ISIN — из раздела «Движение по ценным бумагам»
+    // отчёта, нужен на случай, если брокер где-то репортит бумагу по ISIN
+    // (купон/выплата), а не по SECID
+    { id: 'SU52003RMFS9', ticker: 'SU52003RMFS9', type: 'Bond', currency: 'RUB', isin: 'RU000A102069', marketSource: 'moex' },
+    { id: 'SU29008RMFS8', ticker: 'SU29008RMFS8', type: 'Bond', currency: 'RUB', isin: 'RU000A0JV4P3', marketSource: 'moex' },
+    { id: 'SU52002RMFS1', ticker: 'SU52002RMFS1', type: 'Bond', currency: 'RUB', isin: 'RU000A0ZYZ26', marketSource: 'moex' },
+    { id: 'SU52005RMFS4', ticker: 'SU52005RMFS4', type: 'Bond', currency: 'RUB', isin: 'RU000A105XV1', marketSource: 'moex' },
+    { id: 'SU29015RMFS3', ticker: 'SU29015RMFS3', type: 'Bond', currency: 'RUB', isin: 'RU000A1025A7', marketSource: 'moex' },
   ])
   .onConflictDoNothing()
   .run();
