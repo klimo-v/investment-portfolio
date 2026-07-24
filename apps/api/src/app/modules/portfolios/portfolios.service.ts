@@ -49,7 +49,13 @@ export class PortfoliosService {
       })
       .run();
 
-    return { id, name: parsed.name, broker: parsed.broker, baseCurrency: parsed.baseCurrency };
+    return {
+      id,
+      name: parsed.name,
+      broker: parsed.broker,
+      baseCurrency: parsed.baseCurrency,
+      accountRef: null,
+    };
   }
 
   /**

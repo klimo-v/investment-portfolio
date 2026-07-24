@@ -5,8 +5,11 @@ import type { RawRow } from '@core';
  * Колонки сопоставляются по заголовку (рус/англ синонимы), порядок не важен.
  */
 
+/** Строковые поля RawRow, которые может задать колонка CSV (accountKind — не строка, из CSV не приходит) */
+type CsvField = Exclude<keyof RawRow, 'accountKind'>;
+
 /** Синонимы заголовков → канонический ключ RawRow */
-const HEADER_MAP: Record<string, keyof RawRow> = {
+const HEADER_MAP: Record<string, CsvField> = {
   дата: 'date',
   date: 'date',
   система: 'system',

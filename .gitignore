@@ -39,3 +39,8 @@ _tmp_*
 
 # local agent settings
 .claude/
+
+# реальные брокерские выписки (ПДн) — держим локально, не коммитим.
+# Тесты берут их отсюда, если файл есть (иначе — describe.skipIf).
+libs/core/src/lib/parsers/__fixtures__/
+apps/api/src/app/modules/import/__fixtures__/

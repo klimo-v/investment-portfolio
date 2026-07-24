@@ -25,6 +25,24 @@ export interface RawRow {
   leverage?: string;
   fxRate?: string;
   note?: string;
+  /**
+   * Признак СЧЁТА брокера из самого отчёта (напр. торговый код ИИС) —
+   * не путать с торговой системой (`system`), которая в отчётах брокеров
+   * не встречается никогда и всегда назначается пользователем
+   * (docs/04-roadmap.md §3.1). Один отчёт может содержать операции разных
+   * счетов (обычный брокерский ↔ ИИС) — этот признак позволяет их различать.
+   */
+  accountRef?: string;
+  /** Тип счёта, если его удалось определить из текста отчёта */
+  accountKind?: 'IIS' | 'Brokerage';
+  /**
+   * Уникальный номер операции у брокера (docs/02-data-model.md §6), если он есть
+   * в отчёте. Используется как первичный ключ дедупликации вместо хэша по
+   * значениям — важно, когда брокер исполняет много идентичных по цифрам сделок
+   * в один день (напр. регулярный автоинвест в один и тот же фонд по одной цене) —
+   * хэш date+ticker+type+qty+price тогда схлопывает РАЗНЫЕ сделки в «дубль».
+   */
+  brokerRef?: string;
 }
 
 /** Результат нормализации одной строки */
@@ -36,6 +54,13 @@ export interface NormalizedRow {
   reason?: string;
   /** ключ дедупликации */
   dedupeKey: string;
+  /**
+   * Система назначена батч-дефолтом, а не выбрана явно для этого тикера в этом
+   * импорте (docs/04-roadmap.md §3.1) — один отчёт может содержать сделки разных
+   * систем, единый батч-дефолт для всего файла в таком случае ненадёжен, строка
+   * требует проверки.
+   */
+  systemUncertain?: boolean;
 }
 
 /** Нормализация даты в YYYY-MM-DD из распространённых форматов */
@@ -108,8 +133,15 @@ export function classifyOperationType(
   };
 }
 
-/** Ключ дедупликации: дата+тикер+тип+кол-во+цена (когда нет broker_ref) */
+/**
+ * Ключ дедупликации: приоритет — уникальный `brokerRef`, если он есть
+ * (docs/02-data-model.md §6); иначе хэш по значениям (дата+тикер+тип+кол-во+цена).
+ * Хэш-фоллбэк ложно схлопывает РАЗНЫЕ сделки с одинаковыми цифрами (напр. много
+ * одинаковых автоинвест-покупок фонда за день) — поэтому brokerRef, когда он
+ * есть, всегда в приоритете.
+ */
 export function makeDedupeKey(op: Operation): string {
+  if (op.brokerRef) return `ref:${op.brokerRef}`;
   return [op.date, op.instrumentId ?? '', op.operationType, op.quantity, op.price].join('|');
 }
 
@@ -121,21 +153,38 @@ export function makeDedupeKey(op: Operation): string {
 export function normalizeRow(
   raw: RawRow,
   resolvers: {
-    resolveSystem: (name?: string) => string | null;
-    resolvePortfolio: (broker?: string) => string | null;
+    /** ticker — для точечного выбора системы в рамках импорта (docs/04-roadmap.md §3.1), пробуется после name */
+    resolveSystem: (name?: string, ticker?: string) => string | null;
+    /** accountRef — признак счёта из отчёта (docs/04-roadmap.md §3.1), пробуется прежде broker/батч-дефолта */
+    resolvePortfolio: (broker?: string, accountRef?: string) => string | null;
     resolveInstrument: (ticker?: string) => string | null;
+    /** true, если для тикера система выбрана явно в этом импорте (не батч-дефолт) */
+    systemChosenForTicker?: (ticker?: string) => boolean;
   },
 ): NormalizedRow | { error: string } {
   const date = normalizeDate(raw.date);
   if (!date) return { error: `Не удалось распознать дату: "${raw.date}"` };
 
-  const systemId = resolvers.resolveSystem(raw.system);
-  const portfolioId = resolvers.resolvePortfolio(raw.broker);
+  const systemId = resolvers.resolveSystem(raw.system, raw.ticker);
+  const portfolioId = resolvers.resolvePortfolio(raw.broker, raw.accountRef);
   if (!systemId) return { error: `Неизвестная система: "${raw.system}"` };
   if (!portfolioId) return { error: `Неизвестный портфель/брокер: "${raw.broker}"` };
 
-  const { type, confidence, reason } = classifyOperationType(raw);
+  let { type, confidence, reason } = classifyOperationType(raw);
   const instrumentId = raw.ticker ? resolvers.resolveInstrument(raw.ticker) : null;
+
+  // Система не пришла явно (типично для HTML-отчётов) и не выбрана явно для этого
+  // тикера в этом импорте — значит, взята из батч-дефолта, а он один на весь файл,
+  // который в общем случае содержит сделки разных систем (§3.1). Намеренно не
+  // запоминаем выбор между импортами: один и тот же тикер в разное время может
+  // относиться к разным системам — это решение пользователя, а не свойство тикера.
+  // Не ошибка — операция всё равно импортируется, но строка требует проверки.
+  const systemUncertain =
+    !raw.system && !!raw.ticker && !(resolvers.systemChosenForTicker?.(raw.ticker) ?? true);
+  if (systemUncertain && confidence === 'ok') {
+    confidence = 'warn';
+    reason = `Система назначена по умолчанию — выберите систему для тикера "${raw.ticker}"`;
+  }
 
   const operation: Operation = {
     date,
@@ -149,7 +198,8 @@ export function normalizeRow(
     fxRate: normalizeNumber(raw.fxRate, '1'),
     currency: (raw.currency ?? 'RUB').trim() || 'RUB',
     note: raw.note?.trim() || undefined,
+    brokerRef: raw.brokerRef,
   };
 
-  return { operation, confidence, reason, dedupeKey: makeDedupeKey(operation) };
+  return { operation, confidence, reason, dedupeKey: makeDedupeKey(operation), systemUncertain };
 }

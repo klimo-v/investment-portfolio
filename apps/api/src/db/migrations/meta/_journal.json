@@ -15,6 +15,13 @@
       "when": 1784819350184,
       "tag": "0001_young_pride",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1784874438816,
+      "tag": "0002_common_excalibur",
+      "breakpoints": true
     }
   ]
 }

@@ -23,6 +23,14 @@ export const portfolios = sqliteTable('portfolios', {
   name: text('name').notNull(),
   broker: text('broker').notNull(),
   baseCurrency: text('base_currency').notNull().default('RUB'),
+  /**
+   * Признак счёта из отчёта брокера (напр. торговый код ИИС) — persisted-маппинг
+   * «счёт отчёта → портфель» (docs/04-roadmap.md §3.1). Заполняется автоматически
+   * при импорте: пользователь один раз выбирает портфель для незнакомого счёта,
+   * дальше он резолвится сам. Nullable — не у всех портфелей есть импортированные
+   * HTML-отчёты.
+   */
+  accountRef: text('account_ref').unique(),
 });
 
 /** Справочник инструментов */

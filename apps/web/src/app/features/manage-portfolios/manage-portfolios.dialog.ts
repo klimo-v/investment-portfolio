@@ -32,7 +32,12 @@ import { ReferenceApi } from '../../entities/reference/reference.api';
         @for (p of portfolios(); track p.id) {
           <mat-list-item>
             <span matListItemTitle>{{ p.name }}</span>
-            <span matListItemLine>{{ p.broker }} · {{ p.baseCurrency }}</span>
+            <span matListItemLine>
+              {{ p.broker }} · {{ p.baseCurrency }}
+              @if (p.accountRef) {
+                · счёт отчёта: {{ p.accountRef }}
+              }
+            </span>
             <button
               mat-icon-button
               matListItemMeta

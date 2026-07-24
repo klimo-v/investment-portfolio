@@ -110,6 +110,83 @@ describe('normalizeRow — реальная сделка SBER', () => {
   });
 });
 
+describe('normalizeRow — выбор системы по тикеру в рамках импорта (docs/04-roadmap.md §3.1)', () => {
+  /**
+   * Резолверы как для HTML-отчёта: raw.system никогда не задан, только батч-дефолт +
+   * точечный выбор пользователя для конкретного тикера — НЕ персистентное правило:
+   * тот же тикер в другом импорте может уйти в другую систему, поэтому выбор
+   * передаётся отдельно на каждый preview()/commit(), а не хранится в БД.
+   */
+  const htmlResolvers = {
+    resolveSystem: (name?: string, ticker?: string) => {
+      if (ticker === 'SBER') return 'vernikov_trading'; // выбрано пользователем для этого импорта
+      return 'vernikov'; // батч-дефолт
+    },
+    resolvePortfolio: () => 'tinkoff',
+    resolveInstrument: (t?: string) => t ?? null,
+    systemChosenForTicker: (ticker?: string) => ticker === 'SBER',
+  };
+
+  const rawFor = (ticker: string): RawRow => ({
+    date: '01.01.2026',
+    ticker,
+    currency: 'RUB',
+    tradeType: 'Покупка',
+    quantity: '1',
+    price: '100',
+  });
+
+  it('система выбрана явно для тикера в этом импорте → confidence ok, systemUncertain не выставлен', () => {
+    const res = normalizeRow(rawFor('SBER'), htmlResolvers);
+    if (!('operation' in res)) throw new Error('expected operation');
+    expect(res.operation.systemId).toBe('vernikov_trading');
+    expect(res.confidence).toBe('ok');
+    expect(res.systemUncertain).toBeFalsy();
+  });
+
+  it('система пришла батч-дефолтом (для тикера явно не выбрана) → confidence warn, systemUncertain=true', () => {
+    const res = normalizeRow(rawFor('SBMM'), htmlResolvers);
+    if (!('operation' in res)) throw new Error('expected operation');
+    expect(res.operation.systemId).toBe('vernikov'); // всё равно импортируется, не error
+    expect(res.confidence).toBe('warn');
+    expect(res.systemUncertain).toBe(true);
+    expect(res.reason).toContain('SBMM');
+  });
+
+  it('без systemChosenForTicker (напр. CSV, где raw.system обычно задан) — поведение не меняется', () => {
+    const res = normalizeRow(rawFor('SBMM'), {
+      resolveSystem: () => 'vernikov',
+      resolvePortfolio: () => 'tinkoff',
+      resolveInstrument: (t?: string) => t ?? null,
+      // systemChosenForTicker не передан
+    });
+    if (!('operation' in res)) throw new Error('expected operation');
+    expect(res.confidence).toBe('ok');
+    expect(res.systemUncertain).toBeFalsy();
+  });
+
+  it('один и тот же тикер в двух РАЗНЫХ импортах может резолвиться в разные системы — выбор не переживает вызов', () => {
+    const firstImport = normalizeRow(rawFor('SBER'), {
+      resolveSystem: (n?: string, t?: string) => (t === 'SBER' ? 'vernikov_trading' : 'vernikov'),
+      resolvePortfolio: () => 'tinkoff',
+      resolveInstrument: (t?: string) => t ?? null,
+      systemChosenForTicker: (t?: string) => t === 'SBER',
+    });
+    // "новый импорт" — независимый вызов с другим выбором пользователя для того же тикера
+    const secondImport = normalizeRow(rawFor('SBER'), {
+      resolveSystem: (n?: string, t?: string) => (t === 'SBER' ? 'vernikov' : 'vernikov_trading'),
+      resolvePortfolio: () => 'tinkoff',
+      resolveInstrument: (t?: string) => t ?? null,
+      systemChosenForTicker: (t?: string) => t === 'SBER',
+    });
+    if (!('operation' in firstImport) || !('operation' in secondImport)) {
+      throw new Error('expected operation');
+    }
+    expect(firstImport.operation.systemId).toBe('vernikov_trading');
+    expect(secondImport.operation.systemId).toBe('vernikov');
+  });
+});
+
 describe('makeDedupeKey', () => {
   it('одинаковые операции → одинаковый ключ', () => {
     const op = {
@@ -121,6 +198,41 @@ describe('makeDedupeKey', () => {
       quantity: '1600',
       price: '310.99',
       fee: '199.03',
+      fxRate: '1',
+      currency: 'RUB',
+    };
+    expect(makeDedupeKey(op)).toBe(makeDedupeKey({ ...op }));
+  });
+
+  it('brokerRef в приоритете: две РАЗНЫЕ сделки с одинаковыми цифрами не схлопываются в дубль', () => {
+    // регулярный автоинвест: один и тот же тикер/дата/кол-во/цена, но разные сделки
+    const base = {
+      date: '2026-01-05',
+      systemId: 'vernikov',
+      portfolioId: 'tinkoff',
+      instrumentId: 'TMON',
+      operationType: 'Buy' as const,
+      quantity: '1',
+      price: '133.81',
+      fee: '0',
+      fxRate: '1',
+      currency: 'RUB',
+    };
+    const first = { ...base, brokerRef: '9796362990' };
+    const second = { ...base, brokerRef: '9796356260' };
+    expect(makeDedupeKey(first)).not.toBe(makeDedupeKey(second));
+  });
+
+  it('без brokerRef — прежнее поведение (хэш по значениям, одинаковые → одинаковый ключ)', () => {
+    const op = {
+      date: '2026-01-05',
+      systemId: 'vernikov',
+      portfolioId: 'tinkoff',
+      instrumentId: 'TMON',
+      operationType: 'Buy' as const,
+      quantity: '1',
+      price: '133.81',
+      fee: '0',
       fxRate: '1',
       currency: 'RUB',
     };
