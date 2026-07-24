@@ -38,11 +38,28 @@ db.insert(instruments)
       marketSource: 'moex',
     },
     { id: 'TMON', ticker: 'TMON', type: 'ETF', currency: 'RUB', marketSource: 'moex' },
-    { id: 'LKOH', ticker: 'LKOH', type: 'Stock', currency: 'RUB', marketSource: 'moex' },
-    { id: 'X5', ticker: 'X5', type: 'Stock', currency: 'RUB', marketSource: 'moex' },
+    {
+      id: 'LKOH',
+      ticker: 'LKOH',
+      type: 'Stock',
+      currency: 'RUB',
+      // внебиржевые сделки Т-Банк репортит по ISIN, а не по тикеру (как и SBER выше)
+      isin: 'RU0009024277',
+      marketSource: 'moex',
+    },
+    {
+      id: 'X5',
+      ticker: 'X5',
+      type: 'Stock',
+      currency: 'RUB',
+      // выплаты по этой бумаге Т-Банк репортит по ISIN (КЦ ИКС 5), а не по тикеру
+      isin: 'RU000A108X38',
+      marketSource: 'moex',
+    },
     { id: 'GAZP', ticker: 'GAZP', type: 'Stock', currency: 'RUB', marketSource: 'moex' },
     { id: 'MOEX', ticker: 'MOEX', type: 'Stock', currency: 'RUB', marketSource: 'moex' },
     { id: 'GLDRUB_TOM', ticker: 'GLDRUB_TOM', type: 'Currency', currency: 'RUB', marketSource: 'moex' },
+    { id: 'CNYRUB_TOM', ticker: 'CNYRUB_TOM', type: 'Currency', currency: 'RUB', marketSource: 'moex' },
     { id: 'SBMM', ticker: 'SBMM', type: 'ETF', currency: 'RUB', marketSource: 'moex' },
     { id: 'BTC', ticker: 'BTC', type: 'Crypto', currency: 'USD', marketSource: 'binance' },
     { id: 'USDT', ticker: 'USDT', type: 'Crypto', currency: 'USD', marketSource: 'binance' },
@@ -52,7 +69,8 @@ db.insert(instruments)
       type: 'Bond',
       currency: 'USD',
       isin: 'RU000A10B4K3',
-      marketSource: 'manual',
+      // торгуется на MOEX bonds под тем же SECID, что и ISIN — котировка доступна
+      marketSource: 'moex',
     },
     // ОФЗ из xlsx-отчёта Т-Банка — тикер там уже SECID MOEX (не отдельный ISIN)
     { id: 'SU52003RMFS9', ticker: 'SU52003RMFS9', type: 'Bond', currency: 'RUB', marketSource: 'moex' },

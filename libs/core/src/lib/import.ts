@@ -43,6 +43,14 @@ export interface RawRow {
    * хэш date+ticker+type+qty+price тогда схлопывает РАЗНЫЕ сделки в «дубль».
    */
   brokerRef?: string;
+  /**
+   * Название бумаги из отчёта (напр. «ЛУКОЙЛ»), если брокер его указывает.
+   * Один и тот же инструмент брокер может репортить то тикером, то ISIN
+   * (напр. внебиржевые сделки) — имя остаётся неизменным в обоих случаях и
+   * служит резервным ключом резолва инструмента, когда ни тикер, ни ISIN не
+   * находятся в справочнике (apps/api/.../import.service.ts, ensureInstruments).
+   */
+  name?: string;
 }
 
 /** Результат нормализации одной строки */
@@ -157,7 +165,8 @@ export function normalizeRow(
     resolveSystem: (name?: string, ticker?: string) => string | null;
     /** accountRef — признак счёта из отчёта (docs/04-roadmap.md §3.1), пробуется прежде broker/батч-дефолта */
     resolvePortfolio: (broker?: string, accountRef?: string) => string | null;
-    resolveInstrument: (ticker?: string) => string | null;
+    /** name — резервный ключ, когда ticker/ISIN нет в справочнике (см. RawRow.name) */
+    resolveInstrument: (ticker?: string, name?: string) => string | null;
     /** true, если для тикера система выбрана явно в этом импорте (не батч-дефолт) */
     systemChosenForTicker?: (ticker?: string) => boolean;
   },
@@ -165,25 +174,32 @@ export function normalizeRow(
   const date = normalizeDate(raw.date);
   if (!date) return { error: `Не удалось распознать дату: "${raw.date}"` };
 
-  const systemId = resolvers.resolveSystem(raw.system, raw.ticker);
+  // Резолвим инструмент ДО системы: один и тот же актив брокер может репортить то
+  // тикером, то ISIN (внебиржевые сделки/выплаты — реальный случай, docs/04-roadmap.md
+  // §3.1-подобный). Выбор системы должен быть ОДИН на реальный инструмент, а не
+  // разный для каждого сырого кода — иначе одна и та же бумага молча расползается
+  // на две позиции с разными системами (движок группирует по instrumentId+systemId).
+  const instrumentId = raw.ticker ? resolvers.resolveInstrument(raw.ticker, raw.name) : null;
+  const systemKey = instrumentId ?? raw.ticker;
+
+  const systemId = resolvers.resolveSystem(raw.system, systemKey);
   const portfolioId = resolvers.resolvePortfolio(raw.broker, raw.accountRef);
   if (!systemId) return { error: `Неизвестная система: "${raw.system}"` };
   if (!portfolioId) return { error: `Неизвестный портфель/брокер: "${raw.broker}"` };
 
   let { type, confidence, reason } = classifyOperationType(raw);
-  const instrumentId = raw.ticker ? resolvers.resolveInstrument(raw.ticker) : null;
 
   // Система не пришла явно (типично для HTML-отчётов) и не выбрана явно для этого
-  // тикера в этом импорте — значит, взята из батч-дефолта, а он один на весь файл,
-  // который в общем случае содержит сделки разных систем (§3.1). Намеренно не
-  // запоминаем выбор между импортами: один и тот же тикер в разное время может
-  // относиться к разным системам — это решение пользователя, а не свойство тикера.
+  // инструмента в этом импорте — значит, взята из батч-дефолта, а он один на весь
+  // файл, который в общем случае содержит сделки разных систем (§3.1). Намеренно
+  // не запоминаем выбор между импортами: один и тот же инструмент в разное время
+  // может относиться к разным системам — это решение пользователя, а не его свойство.
   // Не ошибка — операция всё равно импортируется, но строка требует проверки.
   const systemUncertain =
-    !raw.system && !!raw.ticker && !(resolvers.systemChosenForTicker?.(raw.ticker) ?? true);
+    !raw.system && !!systemKey && !(resolvers.systemChosenForTicker?.(systemKey) ?? true);
   if (systemUncertain && confidence === 'ok') {
     confidence = 'warn';
-    reason = `Система назначена по умолчанию — выберите систему для тикера "${raw.ticker}"`;
+    reason = `Система назначена по умолчанию — выберите систему для "${systemKey}"`;
   }
 
   const operation: Operation = {

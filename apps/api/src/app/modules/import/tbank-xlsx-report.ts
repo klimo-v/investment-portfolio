@@ -31,6 +31,7 @@ const TRADE_KINDS = new Set(['Покупка', 'Продажа']);
 const ISIN_RE = /ISIN:\s*([A-Z0-9]{12})/;
 const KD_TYPE_RE = /Тип КД:\s*Выплата\s+(дивидендов|купон\w*)/i;
 const KD_REF_RE = /Референс КД:\s*(\d+)/;
+const NAME_RE = /Наименование:\s*([^,]+)/;
 
 /** Колонки раздела «1.1 Сделки» (1-based, см. заголовок отчёта) */
 const TRADE_COL = {
@@ -123,6 +124,8 @@ function instrumentTypeFromName(name: string, ticker: string): string {
   const n = name.toLowerCase();
   if (n.includes('офз') || /^SU\d/.test(ticker)) return 'Bond';
   if (n.includes('бпиф') || n.includes('пай')) return 'ETF';
+  // валютная пара MOEX (напр. CNYRUB_TOM, GLDRUB_TOM) — иначе попадает в Stock
+  if (/^[A-Z]{3}RUB(_[A-Z]+)?$/.test(ticker)) return 'Currency';
   return 'Stock';
 }
 
@@ -151,6 +154,9 @@ function parseTradesSection(ws: ExcelJS.Worksheet, from: number, to: number): Ra
       date: cellText(ws, r, TRADE_COL.date),
       instrumentType: instrumentTypeFromName(name, ticker),
       ticker,
+      // название бумаги — резервный ключ резолва инструмента, когда один и тот же
+      // актив репортится то тикером (биржа), то ISIN (внебиржевая сделка/выплата)
+      name: name || undefined,
       currency: cellText(ws, r, TRADE_COL.settleCcy) || 'RUB',
       tradeType: kind,
       quantity: qty.toString(),
@@ -172,6 +178,7 @@ interface CorpActionCredit {
   kind: 'Dividend' | 'Coupon';
   amount: number;
   reference?: string;
+  name?: string;
 }
 interface TaxDebit {
   date: string;
@@ -216,12 +223,14 @@ function parseCashSection(ws: ExcelJS.Worksheet, from: number, to: number): RawR
       if (isin) {
         const kdType = note.match(KD_TYPE_RE)?.[1]?.toLowerCase() ?? '';
         const reference = note.match(KD_REF_RE)?.[1];
+        const name = note.match(NAME_RE)?.[1]?.trim();
         credits.push({
           date,
           isin,
           kind: kdType.startsWith('куп') ? 'Coupon' : 'Dividend',
           amount: credit,
           reference,
+          name,
         });
       }
     } else if (op.startsWith('Налог')) {
@@ -239,6 +248,7 @@ function parseCashSection(ws: ExcelJS.Worksheet, from: number, to: number): RawR
       date: c.date,
       tradeType: c.kind,
       ticker: c.isin, // тикера нет — резолвер попробует instruments.isin
+      name: c.name,
       currency: 'RUB',
       quantity: '1',
       price: net.toString(),

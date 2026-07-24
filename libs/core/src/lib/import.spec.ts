@@ -185,6 +185,24 @@ describe('normalizeRow — выбор системы по тикеру в рам
     expect(firstImport.operation.systemId).toBe('vernikov_trading');
     expect(secondImport.operation.systemId).toBe('vernikov');
   });
+
+  it('один и тот же инструмент, репортированный то тикером, то ISIN — выбор системы применяется к обоим (реальный баг: SBER по ISIN на внебирже уходил в батч-дефолт вместо выбранной системы)', () => {
+    const resolvers = {
+      resolveSystem: (n?: string, key?: string) => (key === 'SBER' ? 'vernikov_trading' : 'vernikov'),
+      resolvePortfolio: () => 'tinkoff',
+      // ISIN резолвится в тот же инструмент 'SBER', что и тикер
+      resolveInstrument: (t?: string) => (t === 'SBER' || t === 'RU0009029540' ? 'SBER' : (t ?? null)),
+      systemChosenForTicker: (key?: string) => key === 'SBER',
+    };
+
+    const byTicker = normalizeRow({ ...rawFor('SBER'), ticker: 'SBER' }, resolvers);
+    const byIsin = normalizeRow({ ...rawFor('RU0009029540'), ticker: 'RU0009029540' }, resolvers);
+    if (!('operation' in byTicker) || !('operation' in byIsin)) throw new Error('expected operation');
+
+    expect(byTicker.operation.systemId).toBe('vernikov_trading');
+    expect(byIsin.operation.systemId).toBe('vernikov_trading');
+    expect(byIsin.systemUncertain).toBeFalsy();
+  });
 });
 
 describe('makeDedupeKey', () => {
