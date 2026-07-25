@@ -21,7 +21,7 @@ db.insert(systems)
   .run();
 
 db.insert(portfolios)
-  .values([{ id: 'tinkoff', name: 'Tinkoff', broker: 'Tinkoff', baseCurrency: 'RUB' }])
+  .values([{ id: 'tinkoff', name: 'Tinkoff' }])
   .onConflictDoNothing()
   .run();
 

@@ -165,7 +165,14 @@ interface EffRow extends Effectiveness {
               <td mat-cell *matCellDef="let r">{{ r.name }}</td>
             </ng-container>
             <ng-container matColumnDef="invested">
-              <th mat-header-cell *matHeaderCellDef>Вложено</th>
+              <th mat-header-cell *matHeaderCellDef
+                >Вложено
+                <span
+                  class="hint"
+                  matTooltip="Себестоимость ТЕКУЩЕГО остатка (открытых позиций). Уже закрытые (полностью проданные) позиции сюда не входят — их результат учтён отдельно в «Реализ.», а вложенный в них капитал уже вернулся при продаже. Поэтому P&L = Реализ. + Нереал. + Дивиденды, а не «Вложено − Стоимость − Дивиденды»."
+                  >?</span
+                ></th
+              >
               <td mat-cell *matCellDef="let r">{{ money(r.investedRub) }}</td>
             </ng-container>
             <ng-container matColumnDef="value">
@@ -173,7 +180,14 @@ interface EffRow extends Effectiveness {
               <td mat-cell *matCellDef="let r">{{ money(r.currentValueRub) }}</td>
             </ng-container>
             <ng-container matColumnDef="realized">
-              <th mat-header-cell *matHeaderCellDef>Реализ. / Нереализ.</th>
+              <th mat-header-cell *matHeaderCellDef
+                >Реализ. / Нереализ.
+                <span
+                  class="hint"
+                  matTooltip="Реализ. — уже зафиксированный результат по закрытым (полностью проданным) позициям. Нереал. — бумажная переоценка того, что держите сейчас (Стоимость − Вложено). P&L складывается из обоих плюс дивиденды/купоны."
+                  >?</span
+                ></th
+              >
               <td mat-cell *matCellDef="let r">
                 <span [class]="cls(r.realizedPnlRub)">{{ money(r.realizedPnlRub) }}</span>
                 /
@@ -189,7 +203,14 @@ interface EffRow extends Effectiveness {
               <td mat-cell *matCellDef="let r" [class]="cls(r.roiPct ?? 0)">{{ pctOrDash(r.roiPct) }}</td>
             </ng-container>
             <ng-container matColumnDef="xirr">
-              <th mat-header-cell *matHeaderCellDef>XIRR</th>
+              <th mat-header-cell *matHeaderCellDef
+                >XIRR
+                <span
+                  class="hint"
+                  matTooltip="Денежно-взвешенная годовая доходность (IRR) по фактическим датам всех вложений/выводов и текущей стоимости остатка — не то же самое, что ROI за весь период (тот не годовой). «—» означает, что результат ненадёжен: слишком короткое окно операций или доходность экстраполируется с нереалистичным перекосом (напр. одна короткая прибыльная сделка внутри длинного окна) — тогда ориентируйтесь на P&L в рублях."
+                  >?</span
+                ></th
+              >
               <td mat-cell *matCellDef="let r" [class]="cls(r.xirrPct ?? 0)">{{ pctOrDash(r.xirrPct) }}</td>
             </ng-container>
             <ng-container matColumnDef="divyield">

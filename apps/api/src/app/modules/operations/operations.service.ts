@@ -24,6 +24,7 @@ import {
   type OperationRow,
 } from '../../../db/schema';
 import { DB } from '../../db/drizzle.module';
+import { invalidateSnapshots } from '../../../db/invalidate-snapshots';
 import { QuotesService } from '../quotes/quotes.service';
 
 /** Фильтр сводки дашборда (docs/05-review-usability.md §2/§3 — глобальный фильтр) */
@@ -82,9 +83,16 @@ export class OperationsService {
     return { ...parsed, id };
   }
 
-  /** Удалить операцию по id (безвозвратно — пересчёт позиций/сделок исключит её). */
+  /**
+   * Удалить операцию по id (безвозвратно — пересчёт позиций/сделок исключит её).
+   * Стираем историю снимков (docs/05-review-usability.md §2) — задним числом
+   * меняется то, что должно было быть посчитано на каждую прошлую дату захвата,
+   * а без исторических цен на каждый день старые снимки нельзя пересчитать
+   * под исправленные данные (см. invalidateSnapshots).
+   */
   delete(id: string): void {
     this.db.delete(operations).where(eq(operations.id, id)).run();
+    invalidateSnapshots(this.db);
   }
 
   /**
@@ -92,6 +100,7 @@ export class OperationsService {
    * например, при разборе отчёта, где сделки лежат в разных системах/на разных счетах
    * брокера (обычный ↔ ИИС), а батч-разметки при импорте оказалось недостаточно.
    * Валидация через Zod (CLAUDE.md §8); существование id проверяет FK-констрейнт БД.
+   * Стирает историю снимков — см. invalidateSnapshots (то же обоснование, что у delete()).
    */
   reassign(id: string, raw: unknown): void {
     const patch = OperationReassignSchema.parse(raw);
@@ -100,6 +109,7 @@ export class OperationsService {
       .set(patch)
       .where(eq(operations.id, id))
       .run();
+    invalidateSnapshots(this.db);
   }
 
   /**

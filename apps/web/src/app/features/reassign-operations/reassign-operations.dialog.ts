@@ -29,6 +29,11 @@ export interface ReassignOperationsResult {
     <h2 mat-dialog-title>Назначить систему/портфель</h2>
     <mat-dialog-content>
       <p class="hint">Операций выбрано: {{ data.count }}. Незаполненное поле не меняется.</p>
+      <p class="warn-note">
+        Переназначение задним числом стирает накопленную историю снимков портфеля
+        (просадка и график динамики на дашборде) — она начнёт копиться заново со
+        следующего «Обновить цены».
+      </p>
 
       <mat-form-field appearance="outline">
         <mat-label>Система</mat-label>
@@ -45,7 +50,7 @@ export interface ReassignOperationsResult {
         <mat-select [value]="portfolioId()" (valueChange)="portfolioId.set($event)">
           <mat-option [value]="undefined">— не менять —</mat-option>
           @for (p of reference.portfolios.value() ?? []; track p.id) {
-            <mat-option [value]="p.id">{{ p.name }} · {{ p.broker }}</mat-option>
+            <mat-option [value]="p.id">{{ p.name }}</mat-option>
           }
         </mat-select>
       </mat-form-field>
@@ -69,6 +74,14 @@ export interface ReassignOperationsResult {
       .hint {
         margin: 0 0 8px;
         color: rgba(0, 0, 0, 0.6);
+      }
+      .warn-note {
+        margin: 0 0 8px;
+        padding: 8px;
+        border-radius: 4px;
+        background: rgba(237, 108, 2, 0.1);
+        color: #ed6c02;
+        font-size: 0.85em;
       }
     `,
   ],

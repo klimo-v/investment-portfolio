@@ -6,6 +6,7 @@ import { normalizeRow, makeDedupeKey, parseBrokerHtmlReport, type RawRow, type O
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
 import { operations, systems, portfolios, instruments, type InstrumentRow } from '../../../db/schema';
 import { DB } from '../../db/drizzle.module';
+import { invalidateSnapshots } from '../../../db/invalidate-snapshots';
 import { parseCsv } from './csv-parser';
 import { parseTbankXlsx } from './tbank-xlsx-report';
 
@@ -144,7 +145,6 @@ export class ImportService {
     const tickerOverrides = new Map(
       Object.entries(defaults?.tickerSystemOverrides ?? {}).map(([t, s]) => [t.toLowerCase(), s]),
     );
-    const portfolioByBroker = new Map(portfolioRows.map((p) => [p.broker.toLowerCase(), p.id]));
     const portfolioByName = new Map(portfolioRows.map((p) => [p.name.toLowerCase(), p.id]));
     // persisted-маппинг «счёт отчёта → портфель» (docs/04-roadmap.md §3.1) — один
     // раз выбрали портфель для незнакомого accountRef при commit(), дальше резолвится сам
@@ -189,12 +189,7 @@ export class ImportService {
         return defaults?.systemId ?? null;
       },
       systemChosenForTicker: (ticker?: string) => !!ticker && tickerOverrides.has(ticker.toLowerCase()),
-      resolvePortfolio: (broker?: string, accountRef?: string) => {
-        if (broker) {
-          const hit =
-            portfolioByBroker.get(broker.toLowerCase()) ?? portfolioByName.get(broker.toLowerCase());
-          if (hit) return hit;
-        }
+      resolvePortfolio: (accountRef?: string) => {
         if (accountRef) {
           // сначала точный persisted-маппинг, затем эвристика по имени портфеля
           // (полезна до первого commit(), пока маппинга ещё нет)
@@ -472,7 +467,11 @@ export class ImportService {
     return { batchId, imported };
   }
 
-  /** Откат импорта: удаляет все операции указанной загрузки */
+  /**
+   * Откат импорта: удаляет все операции указанной загрузки. Это массовое удаление
+   * задним числом (как и OperationsService.delete()) — стирает историю снимков,
+   * см. invalidateSnapshots.
+   */
   rollback(batchId: string): { deleted: number } {
     const toDelete = this.db
       .select()
@@ -480,6 +479,7 @@ export class ImportService {
       .where(eq(operations.importBatchId, batchId))
       .all();
     this.db.delete(operations).where(eq(operations.importBatchId, batchId)).run();
+    if (toDelete.length > 0) invalidateSnapshots(this.db);
     return { deleted: toDelete.length };
   }
 }

@@ -2,26 +2,19 @@ import { Injectable, inject, signal } from '@angular/core';
 import { HttpClient, httpResource } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
 import { z } from 'zod';
-import { InstrumentSchema, PortfolioSchema, type Portfolio } from '@core';
+import { InstrumentSchema, PortfolioSchema, SystemSchema, type Portfolio, type System } from '@core';
 
 /**
  * API-клиент справочников (FSD: entities): системы, портфели, инструменты.
  * Нужны форме ввода операции для выпадающих списков/автокомплита.
  */
 
-export const SystemSchema = z.object({
-  id: z.string(),
-  name: z.string(),
-  description: z.string().nullable(),
-  color: z.string().nullable(),
-});
-export type System = z.infer<typeof SystemSchema>;
-
-/** Портфель из БД — id всегда есть (в отличие от тела создания в @core) */
+/** Портфель/система из БД — id всегда есть (в отличие от тела создания в @core) */
 const PortfolioRowSchema = PortfolioSchema.required({ id: true });
+const SystemRowSchema = SystemSchema.required({ id: true });
 
 export type Instrument = z.infer<typeof InstrumentSchema>;
-export type { Portfolio };
+export type { Portfolio, System };
 
 @Injectable({ providedIn: 'root' })
 export class ReferenceApi {
@@ -30,9 +23,13 @@ export class ReferenceApi {
   /** триггер перезагрузки: меняем значение → httpResource перезапрашивает */
   private readonly reloadTrigger = signal(0);
 
-  readonly systems = httpResource(() => '/api/systems', {
-    parse: z.array(SystemSchema).parse,
-  });
+  readonly systems = httpResource(
+    () => {
+      this.reloadTrigger();
+      return '/api/systems';
+    },
+    { parse: z.array(SystemRowSchema).parse },
+  );
 
   readonly portfolios = httpResource(
     () => {
@@ -58,6 +55,19 @@ export class ReferenceApi {
   /** Удалить портфель (только если на него не ссылаются операции), затем перезагрузить список */
   async deletePortfolio(id: string): Promise<void> {
     await firstValueFrom(this.http.delete<{ deleted: true }>(`/api/portfolios/${id}`));
+    this.reloadTrigger.update((n) => n + 1);
+  }
+
+  /** Создать систему, затем перезагрузить список */
+  async createSystem(system: System): Promise<System> {
+    const created = await firstValueFrom(this.http.post<System>('/api/systems', system));
+    this.reloadTrigger.update((n) => n + 1);
+    return created;
+  }
+
+  /** Удалить систему (только если на неё не ссылаются операции), затем перезагрузить список */
+  async deleteSystem(id: string): Promise<void> {
+    await firstValueFrom(this.http.delete<{ deleted: true }>(`/api/systems/${id}`));
     this.reloadTrigger.update((n) => n + 1);
   }
 }

@@ -11,6 +11,17 @@ export class PortfoliosController {
     return this.service.listSystems();
   }
 
+  @Post('systems')
+  addSystem(@Body() body: unknown): SystemRow {
+    return this.service.createSystem(body);
+  }
+
+  @Delete('systems/:id')
+  removeSystem(@Param('id') id: string): { deleted: true } {
+    this.service.deleteSystem(id);
+    return { deleted: true };
+  }
+
   @Get('portfolios')
   portfolios(): PortfolioRow[] {
     return this.service.listPortfolios();

@@ -36,6 +36,20 @@
       "when": 1784995154244,
       "tag": "0004_swift_hulk",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1784998564245,
+      "tag": "0005_drop_portfolio_base_currency",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1784999028535,
+      "tag": "0006_drop_portfolio_broker",
+      "breakpoints": true
     }
   ]
 }

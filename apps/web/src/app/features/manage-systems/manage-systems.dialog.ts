@@ -9,12 +9,12 @@ import { form, FormField, required } from '@angular/forms/signals';
 import { ReferenceApi } from '../../entities/reference/reference.api';
 
 /**
- * Диалог управления портфелями (docs/03-ux-plan.md §«Справочники»): создание и
- * удаление брокерских счетов. Удаление отклоняется бэкендом, если на портфель
- * уже ссылаются операции — ошибка сервера показывается пользователю как есть.
+ * Диалог управления системами/стратегиями (docs/03-ux-plan.md §«Справочники»):
+ * создание и удаление. Удаление отклоняется бэкендом, если на систему уже
+ * ссылаются операции — ошибка сервера показывается пользователю как есть.
  */
 @Component({
-  selector: 'app-manage-portfolios-dialog',
+  selector: 'app-manage-systems-dialog',
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
     MatDialogModule,
@@ -26,27 +26,27 @@ import { ReferenceApi } from '../../entities/reference/reference.api';
     FormField,
   ],
   template: `
-    <h2 mat-dialog-title>Портфели</h2>
+    <h2 mat-dialog-title>Системы</h2>
     <mat-dialog-content>
       <mat-nav-list class="list">
-        @for (p of portfolios(); track p.id) {
+        @for (s of systems(); track s.id) {
           <mat-list-item>
-            <span matListItemTitle>{{ p.name }}</span>
-            @if (p.accountRef) {
-              <span matListItemLine>счёт отчёта: {{ p.accountRef }}</span>
+            <span matListItemTitle>{{ s.name }}</span>
+            @if (s.description) {
+              <span matListItemLine>{{ s.description }}</span>
             }
             <button
               mat-icon-button
               matListItemMeta
-              [disabled]="deletingId() === p.id"
-              (click)="remove(p.id)"
-              aria-label="Удалить портфель"
+              [disabled]="deletingId() === s.id"
+              (click)="remove(s.id)"
+              aria-label="Удалить систему"
             >
               <mat-icon>delete</mat-icon>
             </button>
           </mat-list-item>
         } @empty {
-          <p class="empty">Портфелей пока нет.</p>
+          <p class="empty">Систем пока нет.</p>
         }
       </mat-nav-list>
 
@@ -102,11 +102,11 @@ import { ReferenceApi } from '../../entities/reference/reference.api';
     `,
   ],
 })
-export class ManagePortfoliosDialog {
-  private readonly dialogRef = inject(MatDialogRef<ManagePortfoliosDialog>);
+export class ManageSystemsDialog {
+  private readonly dialogRef = inject(MatDialogRef<ManageSystemsDialog>);
   private readonly referenceApi = inject(ReferenceApi);
 
-  protected readonly portfolios = computed(() => this.referenceApi.portfolios.value() ?? []);
+  protected readonly systems = computed(() => this.referenceApi.systems.value() ?? []);
 
   protected readonly saving = signal(false);
   protected readonly deletingId = signal<string | null>(null);
@@ -126,21 +126,21 @@ export class ManagePortfoliosDialog {
     this.saving.set(true);
     try {
       const m = this.model();
-      await this.referenceApi.createPortfolio({ name: m.name });
+      await this.referenceApi.createSystem({ name: m.name });
       this.model.set({ name: '' });
     } catch {
-      this.errorMessage.set('Не удалось создать портфель. Проверьте поля.');
+      this.errorMessage.set('Не удалось создать систему. Проверьте поля.');
     } finally {
       this.saving.set(false);
     }
   }
 
   protected async remove(id: string): Promise<void> {
-    if (!confirm('Удалить этот портфель?')) return;
+    if (!confirm('Удалить эту систему?')) return;
     this.errorMessage.set('');
     this.deletingId.set(id);
     try {
-      await this.referenceApi.deletePortfolio(id);
+      await this.referenceApi.deleteSystem(id);
     } catch (err) {
       this.errorMessage.set(extractErrorMessage(err));
     } finally {
@@ -162,5 +162,5 @@ function extractErrorMessage(err: unknown): string {
   ) {
     return err.error.message;
   }
-  return 'Не удалось удалить портфель.';
+  return 'Не удалось удалить систему.';
 }

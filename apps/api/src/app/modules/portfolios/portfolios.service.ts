@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { BadRequestException, Inject, Injectable } from '@nestjs/common';
 import { eq, sql } from 'drizzle-orm';
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
-import { PortfolioSchema } from '@core';
+import { PortfolioSchema, SystemSchema } from '@core';
 import {
   systems,
   portfolios,
@@ -26,6 +26,44 @@ export class PortfoliosService {
     return this.db.select().from(systems).all();
   }
 
+  /** Валидация тела через Zod (CLAUDE.md §8), затем запись в БД */
+  createSystem(raw: unknown): SystemRow {
+    const parsed = SystemSchema.parse(raw);
+    const id = parsed.id ?? randomUUID();
+
+    this.db
+      .insert(systems)
+      .values({
+        id,
+        name: parsed.name,
+        description: parsed.description ?? null,
+        color: parsed.color ?? null,
+      })
+      .run();
+
+    return { id, name: parsed.name, description: parsed.description ?? null, color: parsed.color ?? null };
+  }
+
+  /**
+   * Удаление системы. Отклоняем, если на неё уже ссылаются операции —
+   * иначе пользователь потеряет журнал сделок без явного предупреждения.
+   */
+  deleteSystem(id: string): void {
+    const [{ count }] = this.db
+      .select({ count: sql<number>`count(*)` })
+      .from(operations)
+      .where(eq(operations.systemId, id))
+      .all();
+
+    if (count > 0) {
+      throw new BadRequestException(
+        `Нельзя удалить систему: с ней связано операций — ${count}. Сначала удалите или перенесите операции.`,
+      );
+    }
+
+    this.db.delete(systems).where(eq(systems.id, id)).run();
+  }
+
   listPortfolios(): PortfolioRow[] {
     return this.db.select().from(portfolios).all();
   }
@@ -44,16 +82,12 @@ export class PortfoliosService {
       .values({
         id,
         name: parsed.name,
-        broker: parsed.broker,
-        baseCurrency: parsed.baseCurrency,
       })
       .run();
 
     return {
       id,
       name: parsed.name,
-      broker: parsed.broker,
-      baseCurrency: parsed.baseCurrency,
       accountRef: null,
     };
   }

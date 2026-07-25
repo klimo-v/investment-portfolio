@@ -86,12 +86,19 @@ export const InstrumentSchema = z.object({
 });
 export type Instrument = z.infer<typeof InstrumentSchema>;
 
+/** Торговая система / стратегия (справочник, docs/02-data-model.md §2.2) */
+export const SystemSchema = z.object({
+  id: z.string().min(1).optional(),
+  name: z.string().min(1),
+  description: z.string().nullish(),
+  color: z.string().nullish(),
+});
+export type System = z.infer<typeof SystemSchema>;
+
 /** Портфель / брокерский счёт (справочник, docs/02-data-model.md §2.3) */
 export const PortfolioSchema = z.object({
   id: z.string().min(1).optional(),
   name: z.string().min(1),
-  broker: z.string().min(1),
-  baseCurrency: z.string().min(1).default('RUB'),
   /**
    * Признак счёта из отчёта брокера (docs/04-roadmap.md §3.1) — заполняется
    * автоматически при импорте, руками не редактируется, поэтому только для чтения.

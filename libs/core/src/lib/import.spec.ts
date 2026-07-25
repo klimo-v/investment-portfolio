@@ -11,7 +11,7 @@ import {
 const resolvers = {
   resolveSystem: (n?: string) =>
     ({ Верников: 'vernikov', Верников_трейдинг: 'vernikov_trading' })[n ?? ''] ?? null,
-  resolvePortfolio: (b?: string) => (b === 'Tinkoff' ? 'tinkoff' : null),
+  resolvePortfolio: () => 'tinkoff',
   resolveInstrument: (t?: string) => t ?? null,
 };
 
@@ -61,7 +61,6 @@ describe('normalizeRow — реальная сделка SBER', () => {
       instrumentType: 'Stock',
       ticker: 'SBER',
       currency: 'RUB',
-      broker: 'Tinkoff',
       tradeType: 'Buy',
       quantity: '1,600.00',
       price: '310.99',
@@ -88,7 +87,6 @@ describe('normalizeRow — реальная сделка SBER', () => {
       date: '2/27/2025',
       system: 'Верников_трейдинг',
       currency: 'RUB',
-      broker: 'Tinkoff',
       tradeType: 'Deposit',
       quantity: '1',
       price: '497,782.00',
@@ -103,7 +101,7 @@ describe('normalizeRow — реальная сделка SBER', () => {
 
   it('ошибка при неизвестной системе', () => {
     const res = normalizeRow(
-      { date: '2/27/2025', system: 'НетТакой', broker: 'Tinkoff', tradeType: 'Buy' },
+      { date: '2/27/2025', system: 'НетТакой', tradeType: 'Buy' },
       resolvers,
     );
     expect('error' in res).toBe(true);

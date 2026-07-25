@@ -1,0 +1,1 @@
+ALTER TABLE `portfolios` DROP COLUMN `broker`;

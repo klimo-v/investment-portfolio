@@ -1,4 +1,4 @@
-import { ChangeDetectionStrategy, Component, computed, inject, signal } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, effect, inject, signal } from '@angular/core';
 import { MatCardModule } from '@angular/material/card';
 import { MatTableModule } from '@angular/material/table';
 import { MatButtonModule } from '@angular/material/button';
@@ -13,6 +13,7 @@ import type { InstrumentType } from '@core';
 import { OperationApi } from '../../entities/operation/operation.api';
 import { ReferenceApi } from '../../entities/reference/reference.api';
 import { ManagePortfoliosDialog } from '../../features/manage-portfolios/manage-portfolios.dialog';
+import { ManageSystemsDialog } from '../../features/manage-systems/manage-systems.dialog';
 import { formatMoney, pnlColorClass } from '@web-shared';
 
 /**
@@ -77,6 +78,10 @@ interface Group {
         <button mat-stroked-button (click)="managePortfolios()">
           <mat-icon>account_balance</mat-icon>
           Портфели
+        </button>
+        <button mat-stroked-button (click)="manageSystems()">
+          <mat-icon>category</mat-icon>
+          Системы
         </button>
         <button mat-stroked-button (click)="refresh()" [disabled]="refreshing()">
           <mat-icon>refresh</mat-icon>
@@ -328,6 +333,17 @@ export class PortfolioPage {
   protected readonly systemFilter = signal<string | null>(null);
   protected readonly portfolioFilter = signal<string | null>(null);
 
+  constructor() {
+    // Прокидываем фильтр в OperationApi — итоговые карточки берут те же
+    // отфильтрованные totals(), что и таблица «Эффективность» на дашборде.
+    effect(() => {
+      this.api.summaryFilter.set({
+        systemId: this.systemFilter() ?? undefined,
+        portfolioId: this.portfolioFilter() ?? undefined,
+      });
+    });
+  }
+
   /** Все позиции из API */
   private readonly allPositions = computed(() => this.api.positions.value() ?? []);
 
@@ -409,29 +425,31 @@ export class PortfolioPage {
     };
   });
 
-  protected readonly investedTotal = computed(() => {
-    const total = this.positions().reduce((acc, p) => acc + Number(p.investedRub), 0);
-    return formatMoney(total.toFixed(2), 'RUB');
-  });
+  /**
+   * Итоговые карточки берём из summary().totals (та же формула и тот же фильтр,
+   * что у таблицы «Эффективность» на дашборде: P&L = реализ. + нереализ. +
+   * дивиденды), а НЕ суммируем построчный pnl текущих позиций — тот считает
+   * только открытый остаток и не видит результат по уже закрытым сделкам.
+   * Раньше это расходилось с дашбордом ровно на величину реализованного P&L
+   * (напр. −84 248,81 ₽ здесь против −45 915,13 ₽ на дашборде для тех же данных).
+   */
+  private readonly totals = computed(() => this.api.summary.value()?.totals);
 
-  protected readonly valueTotal = computed(() => {
-    const total = this.positions().reduce((acc, p) => acc + Number(p.currentValueRub ?? 0), 0);
-    return formatMoney(total.toFixed(2), 'RUB');
-  });
-
-  protected readonly pnlTotalRaw = computed(() =>
-    this.positions().reduce((acc, p) => acc + Number(p.pnlRub ?? 0), 0),
+  protected readonly investedTotal = computed(() =>
+    formatMoney((this.totals()?.investedRub ?? 0).toFixed(2), 'RUB'),
   );
+
+  protected readonly valueTotal = computed(() =>
+    formatMoney((this.totals()?.currentValueRub ?? 0).toFixed(2), 'RUB'),
+  );
+
+  protected readonly pnlTotalRaw = computed(() => this.totals()?.pnlRub ?? 0);
 
   protected readonly pnlTotal = computed(() => formatMoney(this.pnlTotalRaw().toFixed(2), 'RUB'));
 
-  protected readonly dividendsTotal = computed(() => {
-    const total = this.positions().reduce(
-      (acc, p) => acc + Number(p.dividendsRub) + Number(p.couponsRub),
-      0,
-    );
-    return formatMoney(total.toFixed(2), 'RUB');
-  });
+  protected readonly dividendsTotal = computed(() =>
+    formatMoney((this.totals()?.dividendsRub ?? 0).toFixed(2), 'RUB'),
+  );
 
   protected pnlClass(value: number): string {
     return pnlColorClass(value);
@@ -442,7 +460,11 @@ export class PortfolioPage {
   }
 
   protected managePortfolios(): void {
-    this.dialog.open(ManagePortfoliosDialog, { autoFocus: false });
+    this.dialog.open(ManagePortfoliosDialog, { autoFocus: false, width: '760px', maxWidth: '95vw' });
+  }
+
+  protected manageSystems(): void {
+    this.dialog.open(ManageSystemsDialog, { autoFocus: false, width: '760px', maxWidth: '95vw' });
   }
 
   protected async refresh(): Promise<void> {

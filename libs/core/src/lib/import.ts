@@ -16,7 +16,6 @@ export interface RawRow {
   instrumentType?: string;
   ticker?: string;
   currency?: string;
-  broker?: string;
   tradeType?: string; // Buy/Sell/Deposit/… или брокер-специфичное
   betweenPortfolios?: string; // "Да"/"Нет"/true
   quantity?: string;
@@ -163,8 +162,8 @@ export function normalizeRow(
   resolvers: {
     /** ticker — для точечного выбора системы в рамках импорта (docs/04-roadmap.md §3.1), пробуется после name */
     resolveSystem: (name?: string, ticker?: string) => string | null;
-    /** accountRef — признак счёта из отчёта (docs/04-roadmap.md §3.1), пробуется прежде broker/батч-дефолта */
-    resolvePortfolio: (broker?: string, accountRef?: string) => string | null;
+    /** accountRef — признак счёта из отчёта (docs/04-roadmap.md §3.1), пробуется прежде батч-дефолта */
+    resolvePortfolio: (accountRef?: string) => string | null;
     /** name — резервный ключ, когда ticker/ISIN нет в справочнике (см. RawRow.name) */
     resolveInstrument: (ticker?: string, name?: string) => string | null;
     /** true, если для тикера система выбрана явно в этом импорте (не батч-дефолт) */
@@ -183,9 +182,15 @@ export function normalizeRow(
   const systemKey = instrumentId ?? raw.ticker;
 
   const systemId = resolvers.resolveSystem(raw.system, systemKey);
-  const portfolioId = resolvers.resolvePortfolio(raw.broker, raw.accountRef);
+  const portfolioId = resolvers.resolvePortfolio(raw.accountRef);
   if (!systemId) return { error: `Неизвестная система: "${raw.system}"` };
-  if (!portfolioId) return { error: `Неизвестный портфель/брокер: "${raw.broker}"` };
+  if (!portfolioId) {
+    return {
+      error: raw.accountRef
+        ? `Неизвестный портфель для счёта отчёта "${raw.accountRef}"`
+        : 'Портфель не определён — выберите портфель по умолчанию для импорта',
+    };
+  }
 
   let { type, confidence, reason } = classifyOperationType(raw);
 

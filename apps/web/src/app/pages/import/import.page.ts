@@ -49,10 +49,10 @@ import { ReferenceApi } from '../../entities/reference/reference.api';
 
       <div class="batch">
         <mat-form-field appearance="outline">
-          <mat-label>Портфель (брокер)</mat-label>
+          <mat-label>Портфель</mat-label>
           <mat-select [value]="portfolioId()" (valueChange)="setPortfolio($event)">
             @for (p of portfolios(); track p.id) {
-              <mat-option [value]="p.id">{{ p.name }} · {{ p.broker }}</mat-option>
+              <mat-option [value]="p.id">{{ p.name }}</mat-option>
             }
           </mat-select>
         </mat-form-field>

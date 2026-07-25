@@ -21,8 +21,6 @@ export const systems = sqliteTable('systems', {
 export const portfolios = sqliteTable('portfolios', {
   id: text('id').primaryKey(),
   name: text('name').notNull(),
-  broker: text('broker').notNull(),
-  baseCurrency: text('base_currency').notNull().default('RUB'),
   /**
    * Признак счёта из отчёта брокера (напр. торговый код ИИС) — persisted-маппинг
    * «счёт отчёта → портфель» (docs/04-roadmap.md §3.1). Заполняется автоматически

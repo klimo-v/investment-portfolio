@@ -20,8 +20,6 @@ const HEADER_MAP: Record<string, CsvField> = {
   символ: 'ticker',
   валюта: 'currency',
   currency: 'currency',
-  брокер: 'broker',
-  broker: 'broker',
   'тип сделки': 'tradeType',
   'тип операции': 'tradeType',
   тип: 'tradeType',
