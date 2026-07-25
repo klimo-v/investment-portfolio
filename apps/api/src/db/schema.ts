@@ -1,4 +1,4 @@
-import { sqliteTable, text, integer } from 'drizzle-orm/sqlite-core';
+import { sqliteTable, text, integer, primaryKey } from 'drizzle-orm/sqlite-core';
 import { sql } from 'drizzle-orm';
 
 /**
@@ -114,6 +114,26 @@ export const portfolioSnapshots = sqliteTable('portfolio_snapshots', {
   dividendsRub: text('dividends_rub').notNull(),
 });
 
+/**
+ * Снимок стоимости отдельного инструмента на дату — разбивка агрегатного снимка
+ * по инструментам для графика «Стоимость инструментов во времени» на дашборде.
+ * Историю восстанавливает SnapshotsService.rebuildPositions() из журнала операций
+ * и дневных закрытий MOEX; текущий день дописывает capture() вместе с агрегатом.
+ * Составной ключ (date, instrument_id) — один снимок инструмента в день, upsert.
+ */
+export const snapshotPositions = sqliteTable(
+  'snapshot_positions',
+  {
+    date: text('date').notNull(), // YYYY-MM-DD
+    instrumentId: text('instrument_id')
+      .notNull()
+      .references(() => instruments.id),
+    valueRub: text('value_rub').notNull(), // рыночная стоимость держимого остатка в RUB
+    quantity: text('quantity').notNull(), // остаток на дату (для тултипа/отладки)
+  },
+  (t) => [primaryKey({ columns: [t.date, t.instrumentId] })],
+);
+
 export type SystemRow = typeof systems.$inferSelect;
 export type PortfolioRow = typeof portfolios.$inferSelect;
 export type InstrumentRow = typeof instruments.$inferSelect;
@@ -121,3 +141,4 @@ export type OperationRow = typeof operations.$inferSelect;
 export type NewOperationRow = typeof operations.$inferInsert;
 export type QuoteRow = typeof quotes.$inferSelect;
 export type SnapshotRow = typeof portfolioSnapshots.$inferSelect;
+export type SnapshotPositionRow = typeof snapshotPositions.$inferSelect;

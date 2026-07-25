@@ -11,6 +11,7 @@ import { maxDrawdown, type Effectiveness } from '@core';
 import { OperationApi } from '../../entities/operation/operation.api';
 import { SnapshotApi } from '../../entities/snapshot/snapshot.api';
 import { BenchmarkApi } from '../../entities/benchmark/benchmark.api';
+import { PositionSeriesApi } from '../../entities/position-series/position-series.api';
 import { ReferenceApi } from '../../entities/reference/reference.api';
 import { formatMoney, formatPercent, pnlColorClass } from '@web-shared';
 
@@ -224,18 +225,19 @@ interface EffRow extends Effectiveness {
         </mat-card>
 
         <mat-card class="wide">
-          <h3>Стоимость портфеля во времени</h3>
-          @if (segmentFilterActive()) {
-            <p class="note">Снимки не разбиты по системам/портфелям — график показывает портфель целиком.</p>
-          }
-          @if (snapshots.list.value()?.length) {
-            <div class="chart-box">
-              <canvas
-                baseChart
-                [type]="valueChart().type"
-                [data]="valueChart().data"
-                [options]="valueChart().options"
-              ></canvas>
+          <h3>Стоимость инструментов во времени</h3>
+          <p class="note">
+            Стоимость каждого инструмента и итог по портфелю по датам снимков; пунктир —
+            внесено (нетто): депозиты минус выводы, чтобы отделить рост от довнесения
+            капитала. Сумма линий = «Текущая стоимость» портфеля. Снимки копятся при
+            «Обновить цены» на странице «Портфель» (по одному в день).
+            @if (segmentFilterActive()) {
+              Разбивка не делится по системам/портфелям — показан портфель целиком.
+            }
+          </p>
+          @if (positionsChart(); as pc) {
+            <div class="chart-box tall">
+              <canvas baseChart [type]="pc.type" [data]="pc.data" [options]="pc.options"></canvas>
             </div>
           } @else {
             <p class="note">
@@ -394,6 +396,7 @@ export class DashboardPage {
   protected readonly api = inject(OperationApi);
   protected readonly snapshots = inject(SnapshotApi);
   protected readonly benchmark = inject(BenchmarkApi);
+  protected readonly positionSeries = inject(PositionSeriesApi);
   protected readonly reference = inject(ReferenceApi);
 
   protected readonly depositRatePct = (DEPOSIT_ANNUAL_RATE * 100).toFixed(0);
@@ -497,29 +500,60 @@ export class DashboardPage {
     });
   }
 
-  /** Линия динамики: Вложено (серый) vs Текущая стоимость (синий) по датам снимков */
-  protected readonly valueChart = computed<ChartConfiguration<'line'>>(() => {
-    const s = this.snaps();
+  /** Палитра для линий инструментов (достаточно распознаваемых цветов на портфель) */
+  private static readonly LINE_PALETTE = [
+    '#2a78d6', '#199e70', '#e0a400', '#8e5bd8', '#e34948', '#1baf7a', '#d6772a',
+    '#5b8ad8', '#b0431f', '#3fa7b8', '#c85fa0', '#7a9e19', '#9e6b19', '#5f5fd8',
+    '#d84f8e', '#4f9ed8',
+  ];
+
+  /**
+   * «Стоимость инструментов во времени»: по линии на инструмент (RUB, null —
+   * инструмент в эту дату не удерживался → разрыв), жирная линия «Итого» (сумма) и
+   * пунктирная «Внесено (нетто)» — накопленный чистый ввод средств, чтобы отделить
+   * рост стоимости от довнесения капитала. Данные — из snapshot_positions (ряд
+   * собирается кнопкой «Пересобрать историю»). null — истории ещё нет.
+   */
+  protected readonly positionsChart = computed<ChartConfiguration<'line'> | null>(() => {
+    const s = this.positionSeries.series.value();
+    if (!s || s.dates.length === 0) return null;
+    const palette = DashboardPage.LINE_PALETTE;
+
+    const instrumentDatasets = s.instruments.map((ins, i) => ({
+      label: ins.ticker,
+      data: ins.values,
+      borderColor: palette[i % palette.length],
+      backgroundColor: palette[i % palette.length],
+      borderWidth: 1.5,
+      pointRadius: 0,
+      tension: 0.2,
+      spanGaps: false,
+    }));
+
     return {
       type: 'line',
       data: {
-        labels: s.map((r) => r.date),
+        labels: s.dates,
         datasets: [
+          ...instrumentDatasets,
           {
-            label: 'Вложено',
-            data: s.map((r) => r.investedRub),
-            borderColor: C.gray,
-            backgroundColor: C.gray,
-            pointRadius: 2,
+            label: 'Итого',
+            data: s.total,
+            borderColor: '#111',
+            backgroundColor: '#111',
+            borderWidth: 2.5,
+            pointRadius: 0,
             tension: 0.2,
           },
           {
-            label: 'Текущая стоимость',
-            data: s.map((r) => r.currentValueRub),
-            borderColor: C.blue,
-            backgroundColor: C.blue,
-            pointRadius: 2,
-            tension: 0.2,
+            label: 'Внесено (нетто)',
+            data: s.netContributions,
+            borderColor: C.gray,
+            backgroundColor: C.gray,
+            borderWidth: 2,
+            borderDash: [6, 4],
+            pointRadius: 0,
+            tension: 0,
           },
         ],
       },
@@ -528,7 +562,7 @@ export class DashboardPage {
         maintainAspectRatio: false,
         interaction: { mode: 'index', intersect: false },
         plugins: {
-          legend: { display: true },
+          legend: { display: true, position: 'bottom' },
           tooltip: { callbacks: { label: (c) => `${c.dataset.label}: ${this.money(c.parsed.y)}` } },
         },
         scales: {

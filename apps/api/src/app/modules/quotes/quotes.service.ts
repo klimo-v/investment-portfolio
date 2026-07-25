@@ -4,6 +4,8 @@ import { quotes, instruments, type QuoteRow } from '../../../db/schema';
 import { DB } from '../../db/drizzle.module';
 import { MoexProvider } from './moex.provider';
 import { CbrProvider } from './cbr.provider';
+import { BinanceProvider } from './binance.provider';
+import type { PriceProvider } from './price-provider';
 
 /**
  * Сервис котировок (CLAUDE.md §7: Facade над провайдерами).
@@ -12,11 +14,20 @@ import { CbrProvider } from './cbr.provider';
  */
 @Injectable()
 export class QuotesService {
+  /**
+   * Источники цен, выбираемые по marketSource инструмента (OCP: новый рынок = новый
+   * провайдер, ядро обновления не меняется). manual — без провайдера (руками).
+   */
+  private readonly providers: PriceProvider[];
+
   constructor(
     @Inject(DB) private readonly db: BetterSQLite3Database,
     private readonly moex: MoexProvider,
     private readonly cbr: CbrProvider,
-  ) {}
+    private readonly binance: BinanceProvider,
+  ) {
+    this.providers = [this.moex, this.binance];
+  }
 
   /** Текущие кэшированные котировки */
   list(): QuoteRow[] {
@@ -45,8 +56,9 @@ export class QuotesService {
     let updated = 0;
 
     for (const inst of instrumentRows) {
-      if (inst.marketSource !== 'moex') continue; // крипта/manual — позже/вручную
-      const quote = await this.moex.getQuote(inst.ticker);
+      const provider = this.providers.find((p) => p.supports(inst.marketSource));
+      if (!provider) continue; // manual — цену задаём вручную
+      const quote = await provider.getQuote(inst.ticker);
       if (!quote) continue;
 
       // валюта — из своего справочника инструментов, а не от провайдера: MOEX ISS

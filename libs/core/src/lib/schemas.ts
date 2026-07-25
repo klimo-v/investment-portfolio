@@ -186,6 +186,33 @@ export const BenchmarkPointSchema = z.object({
 });
 export type BenchmarkPoint = z.infer<typeof BenchmarkPointSchema>;
 
+/**
+ * Ряд стоимости во времени по одному инструменту (для мульти-линейного графика
+ * «Стоимость инструментов во времени» на дашборде). Значение — рыночная стоимость
+ * держимого остатка в RUB на соответствующую дату из PositionSeries.dates; null —
+ * инструмент в эту дату не удерживался или на него не было цены.
+ */
+export const InstrumentValueSeriesSchema = z.object({
+  instrumentId: z.string(),
+  ticker: z.string(),
+  values: z.array(z.number().nullable()),
+});
+export type InstrumentValueSeries = z.infer<typeof InstrumentValueSeriesSchema>;
+
+/**
+ * Колоночный ряд «стоимость инструментов во времени» (docs/05-review-usability.md).
+ * dates — общая ось; instruments — по линии на инструмент; total — сумма стоимостей
+ * показанных инструментов; netContributions — накопленный чистый ввод средств
+ * (депозиты − выводы) на каждую дату, чтобы отделить рост от довнесения капитала.
+ */
+export const PositionSeriesSchema = z.object({
+  dates: z.array(z.string()), // YYYY-MM-DD, по возрастанию
+  instruments: z.array(InstrumentValueSeriesSchema),
+  total: z.array(z.number()),
+  netContributions: z.array(z.number()),
+});
+export type PositionSeries = z.infer<typeof PositionSeriesSchema>;
+
 /** Статус сделки: открыта / частично закрыта / закрыта по остатку количества */
 export const TradeStatus = z.enum(['Open', 'Partial', 'Closed']);
 export type TradeStatus = z.infer<typeof TradeStatus>;
