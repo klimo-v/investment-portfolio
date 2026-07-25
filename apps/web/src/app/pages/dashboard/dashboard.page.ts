@@ -112,7 +112,9 @@ interface EffRow extends Effectiveness {
           <mat-card-title>{{ money(totals().currentValueRub) }}</mat-card-title>
         </mat-card>
         <mat-card>
-          <mat-card-subtitle>P&L</mat-card-subtitle>
+          <mat-card-subtitle
+            >P&L <span class="hint" [matTooltip]="pnlHint">?</span></mat-card-subtitle
+          >
           <mat-card-title [class]="cls(totals().pnlRub)">{{ money(totals().pnlRub) }}</mat-card-title>
           <div class="sub">
             реализ. <span [class]="cls(totals().realizedPnlRub)">{{ money(totals().realizedPnlRub) }}</span>
@@ -195,7 +197,9 @@ interface EffRow extends Effectiveness {
               </td>
             </ng-container>
             <ng-container matColumnDef="pnl">
-              <th mat-header-cell *matHeaderCellDef>P&L</th>
+              <th mat-header-cell *matHeaderCellDef
+                >P&L <span class="hint" [matTooltip]="pnlHint">?</span></th
+              >
               <td mat-cell *matCellDef="let r" [class]="cls(r.pnlRub)">{{ money(r.pnlRub) }}</td>
             </ng-container>
             <ng-container matColumnDef="roi">
@@ -212,6 +216,17 @@ interface EffRow extends Effectiveness {
                 ></th
               >
               <td mat-cell *matCellDef="let r" [class]="cls(r.xirrPct ?? 0)">{{ pctOrDash(r.xirrPct) }}</td>
+            </ng-container>
+            <ng-container matColumnDef="dividends">
+              <th mat-header-cell *matHeaderCellDef
+                >Дивиденды
+                <span
+                  class="hint"
+                  matTooltip="Дивиденды и купоны, уже полученные вами деньгами — сумма операций типа «Дивиденд»/«Купон» из журнала, как есть. Именно эта сумма и входит в P&L (см. подсказку у P&L)."
+                  >?</span
+                ></th
+              >
+              <td mat-cell *matCellDef="let r">{{ money(r.dividendsRub) }}</td>
             </ng-container>
             <ng-container matColumnDef="divyield">
               <th mat-header-cell *matHeaderCellDef>Див. дох.</th>
@@ -423,6 +438,18 @@ export class DashboardPage {
   protected readonly depositRatePct = (DEPOSIT_ANNUAL_RATE * 100).toFixed(0);
   protected readonly groupBy = signal<'system' | 'portfolio'>('system');
 
+  /**
+   * P&L = реализ. + нереализ. + дивиденды — учитывает результат и по уже
+   * закрытым (проданным) позициям, и по текущему открытому остатку. Частый
+   * вопрос: «Вложено − Стоимость − Дивиденды» даёт другое число, потому что
+   * молча выбрасывает уже зафиксированную реализованную прибыль/убыток.
+   */
+  protected readonly pnlHint =
+    'P&L = реализ. + нереализ. + дивиденды/купоны. Реализ. — результат по уже ' +
+    'закрытым (проданным) позициям, эти деньги уже ваши независимо от того, ' +
+    'вывели вы их или реинвестировали. «Вложено − Стоимость − Дивиденды» даст ' +
+    'другое число — оно молча теряет эту уже зафиксированную прибыль/убыток.';
+
   /** Глобальный фильтр дашборда (docs/05-review-usability.md §2) */
   protected readonly systemFilter = signal<string | null>(null);
   protected readonly portfolioFilter = signal<string | null>(null);
@@ -452,6 +479,7 @@ export class DashboardPage {
     'pnl',
     'roi',
     'xirr',
+    'dividends',
     'divyield',
   ];
 

@@ -128,7 +128,9 @@ interface Group {
         <mat-card-title>{{ dividendsTotal() }}</mat-card-title>
       </mat-card>
       <mat-card>
-        <mat-card-subtitle>P&L (₽)</mat-card-subtitle>
+        <mat-card-subtitle
+          >P&L (₽) <span class="hint-icon" [matTooltip]="pnlHint">?</span></mat-card-subtitle
+        >
         <mat-card-title [class]="pnlClass(pnlTotalRaw())">{{ pnlTotal() }}</mat-card-title>
       </mat-card>
     </div>
@@ -329,6 +331,17 @@ export class PortfolioPage {
     'Дивиденды и купоны, уже выплаченные вам, — это кэш, не переоценка бумаги. ' +
     'Они не входят в «Текущую стоимость» (там только рыночная цена держимых позиций), ' +
     'но входят в P&L. Поэтому P&L может быть положительным, даже если рынок просел.';
+
+  /**
+   * P&L = реализ. + нереализ. + дивиденды — включает результат по уже закрытым
+   * (проданным) позициям, а не только по текущему остатку. «Вложено − Стоимость −
+   * Дивиденды» даст другое число — оно молча теряет уже зафиксированную прибыль/убыток.
+   */
+  protected readonly pnlHint =
+    'P&L = реализ. + нереализ. + дивиденды/купоны. Реализ. — результат по уже ' +
+    'закрытым (проданным) позициям, эти деньги уже ваши независимо от того, ' +
+    'вывели вы их или реинвестировали. «Вложено − Стоимость − Дивиденды» даст ' +
+    'другое число — оно молча теряет эту уже зафиксированную прибыль/убыток.';
 
   protected readonly systemFilter = signal<string | null>(null);
   protected readonly portfolioFilter = signal<string | null>(null);
