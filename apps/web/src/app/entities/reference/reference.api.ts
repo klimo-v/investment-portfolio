@@ -3,6 +3,7 @@ import { HttpClient, httpResource } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
 import { z } from 'zod';
 import { InstrumentSchema, PortfolioSchema, SystemSchema, type Portfolio, type System } from '@core';
+import { withToastSuccess } from '@web-shared';
 
 /**
  * API-клиент справочников (FSD: entities): системы, портфели, инструменты.
@@ -46,7 +47,7 @@ export class ReferenceApi {
   /** Создать портфель, затем перезагрузить список */
   async createPortfolio(portfolio: Portfolio): Promise<Portfolio> {
     const created = await firstValueFrom(
-      this.http.post<Portfolio>('/api/portfolios', portfolio),
+      this.http.post<Portfolio>('/api/portfolios', portfolio, withToastSuccess('Портфель создан')),
     );
     this.reloadTrigger.update((n) => n + 1);
     return created;
@@ -54,20 +55,26 @@ export class ReferenceApi {
 
   /** Удалить портфель (только если на него не ссылаются операции), затем перезагрузить список */
   async deletePortfolio(id: string): Promise<void> {
-    await firstValueFrom(this.http.delete<{ deleted: true }>(`/api/portfolios/${id}`));
+    await firstValueFrom(
+      this.http.delete<{ deleted: true }>(`/api/portfolios/${id}`, withToastSuccess('Портфель удалён')),
+    );
     this.reloadTrigger.update((n) => n + 1);
   }
 
   /** Создать систему, затем перезагрузить список */
   async createSystem(system: System): Promise<System> {
-    const created = await firstValueFrom(this.http.post<System>('/api/systems', system));
+    const created = await firstValueFrom(
+      this.http.post<System>('/api/systems', system, withToastSuccess('Система создана')),
+    );
     this.reloadTrigger.update((n) => n + 1);
     return created;
   }
 
   /** Удалить систему (только если на неё не ссылаются операции), затем перезагрузить список */
   async deleteSystem(id: string): Promise<void> {
-    await firstValueFrom(this.http.delete<{ deleted: true }>(`/api/systems/${id}`));
+    await firstValueFrom(
+      this.http.delete<{ deleted: true }>(`/api/systems/${id}`, withToastSuccess('Система удалена')),
+    );
     this.reloadTrigger.update((n) => n + 1);
   }
 }

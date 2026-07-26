@@ -6,6 +6,7 @@ import { MatListModule } from '@angular/material/list';
 import { MatFormFieldModule } from '@angular/material/form-field';
 import { MatInputModule } from '@angular/material/input';
 import { form, FormField, required } from '@angular/forms/signals';
+import { extractErrorMessage } from '@web-shared';
 import { ReferenceApi } from '../../entities/reference/reference.api';
 
 /**
@@ -142,25 +143,9 @@ export class ManagePortfoliosDialog {
     try {
       await this.referenceApi.deletePortfolio(id);
     } catch (err) {
-      this.errorMessage.set(extractErrorMessage(err));
+      this.errorMessage.set(extractErrorMessage(err, 'Не удалось удалить портфель.'));
     } finally {
       this.deletingId.set(null);
     }
   }
-}
-
-/** Достаём сообщение об ошибке из HttpErrorResponse (Nest BadRequestException) */
-function extractErrorMessage(err: unknown): string {
-  if (
-    err &&
-    typeof err === 'object' &&
-    'error' in err &&
-    err.error &&
-    typeof err.error === 'object' &&
-    'message' in err.error &&
-    typeof err.error.message === 'string'
-  ) {
-    return err.error.message;
-  }
-  return 'Не удалось удалить портфель.';
 }

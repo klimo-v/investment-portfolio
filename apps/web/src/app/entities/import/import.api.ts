@@ -2,6 +2,7 @@ import { Injectable, inject } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
 import type { Operation } from '@core';
+import { withToastSuccess } from '@web-shared';
 
 /**
  * API-клиент импорта (FSD: entities). Только мутации → HttpClient.
@@ -61,13 +62,21 @@ export class ImportApi {
 
   commit(req: ImportRequest): Promise<{ batchId: string; imported: number }> {
     return firstValueFrom(
-      this.http.post<{ batchId: string; imported: number }>('/api/import/commit', req),
+      this.http.post<{ batchId: string; imported: number }>(
+        '/api/import/commit',
+        req,
+        withToastSuccess('Импорт завершён'),
+      ),
     );
   }
 
   rollback(batchId: string): Promise<{ deleted: number }> {
     return firstValueFrom(
-      this.http.post<{ deleted: number }>('/api/import/rollback', { batchId }),
+      this.http.post<{ deleted: number }>(
+        '/api/import/rollback',
+        { batchId },
+        withToastSuccess('Импорт отменён'),
+      ),
     );
   }
 }

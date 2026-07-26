@@ -1,10 +1,12 @@
-import { ChangeDetectionStrategy, Component, signal } from '@angular/core';
+import { ChangeDetectionStrategy, Component, inject, signal } from '@angular/core';
 import { RouterLink, RouterLinkActive, RouterOutlet } from '@angular/router';
 import { MatToolbarModule } from '@angular/material/toolbar';
 import { MatSidenavModule } from '@angular/material/sidenav';
 import { MatListModule } from '@angular/material/list';
 import { MatIconModule } from '@angular/material/icon';
 import { MatButtonModule } from '@angular/material/button';
+import { MatProgressBarModule } from '@angular/material/progress-bar';
+import { LoadingService } from '@web-shared';
 
 interface NavItem {
   readonly path: string;
@@ -28,14 +30,20 @@ interface NavItem {
     MatListModule,
     MatIconModule,
     MatButtonModule,
+    MatProgressBarModule,
   ],
   template: `
-    <mat-toolbar color="primary">
-      <button mat-icon-button (click)="opened.set(!opened())" aria-label="Меню">
-        <mat-icon>menu</mat-icon>
-      </button>
-      <span>Investment Portfolio</span>
-    </mat-toolbar>
+    <div class="toolbar-wrap">
+      <mat-toolbar color="primary">
+        <button mat-icon-button (click)="opened.set(!opened())" aria-label="Меню">
+          <mat-icon>menu</mat-icon>
+        </button>
+        <span>Investment Portfolio</span>
+      </mat-toolbar>
+      @if (loading.isLoading()) {
+        <mat-progress-bar mode="indeterminate" class="global-progress" />
+      }
+    </div>
 
     <mat-sidenav-container class="shell">
       <mat-sidenav mode="side" [opened]="opened()">
@@ -62,6 +70,15 @@ interface NavItem {
   `,
   styles: [
     `
+      .toolbar-wrap {
+        position: relative;
+      }
+      .global-progress {
+        position: absolute;
+        left: 0;
+        right: 0;
+        bottom: 0;
+      }
       .shell {
         height: calc(100vh - 64px);
       }
@@ -80,6 +97,7 @@ interface NavItem {
   ],
 })
 export class App {
+  protected readonly loading = inject(LoadingService);
   protected readonly opened = signal(true);
 
   protected readonly nav: readonly NavItem[] = [

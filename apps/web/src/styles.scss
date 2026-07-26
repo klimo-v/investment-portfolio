@@ -35,3 +35,36 @@ body {
   font-size: 24px;
   font-weight: 500;
 }
+
+/*
+ * Тосты (ToastService/MatSnackBar) — рендерятся в оверлее, стиль только глобальный.
+ * CSS-переменные MDC (--mdc-snackbar-*) не переопределяют цвет на M3-теме
+ * (mat.theme() запекает значения напрямую) — красим сам surface-элемент явно.
+ */
+.toast-success,
+.toast-error,
+.toast-info {
+  .mdc-snackbar__surface,
+  .mat-mdc-snackbar-surface {
+    color: #fff !important;
+  }
+  .mdc-snackbar__label {
+    color: #fff !important;
+  }
+  .mat-mdc-snack-bar-action,
+  .mat-mdc-button.mat-mdc-snack-bar-action {
+    color: #fff !important;
+  }
+}
+.toast-success .mdc-snackbar__surface,
+.toast-success .mat-mdc-snackbar-surface {
+  background-color: #2e7d32 !important;
+}
+.toast-error .mdc-snackbar__surface,
+.toast-error .mat-mdc-snackbar-surface {
+  background-color: #c62828 !important;
+}
+.toast-info .mdc-snackbar__surface,
+.toast-info .mat-mdc-snackbar-surface {
+  background-color: #0277bd !important;
+}
