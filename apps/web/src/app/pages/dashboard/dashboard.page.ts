@@ -62,7 +62,12 @@ interface EffRow extends Effectiveness {
   ],
   template: `
     <div class="header">
-      <h1 class="page-title">Дашборд</h1>
+      <h1 class="page-title">
+        Дашборд
+        @if (periodLabel(); as label) {
+          <span class="period-range">({{ label }})</span>
+        }
+      </h1>
       <div class="filters">
         <mat-form-field appearance="outline" subscriptSizing="dynamic">
           <mat-label>Система</mat-label>
@@ -86,7 +91,7 @@ interface EffRow extends Effectiveness {
           [value]="period()"
           (change)="period.set($event.value)"
           hideSingleSelectionIndicator
-          matTooltip="Период сужает журнал операций: Вложено/Текущая стоимость/P&L/ROI/XIRR/просадка считаются заново по выбранному окну. На коротком окне XIRR (годовые проценты) может быть не определён — это статистический шум, а не ошибка."
+          matTooltip="Период сужает окно денежных потоков для XIRR и помесячный график: показывает годовую доходность за выбранный отрезок, а не за всё время. Вложено/Текущая стоимость/P&L/ROI/Реализ./Нереализ./Дивиденды — это текущее состояние портфеля и от периода не зависят. На коротком окне XIRR может быть не определён (—) — это статистический шум, а не ошибка."
         >
           <mat-button-toggle value="ytd">YTD</mat-button-toggle>
           <mat-button-toggle value="1y">1 год</mat-button-toggle>
@@ -342,6 +347,13 @@ interface EffRow extends Effectiveness {
       .filters mat-form-field {
         width: 160px;
       }
+      .period-range {
+        font-size: 14px;
+        font-weight: 400;
+        color: rgba(0, 0, 0, 0.6);
+        white-space: nowrap;
+        margin-left: 8px;
+      }
       .totals {
         display: flex;
         gap: 16px;
@@ -469,6 +481,21 @@ export class DashboardPage {
     if (p === 'ytd') from.setMonth(0, 1);
     else from.setFullYear(from.getFullYear() - 1);
     return { from: from.toISOString().slice(0, 10), till };
+  });
+
+  /**
+   * Видимая подпись выбранного периода (напр. «01.01.2026 – 29.07.2026»), чтобы
+   * не гадать, за какой именно год считается XIRR — тумблер сам по себе диапазон
+   * не показывает.
+   */
+  protected readonly periodLabel = computed<string | null>(() => {
+    const r = this.periodRange();
+    if (!r.from || !r.till) return null;
+    const fmt = (iso: string) => {
+      const [y, m, d] = iso.split('-');
+      return `${d}.${m}.${y}`;
+    };
+    return `${fmt(r.from)} – ${fmt(r.till)}`;
   });
 
   protected readonly effColumns = [
