@@ -5,6 +5,7 @@ import { MatButtonToggleModule } from '@angular/material/button-toggle';
 import { MatTooltipModule } from '@angular/material/tooltip';
 import { MatFormFieldModule } from '@angular/material/form-field';
 import { MatSelectModule } from '@angular/material/select';
+import { MatDatepickerModule } from '@angular/material/datepicker';
 import { BaseChartDirective } from 'ng2-charts';
 import type { ChartConfiguration } from 'chart.js';
 import { maxDrawdown, type Effectiveness } from '@core';
@@ -41,7 +42,7 @@ const C = {
  */
 const DEPOSIT_ANNUAL_RATE = 0.16;
 
-type Period = 'all' | 'ytd' | '1y';
+type Period = 'all' | 'ytd' | '1y' | 'custom';
 
 interface EffRow extends Effectiveness {
   id: string;
@@ -58,6 +59,7 @@ interface EffRow extends Effectiveness {
     MatTooltipModule,
     MatFormFieldModule,
     MatSelectModule,
+    MatDatepickerModule,
     BaseChartDirective,
   ],
   template: `
@@ -96,7 +98,29 @@ interface EffRow extends Effectiveness {
           <mat-button-toggle value="ytd">YTD</mat-button-toggle>
           <mat-button-toggle value="1y">1 год</mat-button-toggle>
           <mat-button-toggle value="all">Всё время</mat-button-toggle>
+          <mat-button-toggle value="custom">Произвольный</mat-button-toggle>
         </mat-button-toggle-group>
+        @if (period() === 'custom') {
+          <mat-form-field appearance="outline" subscriptSizing="dynamic" class="range-field">
+            <mat-label>Диапазон</mat-label>
+            <mat-date-range-input [rangePicker]="customPicker">
+              <input
+                matStartDate
+                placeholder="От"
+                [value]="customFrom()"
+                (dateChange)="customFrom.set($event.value)"
+              />
+              <input
+                matEndDate
+                placeholder="До"
+                [value]="customTill()"
+                (dateChange)="customTill.set($event.value)"
+              />
+            </mat-date-range-input>
+            <mat-datepicker-toggle matIconSuffix [for]="customPicker"></mat-datepicker-toggle>
+            <mat-date-range-picker #customPicker></mat-date-range-picker>
+          </mat-form-field>
+        }
       </div>
     </div>
 
@@ -347,6 +371,9 @@ interface EffRow extends Effectiveness {
       .filters mat-form-field {
         width: 160px;
       }
+      .filters mat-form-field.range-field {
+        width: 220px;
+      }
       .period-range {
         font-size: 14px;
         font-weight: 400;
@@ -466,22 +493,48 @@ export class DashboardPage {
   protected readonly systemFilter = signal<string | null>(null);
   protected readonly portfolioFilter = signal<string | null>(null);
   protected readonly period = signal<Period>('all');
+  /** Границы произвольного диапазона (период 'custom') */
+  protected readonly customFrom = signal<Date | null>(null);
+  protected readonly customTill = signal<Date | null>(null);
 
   /** true, когда выбран конкретный система/портфель — снимки стоимости их не различают */
   protected readonly segmentFilterActive = computed(
     () => this.systemFilter() !== null || this.portfolioFilter() !== null,
   );
 
-  /** Период → диапазон дат от/до; 'all' — без ограничения */
+  /**
+   * Период → диапазон дат от/до; 'all' — без ограничения. 'custom' — пока не
+   * выбраны обе границы в date-range picker'е, ведёт себя как 'all' (не режем
+   * потоки по одной случайно введённой дате).
+   */
   private readonly periodRange = computed<{ from?: string; till?: string }>(() => {
     const p = this.period();
     if (p === 'all') return {};
+    if (p === 'custom') {
+      const from = this.customFrom();
+      const till = this.customTill();
+      if (!from || !till) return {};
+      return { from: this.toIsoDate(from), till: this.toIsoDate(till) };
+    }
     const till = new Date().toISOString().slice(0, 10);
     const from = new Date();
     if (p === 'ytd') from.setMonth(0, 1);
     else from.setFullYear(from.getFullYear() - 1);
     return { from: from.toISOString().slice(0, 10), till };
   });
+
+  /**
+   * Дата пикера → YYYY-MM-DD по ЛОКАЛЬНЫМ компонентам, не через toISOString():
+   * тот конвертирует через UTC и на выбранной пользователем календарной дате
+   * (локальная полночь) может откатить/подвинуть день в зависимости от часового
+   * пояса браузера — пользователь выбрал 1 июля, а фильтр получил бы 30 июня.
+   */
+  private toIsoDate(d: Date): string {
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+  }
 
   /**
    * Видимая подпись выбранного периода (напр. «01.01.2026 – 29.07.2026»), чтобы

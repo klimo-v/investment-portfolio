@@ -11,6 +11,7 @@ import {
   withXsrfConfiguration,
 } from '@angular/common/http';
 import { provideAnimationsAsync } from '@angular/platform-browser/animations/async';
+import { provideNativeDateAdapter } from '@angular/material/core';
 import { provideCharts, withDefaultRegisterables } from 'ng2-charts';
 import { loadingInterceptor, httpToastInterceptor } from '@web-shared';
 import { appRoutes } from './app.routes';
@@ -33,6 +34,7 @@ export const appConfig: ApplicationConfig = {
       withInterceptors([loadingInterceptor, httpToastInterceptor]),
     ),
     provideAnimationsAsync(),
+    provideNativeDateAdapter(),
     provideCharts(withDefaultRegisterables()),
   ],
 };
