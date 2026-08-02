@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import Decimal from 'decimal.js';
-import { calculatePositions, calculateTrades, unrealizedPnl } from './engine';
+import { calculatePositions, calculateTrades, realizedPnlInRange, unrealizedPnl } from './engine';
 import type { Operation } from './schemas';
 
 /**
@@ -117,6 +117,82 @@ describe('Transfer не искажает P&L', () => {
     // Transfer пропущен → позиция как будто только покупка
     expect(positions).toHaveLength(1);
     expect(positions[0].quantity.toString()).toBe('10');
+  });
+});
+
+describe('realizedPnlInRange — реализованный P&L за окно, себестоимость по всей истории', () => {
+  it('продажа внутри окна: SBER 1600@310.99 → 1600@317, P&L ≈ 9214.09', () => {
+    const [r] = realizedPnlInRange(
+      [
+        op({
+          date: '2025-02-27',
+          instrumentId: 'SBER',
+          operationType: 'Buy',
+          quantity: '1600',
+          price: '310.99',
+          fee: '199.03',
+        }),
+        op({
+          date: '2025-03-07',
+          instrumentId: 'SBER',
+          operationType: 'Sell',
+          quantity: '1600',
+          price: '317',
+          fee: '202.88',
+        }),
+      ],
+      '2025-03-01',
+      '2025-03-31',
+    );
+    expect(r.realizedPnlRub.toFixed(2)).toBe('9214.09');
+  });
+
+  it('покупка ДО окна, продажа ВНУТРИ окна — себестоимость всё равно от полной истории', () => {
+    const [r] = realizedPnlInRange(
+      [
+        op({ date: '2025-01-01', instrumentId: 'X', operationType: 'Buy', quantity: '100', price: '10', fee: '0' }),
+        op({ date: '2025-06-15', instrumentId: 'X', operationType: 'Sell', quantity: '100', price: '30', fee: '0' }),
+      ],
+      '2025-06-01',
+      '2025-06-30',
+    );
+    // себестоимость 100*10 = 1000 (из покупки ДО окна), выручка 100*30 = 3000 → P&L = 2000
+    expect(r.realizedPnlRub.toString()).toBe('2000');
+  });
+
+  it('продажа ДО начала окна не учитывается', () => {
+    const [r] = realizedPnlInRange(
+      [
+        op({ date: '2025-01-01', instrumentId: 'X', operationType: 'Buy', quantity: '100', price: '10', fee: '0' }),
+        op({ date: '2025-02-01', instrumentId: 'X', operationType: 'Sell', quantity: '100', price: '30', fee: '0' }),
+      ],
+      '2025-03-01',
+      '2025-03-31',
+    );
+    expect(r.realizedPnlRub.toString()).toBe('0');
+  });
+
+  it('продажа ПОСЛЕ конца окна (till) не учитывается', () => {
+    const [r] = realizedPnlInRange(
+      [
+        op({ date: '2025-01-01', instrumentId: 'X', operationType: 'Buy', quantity: '100', price: '10', fee: '0' }),
+        op({ date: '2025-06-01', instrumentId: 'X', operationType: 'Sell', quantity: '100', price: '30', fee: '0' }),
+      ],
+      undefined,
+      '2025-03-31',
+    );
+    expect(r.realizedPnlRub.toString()).toBe('0');
+  });
+
+  it('без from/till — эквивалент реализованного P&L за всё время (сходится с calculatePositions)', () => {
+    const ops = [
+      op({ instrumentId: 'X', operationType: 'Buy', quantity: '100', price: '10', fee: '0' }),
+      op({ instrumentId: 'X', operationType: 'Buy', quantity: '100', price: '20', fee: '0' }),
+      op({ instrumentId: 'X', operationType: 'Sell', quantity: '50', price: '30', fee: '0' }),
+    ];
+    const [r] = realizedPnlInRange(ops);
+    const [pos] = calculatePositions(ops);
+    expect(r.realizedPnlRub.toString()).toBe(pos.realizedPnlCcy.toString());
   });
 });
 

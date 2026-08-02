@@ -4,10 +4,11 @@ import { eq } from 'drizzle-orm';
 import {
   calculatePositions,
   calculateTrades,
+  realizedPnlInRange,
   xirr,
+  periodCashFlows,
   OperationSchema,
   OperationReassignSchema,
-  type CashFlow,
   type Effectiveness,
   type Operation,
   type Position,
@@ -244,19 +245,22 @@ export class OperationsService {
    * §1), breakdown по тикерам.
    *
    * Глобальный фильтр (§2/§3): system/portfolio сужают журнал операций сразу.
-   * Период (`from`/`till`) — иначе: «Вложено»/«Текущая стоимость»/Реализ./Нереализ./
-   * Дивиденды описывают ТЕКУЩИЙ остаток (см. тултипы в дашборде и комментарий к
-   * EffectivenessSchema.investedRub), поэтому считаются по ВСЕЙ истории до `till`,
-   * не обрезаясь по `from`. Раньше `from` резал сам журнал операций — позиция,
-   * купленная до начала окна и не тронутая внутри него, целиком пропадала из
-   * сводки (Вложено/Стоимость → 0), а вместе с ней и XIRR: терминальный поток
-   * (текущая стоимость) добавляется только при currentValueRub > 0, так что без
-   * него набор потоков схлопывался в пустой/однознаковый и xirr() честно
-   * возвращал null — баг «за 1 год/YTD не вижу XIRR» на buy-and-hold без свежих
-   * операций внутри периода. `from` теперь сужает только денежные потоки для
-   * XIRR (см. effectiveness(): капитал, вложенный до начала периода, сворачивается
-   * в синтетический отток на дату `from`) и помесячный timeline ниже — то есть
-   * действительно «что происходило в этом окне», без искажения текущего остатка.
+   * Период (`from`/`till`) сужает и «Эффективность» тоже, но КОРРЕКТНО — без бага
+   * «за 1 год/YTD ничего не вижу» на buy-and-hold без свежих операций внутри окна:
+   * - «Вложено»/«Текущая стоимость»/«Нереализ.» — себестоимость/стоимость ТЕКУЩЕГО
+   *   остатка. Формально это состояние «на конец периода», но при
+   *   средневзвешенном методе учёта оно математически совпадает с полной историей
+   *   (среднюю цену остатка нельзя восстановить иначе, чем по всей цепочке покупок) —
+   *   поэтому считаем по всей истории до `till`, не обрезая по `from`: тот же
+   *   результат, но без риска обнулить позицию, если по ней не было операций в
+   *   узком окне.
+   * - «Реализ.»/«Дивиденды» — наоборот, ИМЕННО то, что реально продано/получено
+   *   внутри [`from`, `till`] (см. effectiveness()): реализованный P&L — через
+   *   realizedPnlInRange() (себестоимость проданного всё равно берёт из полной
+   *   истории покупок, иначе была бы искажена, если покупка была до периода).
+   * - XIRR — денежно-взвешенная доходность за период: капитал, вложенный ДО
+   *   начала периода, сворачивается в синтетический отток датой `from` (иначе не с
+   *   чем сравнить терминальный поток на buy-and-hold без операций в окне).
    */
   async summary(filter: SummaryFilter = {}): Promise<DashboardSummary> {
     const allOps = this.list();
@@ -268,7 +272,6 @@ export class OperationsService {
     );
     const periodOps = opsUpTo.filter((o) => !filter.from || o.date >= filter.from);
     const positions = await this.positions(opsUpTo);
-    const trades = calculateTrades(opsUpTo);
     const systemRows = this.db.select().from(systems).all();
     const portfolioRows = this.db.select().from(portfolios).all();
     const systemName = new Map(systemRows.map((s) => [s.id, s.name]));
@@ -301,7 +304,6 @@ export class OperationsService {
         ...this.effectiveness(
           opsUpTo.filter((o) => o.systemId === systemId),
           positions.filter((p) => p.systemId === systemId),
-          trades.filter((t) => t.systemId === systemId),
           today,
           filter.from,
         ),
@@ -317,7 +319,6 @@ export class OperationsService {
         ...this.effectiveness(
           opsUpTo.filter((o) => o.portfolioId === portfolioId),
           positions.filter((p) => p.portfolioId === portfolioId),
-          trades.filter((t) => t.portfolioId === portfolioId),
           today,
           filter.from,
         ),
@@ -330,76 +331,79 @@ export class OperationsService {
       .map((p) => ({ ticker: p.ticker, pnlRub: Number(p.pnlRub) }))
       .sort((a, b) => b.pnlRub - a.pnlRub);
 
-    const totals = this.effectiveness(opsUpTo, positions, trades, today, filter.from);
+    const totals = this.effectiveness(opsUpTo, positions, today, filter.from);
 
     return { timeline, bySystem, byPortfolio, breakdown, totals };
   }
 
   /**
-   * Метрики эффективности среза (docs/05-review-usability.md §1). Реализованный P&L
-   * берём из сделок (движок @core), нереализованный и стоимость — из позиций,
-   * дивиденды — оттуда же; `positions`/`trades` считаются по ВСЕЙ истории до `till`
-   * (см. summary()), поэтому не зависят от `periodFrom`. ROI и дивидендную доходность
-   * нормируем на «Вложено» — себестоимость держимого остатка (сходится с колонкой
-   * «Вложено» на странице «Сделки»), а не на сумму всех покупок: при перезаходах в
-   * позицию она кратно завышена оборотом. У полностью закрытых срезов вложено = 0 →
-   * ROI не определён (null): годовую доходность там показывает XIRR.
+   * Метрики эффективности среза (docs/05-review-usability.md §1). `ops` — вся
+   * история (до `till`) по срезу система/портфель, `positions` — из неё же
+   * (см. summary()). `periodFrom` — начало выбранного периода, если он задан.
    *
-   * XIRR считаем по фактическим потокам ВНУТРИ периода (`ops`, отфильтрованные по
-   * `periodFrom`): покупка — отток, продажа/дивиденд/купон — приток, плюс терминальный
-   * приток текущей стоимости остатка на сегодня. Если `periodFrom` задан, капитал,
-   * уже вложенный ДО начала периода (по операциям до `periodFrom`), сворачивается в
-   * один синтетический отток датой `periodFrom` — иначе на buy-and-hold без операций
-   * внутри окна не с чем сравнивать терминальный поток и xirr() всегда вернёт null
-   * (баг: «за 1 год/YTD не вижу XIRR», если давно ничего не покупали/продавали).
+   * «Вложено»/«Текущая стоимость»/«Нереализ.» — из `positions`, т.е. по всей
+   * истории, НЕ по `periodOps`: при средневзвешенном методе учёта себестоимость
+   * текущего остатка математически совпадает что при полном пересчёте, что при
+   * пересчёте от синтетической точки старта на `periodFrom` — иначе (расчёт
+   * только по операциям внутри периода) позиция, купленная до его начала и не
+   * тронутая внутри, целиком пропадала бы из сводки (баг «за 1 год/YTD не вижу
+   * XIRR/Вложено» на buy-and-hold без свежих операций в окне).
+   *
+   * «Реализ.» — через realizedPnlInRange(ops, periodFrom): только от продаж
+   * ВНУТРИ периода, но себестоимость проданного — по полной истории покупок
+   * (иначе была бы искажена, если покупка была до начала периода).
+   * «Дивиденды» — прямая сумма Dividend/Coupon-операций ВНУТРИ периода
+   * (себестоимость для этого не нужна, дата операции = дата получения денег).
+   * ROI и дивидендную доходность нормируем на «Вложено» — себестоимость
+   * держимого остатка (сходится с колонкой «Вложено» на странице «Сделки»), а не
+   * на сумму всех покупок: при перезаходах в позицию она кратно завышена
+   * оборотом. У полностью закрытых срезов вложено = 0 → ROI не определён (null):
+   * годовую доходность там показывает XIRR.
+   *
+   * XIRR считаем через periodCashFlows() (libs/core/metrics.ts) по фактическим
+   * потокам, плюс терминальный приток текущей стоимости остатка на сегодня. Если
+   * `periodFrom` задан, капитал, уже вложенный ДО начала периода И всё ещё
+   * удерживаемый (не проданный) к концу истории, сворачивается в один
+   * синтетический отток датой `periodFrom` — иначе на buy-and-hold без операций
+   * внутри окна не с чем сравнивать терминальный поток и xirr() всегда вернёт null.
+   *
+   * ВАЖНО (баг, найден и исправлен 2026-08-01): если внутри периода происходит
+   * продажа позиции, ОТКРЫТОЙ до periodFrom, её себестоимость НЕ сворачивается в
+   * синтетику на periodFrom — periodCashFlows() ведёт FIFO по лотам с их
+   * РЕАЛЬНЫМИ датами покупки: себестоимость проданной доли идёт оттоком на
+   * настоящую историческую дату покупки лота, а выручка — обычным притоком на
+   * дату продажи. В синтетику на periodFrom попадает только себестоимость того,
+   * что реально продолжает удерживаться. Без этого более ранние попытки давали
+   * либо задвоение капитала (вся себестоимость и вся выручка одновременно), либо
+   * заниженный XIRR (учёт только realized P&L), либо завышенный (компенсация
+   * себестоимости на дату periodFrom вместо настоящей даты покупки) — см.
+   * подробный doc-comment и историю трёх итераций в libs/core/metrics.ts.
    */
   private effectiveness(
     ops: Operation[],
     positions: Position[],
-    trades: ReturnType<typeof calculateTrades>,
     today: string,
     periodFrom?: string,
   ): Effectiveness {
     const periodOps = periodFrom ? ops.filter((o) => o.date >= periodFrom) : ops;
 
-    const flows: CashFlow[] = [];
-    if (periodFrom) {
-      const priorOps = ops.filter((o) => o.date < periodFrom);
-      const openingInvestedRub = calculatePositions(priorOps).reduce(
-        (s, p) => s + p.investedRub.toNumber(),
-        0,
-      );
-      if (openingInvestedRub > 0) {
-        flows.push({ date: periodFrom, amount: -openingInvestedRub });
-      }
-    }
-    for (const op of periodOps) {
-      const fx = Number(op.fxRate);
-      const gross = Number(op.quantity) * Number(op.price);
-      if (op.operationType === 'Buy') {
-        flows.push({ date: op.date, amount: -(gross + Number(op.fee)) * fx });
-      } else if (op.operationType === 'Sell') {
-        flows.push({ date: op.date, amount: (gross - Number(op.fee)) * fx });
-      } else if (op.operationType === 'Dividend' || op.operationType === 'Coupon') {
-        flows.push({ date: op.date, amount: gross * fx });
-      }
-    }
-
     const currentValueRub = positions.reduce((s, p) => s + Number(p.currentValueRub ?? 0), 0);
     const investedRub = positions.reduce((s, p) => s + Number(p.investedRub), 0);
-    const dividendsRub = positions.reduce(
-      (s, p) => s + Number(p.dividendsRub) + Number(p.couponsRub),
+    const dividendsRub = periodOps.reduce((s, op) => {
+      if (op.operationType !== 'Dividend' && op.operationType !== 'Coupon') return s;
+      return s + Number(op.quantity) * Number(op.price) * Number(op.fxRate);
+    }, 0);
+    const realizedPnlRub = realizedPnlInRange(ops, periodFrom).reduce(
+      (s, r) => s + r.realizedPnlRub.toNumber(),
       0,
     );
-    const realizedPnlRub = trades.reduce((s, t) => s + t.realizedPnlRub.toNumber(), 0);
     const unrealizedPnlRub = positions.reduce(
       (s, p) => (p.currentValueRub === null ? s : s + (Number(p.currentValueRub) - Number(p.investedRub))),
       0,
     );
     const pnlRub = realizedPnlRub + unrealizedPnlRub + dividendsRub;
 
-    // терминальный поток — стоимость остатка «как если бы продали сегодня»
-    if (currentValueRub > 0) flows.push({ date: today, amount: currentValueRub });
+    const flows = periodCashFlows(ops, periodFrom, currentValueRub, today);
     const rate = xirr(flows);
 
     return {

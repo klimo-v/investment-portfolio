@@ -1,3 +1,6 @@
+import Decimal from 'decimal.js';
+import type { Operation } from './schemas';
+
 /**
  * Метрики эффективности портфеля/системы (docs/05-review-usability.md §1).
  * Чистые функции без побочных эффектов — легко тестируются на реальных цифрах
@@ -9,6 +12,184 @@
 export interface CashFlow {
   date: string;
   amount: number;
+}
+
+function d(value: string): Decimal {
+  return new Decimal(value);
+}
+
+function positionKey(op: Operation): string {
+  return `${op.instrumentId}|${op.systemId}|${op.portfolioId}`;
+}
+
+/** Один лот FIFO-очереди инструмента: часть покупки, ещё не распроданная целиком */
+interface Lot {
+  /** дата ПОКУПКИ, породившей этот лот — используется как реальная дата оттока */
+  buyDate: string;
+  /** себестоимость непроданного остатка лота, в рублях (по курсу покупки) */
+  costRub: Decimal;
+  /** себестоимость непроданного остатка лота, в валюте инструмента */
+  costCcy: Decimal;
+  /** количество непроданного остатка лота */
+  quantity: Decimal;
+}
+
+/**
+ * Денежные потоки для XIRR за период [periodFrom, today] (docs/05-review-usability.md
+ * §2 + баг «задвоение/занижение/завышение XIRR при продаже старой позиции внутри
+ * периода», найден и исправлен 2026-08-01). `ops` — ВСЯ история среза (система/
+ * портфель), не только периодные — себестоимость лотов иначе была бы искажена.
+ * `periodFrom` — начало периода (undefined/null → без периода, потоки строятся по
+ * всей истории без синтетики). `currentValueRub` — терминальная стоимость остатка
+ * сегодня (0 → терминальный поток не добавляется).
+ *
+ * Пройдены и отброшены три неверных варианта (числовой пример: 100 акций по
+ * 1000₽ куплено ДО periodFrom, 50 продано по 1200₽ ВНУТРИ периода, остаток 50
+ * держится и стоит 60 000₽ сегодня):
+ * 1) Синтетический отток = себестоимость ВСЕЙ позиции (100000) + продажа даёт
+ *    полную выручку (60000) без корректировок → капитал задваивается (потоки
+ *    выглядят как рост в 2 раза, хотя цена выросла на 20%).
+ * 2) Поток продажи = только realized P&L (10000) → занижает XIRR: себестоимость
+ *    проданной доли остаётся «висеть» оттоком до конца, хотя капитал вернулся.
+ * 3) Компенсирующий приток НА periodFrom за проданную долю → устраняет задвоение,
+ *    но искусственно завышает XIRR (тысячи % годовых): проданная доля технически
+ *    «вложена» на periodFrom, хотя реально ею владели с более ранней даты покупки.
+ *
+ * РЕШЕНИЕ — FIFO по лотам с их РЕАЛЬНЫМИ датами покупки, один проход:
+ * каждая покупка — лот с датой/себестоимостью/количеством. Продажа списывает из
+ * лотов FIFO; для лота, распроданного ПОЛНОСТЬЮ ИЛИ ЧАСТИЧНО внутри периода,
+ * себестоимость списанной части идёт оттоком на РЕАЛЬНУЮ дату покупки лота (а не
+ * на periodFrom), а выручка — обычным притоком на дату продажи. Только то, что
+ * НЕ было продано и продолжает удерживаться на конец истории, получает
+ * синтетический отток на periodFrom (по себестоимости остатка). XIRR считается
+ * по всем потокам сразу, включая даты раньше periodFrom, если они относятся к
+ * доле, проданной внутри периода, — это корректно для money-weighted return,
+ * который по определению зависит от фактических дат вложений.
+ *
+ * На примере: лот 100@1000 (01.01.2025). Продажа 50 акций 01.09.2025 списывает
+ * половину лота — отток 50000 ложится на РЕАЛЬНУЮ дату 01.01.2025 (не periodFrom),
+ * приток 60000 — на дату продажи 01.09.2025. Остаток 50 акций держится → отток
+ * 50000 на periodFrom (31.07.2025). Терминал: +60000 сегодня. Итог потоков:
+ * −50000 (01.01) / +60000 (01.09) / −50000 (31.07) / +60000 (today) — доходность
+ * правдоподобна (около +25-30% годовых), без задвоения и без завышения.
+ *
+ * ВТОРОЙ БАГ, найден при ревью первой версии этого фикса: если Buy сразу добавлял
+ * отток на свою дату (для лотов внутри периода), а Sell-ветка ПОВТОРНО добавляла
+ * отток на ту же buyDate при списании лота — лот, целиком открытый и закрытый
+ * ВНУТРИ периода, получал себестоимость оттоком ДВАЖДЫ (при покупке и при
+ * продаже). Инвариант починки: Buy никогда не создаёт поток сразу — каждый лот
+ * получает свой единственный отток либо в Sell-ветке при списании (на buyDate),
+ * либо в финальном проходе для остатка, который не был распродан (на buyDate,
+ * если лот открыт внутри периода, либо на periodFrom, если лот открыт раньше).
+ */
+export function periodCashFlows(
+  ops: Operation[],
+  periodFrom: string | undefined,
+  currentValueRub: number,
+  today: string = new Date().toISOString().slice(0, 10),
+): CashFlow[] {
+  const sorted = [...ops].sort((a, b) => a.date.localeCompare(b.date));
+  const flows: CashFlow[] = [];
+  const queues = new Map<string, Lot[]>();
+
+  for (const op of sorted) {
+    if (op.operationType === 'Dividend' || op.operationType === 'Coupon') {
+      // дивиденды/купоны считаются только внутри периода (или всегда, если период не задан)
+      if (!periodFrom || op.date >= periodFrom) {
+        const fx = d(op.fxRate ?? '1');
+        flows.push({ date: op.date, amount: d(op.quantity).mul(d(op.price)).mul(fx).toNumber() });
+      }
+      continue;
+    }
+    if (!op.instrumentId || op.operationType === 'Transfer') continue;
+
+    const key = positionKey(op);
+    let queue = queues.get(key);
+    if (!queue) {
+      queue = [];
+      queues.set(key, queue);
+    }
+
+    const qty = d(op.quantity);
+    const price = d(op.price);
+    const fee = d(op.fee ?? '0');
+    const fxRate = d(op.fxRate ?? '1');
+
+    if (op.operationType === 'Buy') {
+      const costCcy = qty.mul(price).plus(fee);
+      // Buy НИКОГДА не даёт поток сразу здесь — себестоимость лота получит РОВНО
+      // ОДИН отток позже: либо в Sell-ветке (на buyDate, при списании FIFO, если
+      // лот распродаётся), либо в финальном проходе для непроданного остатка (на
+      // buyDate — если лот открыт внутри периода, либо на periodFrom — если лот
+      // открыт до периода). Добавлять отток здесь ЖЕ было бы вторым источником
+      // для того же рубля себестоимости и приводило бы к задвоению оттока для
+      // лотов, целиком открытых и закрытых внутри периода (найдено 2026-08-01).
+      queue.push({ buyDate: op.date, costRub: costCcy.mul(fxRate), costCcy, quantity: qty });
+    } else if (op.operationType === 'Sell') {
+      let remaining = qty;
+      const proceedsRub = qty.mul(price).minus(fee).mul(fxRate);
+
+      while (remaining.gt(0) && queue.length > 0) {
+        const lot = queue[0];
+        const take = Decimal.min(remaining, lot.quantity);
+        const share = lot.quantity.isZero() ? new Decimal(0) : take.div(lot.quantity);
+        const takeCostCcy = lot.costCcy.mul(share);
+        // Себестоимость списываемой доли в рублях берём ПРОПОРЦИОНАЛЬНО lot.costRub,
+        // т.е. по курсу ПОКУПКИ, а не по fxRate продажи: поток датируется buyDate,
+        // и рубли там были потрачены по историческому курсу. Пересчёт через fxRate
+        // продажи (было до 2026-08-02) разъезжался с lot.costRub на инструментах в
+        // валюте — себестоимость неверно делилась между оттоком на дату покупки и
+        // синтетикой на periodFrom, а при сильном росте курса остаток лота уходил
+        // в минус и синтетический отток молча терялся (`syntheticOpening.gt(0)`).
+        const takeCostRub = lot.costRub.mul(share);
+
+        // без периода — отток на РЕАЛЬНУЮ дату покупки лота (money-weighted по
+        // всей истории); с периодом — отток на дату покупки лота ТОЛЬКО если эта
+        // продажа попадает внутрь периода (иначе это прошлое, вне окна XIRR, и
+        // себестоимость проданного до periodFrom не должна попадать в потоки —
+        // ни синтетикой, ни реальной датой)
+        if (!periodFrom || op.date >= periodFrom) {
+          flows.push({ date: lot.buyDate, amount: -takeCostRub.toNumber() });
+        }
+
+        lot.quantity = lot.quantity.minus(take);
+        lot.costCcy = lot.costCcy.minus(takeCostCcy);
+        lot.costRub = lot.costRub.minus(takeCostRub);
+        remaining = remaining.minus(take);
+        if (lot.quantity.lte(0)) queue.shift();
+      }
+
+      if (!periodFrom || op.date >= periodFrom) {
+        flows.push({ date: op.date, amount: proceedsRub.toNumber() });
+      }
+    }
+  }
+
+  // Остатки лотов, НЕ распроданные к концу истории, получают отток РОВНО ОДИН
+  // раз здесь: если лот открыт ДО periodFrom — синтетический отток на periodFrom
+  // (нельзя использовать реальную дату — она вне окна и обесценит XIRR за период
+  // до XIRR почти за всю историю); если лот открыт ВНУТРИ периода (или период не
+  // задан) — обычный отток на его РЕАЛЬНУЮ дату покупки.
+  let syntheticOpening = new Decimal(0);
+  for (const queue of queues.values()) {
+    for (const lot of queue) {
+      if (lot.quantity.lte(0)) continue;
+      if (periodFrom && lot.buyDate < periodFrom) {
+        syntheticOpening = syntheticOpening.plus(lot.costRub);
+      } else {
+        flows.push({ date: lot.buyDate, amount: -lot.costRub.toNumber() });
+      }
+    }
+  }
+  if (syntheticOpening.gt(0) && periodFrom) {
+    flows.push({ date: periodFrom, amount: -syntheticOpening.toNumber() });
+  }
+
+  if (currentValueRub > 0) {
+    flows.push({ date: today, amount: currentValueRub });
+  }
+
+  return flows;
 }
 
 const MS_PER_YEAR = 365 * 24 * 60 * 60 * 1000;

@@ -293,6 +293,10 @@ interface StatsRow extends TradeStats {
         display: flex;
         flex-direction: column;
         min-height: 0;
+        padding: 20px 30px;
+        /* .tab-content задаёт height: 100% — без border-box паддинги добавились бы
+           к высоте и вкладка вылезла бы за пределы mat-tab-body на 40px */
+        box-sizing: border-box;
       }
       .stats-tab-content {
         overflow: auto;
@@ -302,7 +306,9 @@ interface StatsRow extends TradeStats {
         flex: 0 0 auto;
         display: flex;
         gap: 8px;
-        padding: 12px 12px 0;
+        /* горизонтальный отступ теперь на .trades-tab-content — свой добавлять
+           нельзя, иначе фильтр съезжает вправо относительно таблицы под ним */
+        padding-bottom: 12px;
       }
       .filters mat-form-field {
         width: 220px;

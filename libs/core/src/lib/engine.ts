@@ -127,6 +127,93 @@ export function calculatePositions(operations: Operation[]): PositionResult[] {
   return [...map.values()];
 }
 
+export interface RealizedInRangeResult {
+  instrumentId: string;
+  systemId: string;
+  portfolioId: string;
+  /** реализованный P&L в рублях от продаж, попавших в [from, till] */
+  realizedPnlRub: Decimal;
+}
+
+/**
+ * Реализованный P&L ИМЕННО от продаж внутри [from, till] (включительно, YYYY-MM-DD),
+ * а не за всё время (в отличие от calculatePositions()/calculateTrades()). Средняя
+ * цена лота на момент каждой продажи всё равно считается по ПОЛНОЙ истории покупок
+ * до неё (`operations` должны содержать её всю, а не только срез периода) — иначе
+ * себестоимость проданного была бы искажена, если покупка была до начала периода.
+ * Нужна для периодного среза «Эффективности» на дашборде (operations.service.ts).
+ */
+export function realizedPnlInRange(
+  operations: Operation[],
+  from?: string,
+  till?: string,
+): RealizedInRangeResult[] {
+  const map = new Map<
+    string,
+    {
+      instrumentId: string;
+      systemId: string;
+      portfolioId: string;
+      avgBuyPrice: Decimal;
+      quantity: Decimal;
+      realizedPnlRub: Decimal;
+    }
+  >();
+
+  const sorted = [...operations]
+    .filter((op) => !till || op.date <= till)
+    .sort((a, b) => a.date.localeCompare(b.date));
+
+  for (const op of sorted) {
+    if (!op.instrumentId) continue;
+    if (op.operationType === 'Transfer') continue;
+
+    const key = positionKey(op);
+    let pos = map.get(key);
+    if (!pos) {
+      pos = {
+        instrumentId: op.instrumentId,
+        systemId: op.systemId,
+        portfolioId: op.portfolioId,
+        avgBuyPrice: new Decimal(0),
+        quantity: new Decimal(0),
+        realizedPnlRub: new Decimal(0),
+      };
+      map.set(key, pos);
+    }
+
+    const qty = d(op.quantity);
+    const price = d(op.price);
+    const fee = d(op.fee ?? '0');
+    const fxRate = d(op.fxRate ?? '1');
+
+    if (op.operationType === 'Buy') {
+      const cost = qty.mul(price).plus(fee);
+      const investedCcy = pos.avgBuyPrice.mul(pos.quantity).plus(cost);
+      pos.quantity = pos.quantity.plus(qty);
+      pos.avgBuyPrice = pos.quantity.isZero() ? new Decimal(0) : investedCcy.div(pos.quantity);
+    } else if (op.operationType === 'Sell') {
+      const costOfSold = pos.avgBuyPrice.mul(qty);
+      const proceeds = qty.mul(price).minus(fee);
+      if (!from || op.date >= from) {
+        pos.realizedPnlRub = pos.realizedPnlRub.plus(proceeds.minus(costOfSold).mul(fxRate));
+      }
+      pos.quantity = pos.quantity.minus(qty);
+      if (pos.quantity.lte(0)) {
+        pos.quantity = new Decimal(0);
+        pos.avgBuyPrice = new Decimal(0);
+      }
+    }
+  }
+
+  return [...map.values()].map(({ instrumentId, systemId, portfolioId, realizedPnlRub }) => ({
+    instrumentId,
+    systemId,
+    portfolioId,
+    realizedPnlRub,
+  }));
+}
+
 /** Нереализованный P&L позиции по текущей цене (в валюте инструмента) */
 export function unrealizedPnl(pos: PositionResult, currentPrice: Decimal): Decimal {
   const currentValue = pos.quantity.mul(currentPrice);
