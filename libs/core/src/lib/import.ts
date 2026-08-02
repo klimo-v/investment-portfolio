@@ -192,7 +192,11 @@ export function normalizeRow(
     };
   }
 
-  let { type, confidence, reason } = classifyOperationType(raw);
+  // confidence/reason ниже могут быть понижены до warn, тип операции — нет
+  const classified = classifyOperationType(raw);
+  const type = classified.type;
+  let confidence = classified.confidence;
+  let reason = classified.reason;
 
   // Система не пришла явно (типично для HTML-отчётов) и не выбрана явно для этого
   // инструмента в этом импорте — значит, взята из батч-дефолта, а он один на весь
