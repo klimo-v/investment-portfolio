@@ -12,6 +12,54 @@ html {
       density: 0,
     )
   );
+
+  /*
+   * Семантические токены приложения — ЕДИНСТВЕННОЕ место, где в проекте живёт цвет.
+   * Слой поверх --mat-sys-* (их генерирует mat.theme() выше). Компоненты обязаны
+   * ссылаться на var(--app-*), а не писать литералы: иначе тёмная тема разъезжается,
+   * потому что --mat-sys-* уже приходят как light-dark(), а хардкод — нет.
+   *
+   * Почему custom properties, а не SCSS-переменные: последние запекаются на этапе
+   * сборки и в light-dark() участвовать не могут. Почему не utility-классы: токен
+   * подставляется внутрь существующего правила (border: 1px solid var(--app-outline)),
+   * а класс потребовал бы править каждый шаблон.
+   */
+
+  /* Текст и границы — прямые алиасы M3 */
+  --app-text-muted: var(--mat-sys-on-surface-variant);
+  --app-outline: var(--mat-sys-outline-variant);
+  --app-danger: var(--mat-sys-error);
+
+  /*
+   * P&L и статусы. В M3 нет ролей success/warning, поэтому светлую и тёмную пару
+   * задаём вручную через light-dark(). Тёмные варианты осветлены: исходные #2e7d32 /
+   * #c62828 на тёмной поверхности не добирают контраста до WCAG AA.
+   */
+  --app-pnl-positive: light-dark(#2e7d32, #81c784);
+  --app-pnl-negative: light-dark(#c62828, #ef9a9a);
+  --app-warn: light-dark(#f57f17, #ffcc80);
+  --app-info: light-dark(#0277bd, #90caf9);
+
+  /* Фоны чипов (страницы «Сделки» и «Импорт») */
+  --app-chip-success-bg: light-dark(#e8f5e9, #1b3a24);
+  --app-chip-success-fg: light-dark(#2e7d32, #a5d6a7);
+  --app-chip-warn-bg: light-dark(#fff3e0, #40301a);
+  --app-chip-warn-fg: light-dark(#ef6c00, #ffcc80);
+  --app-chip-danger-bg: light-dark(#ffebee, #43201f);
+  --app-chip-danger-fg: light-dark(#c62828, #ef9a9a);
+  --app-chip-info-bg: light-dark(#e3f2fd, #17293a);
+  --app-chip-info-fg: light-dark(#1565c0, #90caf9);
+  --app-chip-neutral-bg: light-dark(#eceff1, #2a2f31);
+  --app-chip-neutral-fg: light-dark(#455a64, #b0bec5);
+
+  /* Поверхности */
+  --app-table-header-bg: var(--mat-sys-surface-container-low);
+  --app-sidenav-bg: var(--mat-sys-surface-container);
+
+  /* Размеры */
+  --app-chart-h: 320px;
+  --app-chart-h-tall: 400px;
+  --app-page-pad: clamp(12px, 3vw, 24px);
 }
 
 body {
@@ -19,13 +67,21 @@ body {
   font-family: Roboto, 'Helvetica Neue', sans-serif;
 }
 
-/* P&L цвета — единообразно везде (docs/03-ux-plan.md) */
+/*
+ * P&L цвета — единообразно везде (docs/03-ux-plan.md). Селекторы намеренно включают
+ * `td.…`: внутри mat-table правило Material `.mat-mdc-cell` имеет ту же
+ * специфичность (0,1,0), и при равенстве решает порядок подключения, а стили
+ * компонентов инжектятся ПОСЛЕ глобальных. Без `td.` P&L в таблицах терял бы цвет.
+ */
+td.pnl-positive,
 .pnl-positive {
-  color: #2e7d32;
+  color: var(--app-pnl-positive);
 }
+td.pnl-negative,
 .pnl-negative {
-  color: #c62828;
+  color: var(--app-pnl-negative);
 }
+td.pnl-zero,
 .pnl-zero {
   color: inherit;
 }
@@ -34,6 +90,37 @@ body {
   margin: 0 0 16px;
   font-size: 24px;
   font-weight: 500;
+}
+
+/*
+ * Раскладочные примитивы, повторявшиеся в 3-5 страницах дословно. Держим глобальными
+ * классами, а не компонентами: содержимое у страниц расходится, а обёртка добавила бы
+ * уровень DOM ради нуля (см. решение «что НЕ извлекаем» в плане рефактора).
+ */
+
+/* Шапка страницы: заголовок слева, действия/фильтры справа */
+.page-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.page-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* Контейнер canvas'а Chart.js — высота обязана быть фиксированной (responsive: true) */
+.chart-box {
+  position: relative;
+  width: 100%;
+  height: var(--app-chart-h);
+}
+.chart-box.tall {
+  height: var(--app-chart-h-tall);
 }
 
 /*
@@ -56,6 +143,10 @@ body {
     color: #fff !important;
   }
 }
+/*
+ * Тосты берут светлый вариант токена и в тёмной теме: белый текст задан выше жёстко,
+ * а осветлённая пара (#81c784/#ef9a9a) под белым текстом не добирает контраста.
+ */
 .toast-success .mdc-snackbar__surface,
 .toast-success .mat-mdc-snackbar-surface {
   background-color: #2e7d32 !important;

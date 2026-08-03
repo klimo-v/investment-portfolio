@@ -83,13 +83,13 @@ interface NavItem {
         height: calc(100vh - 64px);
       }
       mat-sidenav {
-        border-right: 1px solid rgba(0, 0, 0, 0.12);
-        background: #fafafa;
+        border-right: 1px solid var(--app-outline);
+        background: var(--app-sidenav-bg);
       }
       .content {
         display: flex;
         flex-direction: column;
-        padding: 24px;
+        padding: var(--app-page-pad);
         box-sizing: border-box;
         height: 100%;
       }

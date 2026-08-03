@@ -9,6 +9,7 @@ import { MatDatepickerModule } from '@angular/material/datepicker';
 import { BaseChartDirective } from 'ng2-charts';
 import type { ChartConfiguration } from 'chart.js';
 import { maxDrawdown, type Effectiveness } from '@core';
+import { chartSemantic, seriesColor } from '@web-shared';
 import { OperationApi } from '../../entities/operation/operation.api';
 import { SnapshotApi } from '../../entities/snapshot/snapshot.api';
 import { BenchmarkApi } from '../../entities/benchmark/benchmark.api';
@@ -23,17 +24,6 @@ import { formatMoney, formatPercent, pnlColorClass } from '@web-shared';
  * систем/портфелей, чтобы их можно было сравнивать (абсолютный P&L сравнивать
  * нельзя). Плюс max drawdown из снимков и линия «Портфель vs IMOEX/Депозит».
  */
-
-/** Палитра из portfolio_dashboard.html */
-const C = {
-  blue: '#2a78d6',
-  gray: '#888780',
-  green: '#199e70',
-  greenT: '#1baf7a',
-  red: '#e34948',
-  violet: '#8e5bd8',
-  amber: '#e0a400',
-};
 
 /**
  * Годовая ставка вклада-ориентира для линии «Депозит» (что было бы, положи те же
@@ -63,7 +53,7 @@ interface EffRow extends Effectiveness {
     BaseChartDirective,
   ],
   template: `
-    <div class="header">
+    <div class="page-header">
       <h1 class="page-title">
         Дашборд
         @if (periodLabel(); as label) {
@@ -355,13 +345,6 @@ interface EffRow extends Effectiveness {
   `,
   styles: [
     `
-      .header {
-        display: flex;
-        justify-content: space-between;
-        align-items: flex-start;
-        flex-wrap: wrap;
-        gap: 12px;
-      }
       .filters {
         display: flex;
         align-items: center;
@@ -377,7 +360,7 @@ interface EffRow extends Effectiveness {
       .period-range {
         font-size: 14px;
         font-weight: 400;
-        color: rgba(0, 0, 0, 0.6);
+        color: var(--app-text-muted);
         white-space: nowrap;
         margin-left: 8px;
       }
@@ -395,7 +378,7 @@ interface EffRow extends Effectiveness {
       .sub {
         margin-top: 4px;
         font-size: 12px;
-        color: rgba(0, 0, 0, 0.6);
+        color: var(--app-text-muted);
       }
       .hint {
         display: inline-flex;
@@ -404,8 +387,10 @@ interface EffRow extends Effectiveness {
         width: 14px;
         height: 14px;
         border-radius: 50%;
-        border: 1px solid rgba(0, 0, 0, 0.4);
-        color: rgba(0, 0, 0, 0.6);
+        /* --app-text-muted, а не --app-outline: outline-variant в M3 намеренно
+           малоконтрастен (для разделителей), и бейдж «?» на нём почти пропадает */
+        border: 1px solid var(--app-text-muted);
+        color: var(--app-text-muted);
         font-size: 10px;
         cursor: help;
       }
@@ -445,25 +430,9 @@ interface EffRow extends Effectiveness {
       .note {
         margin: 0 0 12px;
         font-size: 13px;
-        color: rgba(0, 0, 0, 0.6);
+        color: var(--app-text-muted);
       }
-      .chart-box {
-        position: relative;
-        width: 100%;
-        height: 320px;
-      }
-      .chart-box.tall {
-        height: 400px;
-      }
-      .pnl-positive {
-        color: #2e7d32;
-      }
-      .pnl-negative {
-        color: #c62828;
-      }
-      .error {
-        color: #c62828;
-      }
+      /* .chart-box, .pnl-*, .error — глобальные (styles.scss), локальных копий не держим */
     `,
   ],
 })
@@ -630,12 +599,12 @@ export class DashboardPage {
     });
   }
 
-  /** Палитра для линий инструментов (достаточно распознаваемых цветов на портфель) */
-  private static readonly LINE_PALETTE = [
-    '#2a78d6', '#199e70', '#e0a400', '#8e5bd8', '#e34948', '#1baf7a', '#d6772a',
-    '#5b8ad8', '#b0431f', '#3fa7b8', '#c85fa0', '#7a9e19', '#9e6b19', '#5f5fd8',
-    '#d84f8e', '#4f9ed8',
-  ];
+  /**
+   * Смысловые цвета графиков под текущую тему (@web-shared/chart-tokens).
+   * Пока константа — на этапе «тёмная тема» станет computed от theme.isDark(),
+   * и все шесть чарт-computed() пересоберутся сами.
+   */
+  protected readonly cc = chartSemantic(false);
 
   /**
    * «Стоимость инструментов во времени»: по линии на инструмент (RUB, null —
@@ -647,13 +616,12 @@ export class DashboardPage {
   protected readonly positionsChart = computed<ChartConfiguration<'line'> | null>(() => {
     const s = this.positionSeries.series.value();
     if (!s || s.dates.length === 0) return null;
-    const palette = DashboardPage.LINE_PALETTE;
 
     const instrumentDatasets = s.instruments.map((ins, i) => ({
       label: ins.ticker,
       data: ins.values,
-      borderColor: palette[i % palette.length],
-      backgroundColor: palette[i % palette.length],
+      borderColor: seriesColor(i),
+      backgroundColor: seriesColor(i),
       borderWidth: 1.5,
       pointRadius: 0,
       tension: 0.2,
@@ -669,8 +637,8 @@ export class DashboardPage {
           {
             label: 'Итого',
             data: s.total,
-            borderColor: '#111',
-            backgroundColor: '#111',
+            borderColor: this.cc.total,
+            backgroundColor: this.cc.total,
             borderWidth: 2.5,
             pointRadius: 0,
             tension: 0.2,
@@ -678,8 +646,8 @@ export class DashboardPage {
           {
             label: 'Внесено (нетто)',
             data: s.netContributions,
-            borderColor: C.gray,
-            backgroundColor: C.gray,
+            borderColor: this.cc.neutral,
+            backgroundColor: this.cc.neutral,
             borderWidth: 2,
             borderDash: [6, 4],
             pointRadius: 0,
@@ -741,9 +709,9 @@ export class DashboardPage {
       data: {
         labels: s.map((r) => r.date),
         datasets: [
-          { label: 'Портфель', data: portfolio, borderColor: C.blue, backgroundColor: C.blue, pointRadius: 2, tension: 0.2 },
-          { label: 'IMOEX', data: imoex, borderColor: C.amber, backgroundColor: C.amber, pointRadius: 2, tension: 0.2 },
-          { label: 'Депозит', data: deposit, borderColor: C.gray, backgroundColor: C.gray, pointRadius: 0, borderDash: [6, 4], tension: 0 },
+          { label: 'Портфель', data: portfolio, borderColor: seriesColor(0), backgroundColor: seriesColor(0), pointRadius: 2, tension: 0.2 },
+          { label: 'IMOEX', data: imoex, borderColor: this.cc.benchmark, backgroundColor: this.cc.benchmark, pointRadius: 2, tension: 0.2 },
+          { label: 'Депозит', data: deposit, borderColor: this.cc.deposit, backgroundColor: this.cc.deposit, pointRadius: 0, borderDash: [6, 4], tension: 0 },
         ],
       },
       options: {
@@ -765,13 +733,13 @@ export class DashboardPage {
   /** Комбо по месяцам: столбцы Поток (серый) и Доход (зелёный/красный по знаку) */
   protected readonly timelineChart = computed<ChartConfiguration<'bar'>>(() => {
     const t = this.api.summary.value()?.timeline ?? [];
-    const incomeColors = t.map((r) => (r.income >= 0 ? C.greenT : C.red));
+    const incomeColors = t.map((r) => (r.income >= 0 ? this.cc.positive : this.cc.negative));
     return {
       type: 'bar',
       data: {
         labels: t.map((r) => r.period),
         datasets: [
-          { label: 'Поток', data: t.map((r) => r.flow), backgroundColor: C.gray, borderRadius: 3 },
+          { label: 'Поток', data: t.map((r) => r.flow), backgroundColor: this.cc.neutral, borderRadius: 3 },
           {
             label: 'Доход',
             data: t.map((r) => r.income),
@@ -807,7 +775,7 @@ export class DashboardPage {
           {
             label: 'P&L ₽',
             data: s.map((r) => r.pnlRub),
-            backgroundColor: s.map((r) => (r.pnlRub >= 0 ? C.green : C.red)),
+            backgroundColor: s.map((r) => (r.pnlRub >= 0 ? this.cc.positive : this.cc.negative)),
             borderRadius: 3,
           },
         ],
@@ -835,7 +803,7 @@ export class DashboardPage {
           {
             label: 'P&L ₽',
             data: b.map((r) => r.pnlRub),
-            backgroundColor: b.map((r) => (r.pnlRub >= 0 ? C.green : C.red)),
+            backgroundColor: b.map((r) => (r.pnlRub >= 0 ? this.cc.positive : this.cc.negative)),
             borderRadius: 3,
           },
         ],

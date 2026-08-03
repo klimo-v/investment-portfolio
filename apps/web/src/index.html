@@ -11,8 +11,13 @@
       href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500&display=swap"
       rel="stylesheet"
     />
+    <!--
+      display=block, а не swap: иконки Material — лигатуры, и до загрузки шрифта
+      браузер рисует их ИСХОДНЫЙ ТЕКСТ («menu», «delete», «refresh») прямо в кнопках.
+      block прячет их на время загрузки — пустое место лучше, чем мусорные слова.
+    -->
     <link
-      href="https://fonts.googleapis.com/icon?family=Material+Icons"
+      href="https://fonts.googleapis.com/icon?family=Material+Icons&display=block"
       rel="stylesheet"
     />
   </head>

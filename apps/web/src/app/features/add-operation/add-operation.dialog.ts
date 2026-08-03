@@ -156,7 +156,7 @@ const OPERATION_TYPES = [
         width: 100%;
       }
       .error {
-        color: #c62828;
+        color: var(--app-danger);
         margin: 8px 0 0;
       }
     `,

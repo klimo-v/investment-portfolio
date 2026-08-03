@@ -227,16 +227,15 @@ import { ReassignOperationsDialog } from '../../features/reassign-operations/rea
       table {
         width: 100%;
       }
+      /* Липкий заголовок непрозрачен, иначе строки просвечивают при скролле */
       th {
-        background: white;
+        background: var(--app-table-header-bg);
       }
-      .error {
-        color: #c62828;
-      }
+      /* .error — глобальный (styles.scss) */
       .empty {
         padding: 24px;
         text-align: center;
-        color: rgba(0, 0, 0, 0.6);
+        color: var(--app-text-muted);
       }
       mat-paginator {
         flex: 0 0 auto;

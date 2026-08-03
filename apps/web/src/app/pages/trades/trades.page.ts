@@ -339,7 +339,7 @@ interface StatsRow extends TradeStats {
       }
       .muted {
         font-size: 12px;
-        color: rgba(0, 0, 0, 0.5);
+        color: var(--app-text-muted);
       }
       .kpis {
         display: flex;
@@ -353,7 +353,7 @@ interface StatsRow extends TradeStats {
       }
       .kpi-label {
         font-size: 12px;
-        color: rgba(0, 0, 0, 0.6);
+        color: var(--app-text-muted);
       }
       .kpi-value {
         font-size: 18px;
@@ -391,8 +391,9 @@ interface StatsRow extends TradeStats {
       table {
         width: 100%;
       }
+      /* Липкий заголовок непрозрачен, иначе строки просвечивают при скролле */
       th {
-        background: white;
+        background: var(--app-table-header-bg);
       }
       .clickable-row {
         cursor: pointer;
@@ -417,30 +418,22 @@ interface StatsRow extends TradeStats {
         font-size: 12px;
       }
       .status-open {
-        background: #e3f2fd;
-        color: #1565c0;
+        background: var(--app-chip-info-bg);
+        color: var(--app-chip-info-fg);
       }
       .status-partial {
-        background: #fff3e0;
-        color: #ef6c00;
+        background: var(--app-chip-warn-bg);
+        color: var(--app-chip-warn-fg);
       }
       .status-closed {
-        background: #eceff1;
-        color: #455a64;
+        background: var(--app-chip-neutral-bg);
+        color: var(--app-chip-neutral-fg);
       }
-      .pnl-positive {
-        color: #2e7d32;
-      }
-      .pnl-negative {
-        color: #c62828;
-      }
+      /* .pnl-*, .error — глобальные (styles.scss), локальных копий не держим */
       .empty {
         padding: 24px;
         text-align: center;
-        color: rgba(0, 0, 0, 0.6);
-      }
-      .error {
-        color: #c62828;
+        color: var(--app-text-muted);
       }
     `,
   ],

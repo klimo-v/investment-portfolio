@@ -93,11 +93,11 @@ import { ReferenceApi } from '../../entities/reference/reference.api';
         flex: 1;
       }
       .error {
-        color: #c62828;
+        color: var(--app-danger);
         margin: 8px 0 0;
       }
       .empty {
-        color: rgba(0, 0, 0, 0.6);
+        color: var(--app-text-muted);
         padding: 8px 0;
       }
     `,

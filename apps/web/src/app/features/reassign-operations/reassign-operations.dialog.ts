@@ -28,7 +28,7 @@ export interface ReassignOperationsResult {
   template: `
     <h2 mat-dialog-title>Назначить систему/портфель</h2>
     <mat-dialog-content>
-      <p class="hint">Операций выбрано: {{ data.count }}. Незаполненное поле не меняется.</p>
+      <p class="muted">Операций выбрано: {{ data.count }}. Незаполненное поле не меняется.</p>
       <p class="warn-note">
         Переназначение задним числом стирает накопленную историю снимков портфеля
         (просадка и график динамики на дашборде) — она начнёт копиться заново со
@@ -71,16 +71,17 @@ export interface ReassignOperationsResult {
         gap: 8px;
         min-width: 320px;
       }
-      .hint {
+      /* .muted, а не .hint: имя .hint зарезервировано под бейдж-подсказку «?» */
+      .muted {
         margin: 0 0 8px;
-        color: rgba(0, 0, 0, 0.6);
+        color: var(--app-text-muted);
       }
       .warn-note {
         margin: 0 0 8px;
         padding: 8px;
         border-radius: 4px;
-        background: rgba(237, 108, 2, 0.1);
-        color: #ed6c02;
+        background: color-mix(in srgb, var(--app-warn) 12%, transparent);
+        color: var(--app-warn);
         font-size: 0.85em;
       }
     `,

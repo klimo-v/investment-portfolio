@@ -1,4 +1,5 @@
 // UI-kit и общие утилиты фронта (styleguide). Тег FSD: type:ui.
+export * from './lib/theme/chart-tokens';
 export * from './lib/format';
 export * from './lib/extract-error-message';
 export * from './lib/toast.service';

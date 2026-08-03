@@ -67,7 +67,7 @@ import { ReferenceApi } from '../../entities/reference/reference.api';
       </div>
 
       @if (format() !== 'csv' && !batchReady()) {
-        <p class="hint">Для этого формата выберите портфель и систему — они применятся ко всем операциям файла.</p>
+        <p class="warn-note">Для этого формата выберите портфель и систему — они применятся ко всем операциям файла.</p>
       }
     </mat-card>
 
@@ -188,7 +188,7 @@ import { ReferenceApi } from '../../entities/reference/reference.api';
       }
       .rules-hint {
         margin: 0 0 12px;
-        color: rgba(0, 0, 0, 0.7);
+        color: var(--app-text-muted);
       }
       .rule-row {
         display: flex;
@@ -206,11 +206,12 @@ import { ReferenceApi } from '../../entities/reference/reference.api';
       }
       .file {
         margin: 8px 0 0;
-        color: rgba(0, 0, 0, 0.7);
+        color: var(--app-text-muted);
       }
-      .hint {
+      /* .warn-note, а не .hint: имя .hint зарезервировано под бейдж-подсказку «?» */
+      .warn-note {
         margin: 4px 0 0;
-        color: #f57f17;
+        color: var(--app-warn);
       }
       .spacer {
         flex: 1;
@@ -225,24 +226,22 @@ import { ReferenceApi } from '../../entities/reference/reference.api';
         white-space: nowrap;
       }
       .chip.ok {
-        background: #e8f5e9;
-        color: #2e7d32;
+        background: var(--app-chip-success-bg);
+        color: var(--app-chip-success-fg);
       }
       .chip.warn {
-        background: #fff8e1;
-        color: #f57f17;
+        background: var(--app-chip-warn-bg);
+        color: var(--app-chip-warn-fg);
       }
       .chip.dup {
-        background: #eceff1;
-        color: #607d8b;
+        background: var(--app-chip-neutral-bg);
+        color: var(--app-chip-neutral-fg);
       }
       .chip.err {
-        background: #ffebee;
-        color: #c62828;
+        background: var(--app-chip-danger-bg);
+        color: var(--app-chip-danger-fg);
       }
-      .error {
-        color: #c62828;
-      }
+      /* .error — глобальный (styles.scss) */
     `,
   ],
 })

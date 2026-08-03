@@ -12,6 +12,11 @@ import type { ChartConfiguration } from 'chart.js';
 import type { InstrumentType } from '@core';
 import { OperationApi } from '../../entities/operation/operation.api';
 import { ReferenceApi } from '../../entities/reference/reference.api';
+import {
+  TYPE_COLOR,
+  TYPE_LABEL,
+  TYPE_ORDER,
+} from '../../entities/instrument/instrument-type.tokens';
 import { ManagePortfoliosDialog } from '../../features/manage-portfolios/manage-portfolios.dialog';
 import { ManageSystemsDialog } from '../../features/manage-systems/manage-systems.dialog';
 import { formatMoney, pnlColorClass } from '@web-shared';
@@ -22,25 +27,6 @@ import { formatMoney, pnlColorClass } from '@web-shared';
  * Группировка по типам инструментов, фильтр по системе/портфелю, круговая
  * диаграмма распределения текущей стоимости.
  */
-
-/** Русские подписи типов инструментов + палитра для круговой диаграммы */
-const TYPE_LABEL: Record<InstrumentType, string> = {
-  Stock: 'Акции',
-  Bond: 'Облигации',
-  ETF: 'Фонды (ETF)',
-  Currency: 'Валюта',
-  Crypto: 'Крипта',
-  Cash: 'Кэш',
-};
-const TYPE_ORDER: InstrumentType[] = ['Stock', 'Bond', 'ETF', 'Currency', 'Crypto', 'Cash'];
-const TYPE_COLOR: Record<InstrumentType, string> = {
-  Stock: '#2a78d6',
-  Bond: '#199e70',
-  ETF: '#8e5bd8',
-  Currency: '#e0a400',
-  Crypto: '#e07a1f',
-  Cash: '#888780',
-};
 
 interface Row {
   ticker: string;
@@ -273,7 +259,7 @@ interface Group {
         font-weight: 500;
       }
       .group-total {
-        color: rgba(0, 0, 0, 0.6);
+        color: var(--app-text-muted);
       }
       .hint-icon {
         display: inline-flex;
@@ -282,8 +268,10 @@ interface Group {
         width: 14px;
         height: 14px;
         border-radius: 50%;
-        border: 1px solid rgba(0, 0, 0, 0.4);
-        color: rgba(0, 0, 0, 0.6);
+        /* --app-text-muted, а не --app-outline: outline-variant в M3 намеренно
+           малоконтрастен (для разделителей), и бейдж «?» на нём почти пропадает */
+        border: 1px solid var(--app-text-muted);
+        color: var(--app-text-muted);
         font-size: 10px;
         cursor: help;
       }
@@ -294,21 +282,14 @@ interface Group {
         margin: 0 0 8px;
         font-weight: 500;
       }
-      .chart-box {
-        position: relative;
-        width: 100%;
-        height: 320px;
-      }
       table {
         width: 100%;
       }
-      .error {
-        color: #c62828;
-      }
+      /* .chart-box и .error — глобальные (styles.scss) */
       .empty {
         padding: 24px;
         text-align: center;
-        color: rgba(0, 0, 0, 0.6);
+        color: var(--app-text-muted);
       }
     `,
   ],
