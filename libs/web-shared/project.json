@@ -4,5 +4,14 @@
   "sourceRoot": "libs/web-shared/src",
   "projectType": "library",
   "tags": ["type:ui", "scope:web"],
-  "targets": {}
+  "targets": {
+    "test": {
+      "executor": "@angular/build:unit-test",
+      "options": {
+        "tsConfig": "libs/web-shared/tsconfig.spec.json",
+        "providersFile": "libs/web-shared/src/test-providers.ts",
+        "buildTarget": "web:build:development"
+      }
+    }
+  }
 }
