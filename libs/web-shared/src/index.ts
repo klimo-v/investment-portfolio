@@ -10,6 +10,7 @@ export * from './lib/ui/state-message/state-message';
 export * from './lib/ui/status-chip/status-chip';
 export * from './lib/format';
 export * from './lib/paging';
+export * from './lib/sorting';
 export * from './lib/extract-error-message';
 export * from './lib/toast.service';
 export * from './lib/loading.service';

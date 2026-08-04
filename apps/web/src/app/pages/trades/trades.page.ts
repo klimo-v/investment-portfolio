@@ -16,6 +16,7 @@ import { MatFormFieldModule } from '@angular/material/form-field';
 import { MatSelectModule } from '@angular/material/select';
 import { MatButtonToggleModule } from '@angular/material/button-toggle';
 import { MatPaginatorModule, type PageEvent } from '@angular/material/paginator';
+import { MatSortModule, type Sort } from '@angular/material/sort';
 import { OperationApi } from '../../entities/operation/operation.api';
 import { ReferenceApi } from '../../entities/reference/reference.api';
 import {
@@ -24,10 +25,13 @@ import {
   KpiCard,
   pageSlice,
   pnlColorClass,
+  sortRows,
   StateMessage,
   StatusChip,
   type ChipTone,
   type KpiTone,
+  type SortKey,
+  type SortState,
 } from '@web-shared';
 import { tradeStats, type Trade, type TradeStats, type TradeStatInput } from '@core';
 
@@ -59,6 +63,7 @@ interface StatsRow extends TradeStats {
     MatSelectModule,
     MatButtonToggleModule,
     MatPaginatorModule,
+    MatSortModule,
     NgTemplateOutlet,
     KpiCard,
     StateMessage,
@@ -233,39 +238,52 @@ interface StatsRow extends TradeStats {
           />
         } @else {
         <div class="table-scroll">
-          <table mat-table [dataSource]="rows" multiTemplateDataRows>
+          <!--
+            matSort у каждого таба свой (состояние — в sortState(key)), как и страница:
+            общий на два списка означал бы, что стрелка в заголовке «Закрытых» врёт
+            про порядок «Открытых».
+          -->
+          <table
+            mat-table
+            matSort
+            [matSortActive]="sortState(key).active"
+            [matSortDirection]="sortState(key).direction"
+            (matSortChange)="onSort(key, $event)"
+            [dataSource]="rows"
+            multiTemplateDataRows
+          >
             <ng-container matColumnDef="status">
-              <th mat-header-cell *matHeaderCellDef>Статус</th>
+              <th mat-header-cell *matHeaderCellDef mat-sort-header>Статус</th>
               <td mat-cell *matCellDef="let t">
                 <app-status-chip [tone]="statusTone(t.status)">{{ statusLabel(t.status) }}</app-status-chip>
               </td>
             </ng-container>
             <ng-container matColumnDef="ticker">
-              <th mat-header-cell *matHeaderCellDef>Тикер</th>
+              <th mat-header-cell *matHeaderCellDef mat-sort-header>Тикер</th>
               <td mat-cell *matCellDef="let t">{{ t.ticker }}</td>
             </ng-container>
             <ng-container matColumnDef="qty">
-              <th mat-header-cell *matHeaderCellDef>Кол-во</th>
+              <th mat-header-cell *matHeaderCellDef mat-sort-header>Кол-во</th>
               <td mat-cell *matCellDef="let t">{{ t.quantity }} / {{ t.qtyBought }}</td>
             </ng-container>
             <ng-container matColumnDef="invested">
-              <th mat-header-cell *matHeaderCellDef>Вложено (₽)</th>
+              <th mat-header-cell *matHeaderCellDef mat-sort-header>Вложено (₽)</th>
               <td mat-cell *matCellDef="let t">{{ formatMoney(t.investedRub, 'RUB') }}</td>
             </ng-container>
             <ng-container matColumnDef="payouts">
-              <th mat-header-cell *matHeaderCellDef>Див/купоны (₽)</th>
+              <th mat-header-cell *matHeaderCellDef mat-sort-header>Див/купоны (₽)</th>
               <td mat-cell *matCellDef="let t">
                 {{ formatMoney(plus(t.dividendsRub, t.couponsRub), 'RUB') }}
               </td>
             </ng-container>
             <ng-container matColumnDef="pnl">
-              <th mat-header-cell *matHeaderCellDef>P&L (₽)</th>
+              <th mat-header-cell *matHeaderCellDef mat-sort-header>P&L (₽)</th>
               <td mat-cell *matCellDef="let t" [class]="pnlColorClass(t.pnlRub)">
                 {{ formatMoney(t.pnlRub, 'RUB') }}
               </td>
             </ng-container>
             <ng-container matColumnDef="dates">
-              <th mat-header-cell *matHeaderCellDef>Открыта / Закрыта</th>
+              <th mat-header-cell *matHeaderCellDef mat-sort-header>Открыта / Закрыта</th>
               <td mat-cell *matCellDef="let t">{{ t.openedAt }} / {{ t.closedAt || '—' }}</td>
             </ng-container>
             <ng-container matColumnDef="expand">
@@ -544,6 +562,70 @@ export class TradesPage {
   );
 
   /**
+   * Сортировка списков. Состояние у каждого таба своё — общее означало бы, что
+   * стрелка в заголовке одной таблицы описывает порядок другой.
+   *
+   * По умолчанию — по дате открытия, свежие сверху. Раньше порядок задавал движок
+   * (@core: calculateTrades отдаёт сначала закрытые в порядке закрытия, потом
+   * открытые в порядке первой покупки) — то есть был осмысленным внутри движка и
+   * произвольным для читателя.
+   */
+  private static readonly DEFAULT_SORT: SortState = { active: 'dates', direction: 'desc' };
+  private readonly openSort = signal<SortState>(TradesPage.DEFAULT_SORT);
+  private readonly closedSort = signal<SortState>(TradesPage.DEFAULT_SORT);
+
+  protected sortState(key: TradeListKey): SortState {
+    return key === 'open' ? this.openSort() : this.closedSort();
+  }
+
+  protected onSort(key: TradeListKey, sort: Sort): void {
+    (key === 'open' ? this.openSort : this.closedSort).set(sort);
+  }
+
+  /**
+   * Ключ сортировки колонки. Две колонки показывают ПАРУ значений — сортируем по
+   * первому (тому, что читатель видит слева), вторым разрешаем ничью:
+   * «Открыта / Закрыта» и «остаток / куплено». У закрытых сделок остаток всегда 0,
+   * поэтому «Кол-во» там де-факто сортируется по купленному количеству — что и нужно.
+   *
+   * `pnlRub` приходит nullable (нет текущей цены → «—» в ячейке): отдаём null, и
+   * такие строки уезжают вниз при любом направлении (см. sorting.ts).
+   */
+  private static readonly STATUS_RANK: Record<Trade['status'], number> = {
+    Open: 0,
+    Partial: 1,
+    Closed: 2,
+  };
+
+  private tradeSortKey(t: Trade, column: string): SortKey {
+    switch (column) {
+      case 'status':
+        return TradesPage.STATUS_RANK[t.status];
+      case 'ticker':
+        return t.ticker;
+      case 'qty':
+        return [Number(t.quantity), Number(t.qtyBought)];
+      case 'invested':
+        return Number(t.investedRub);
+      case 'payouts':
+        return Number(t.dividendsRub) + Number(t.couponsRub);
+      case 'pnl':
+        return t.pnlRub === null ? null : Number(t.pnlRub);
+      case 'dates':
+        return [t.openedAt, t.closedAt];
+      default:
+        return null;
+    }
+  }
+
+  private readonly sortedOpen = computed(() =>
+    sortRows(this.openTrades(), this.openSort(), (t, c) => this.tradeSortKey(t, c)),
+  );
+  private readonly sortedClosed = computed(() =>
+    sortRows(this.closedTrades(), this.closedSort(), (t, c) => this.tradeSortKey(t, c)),
+  );
+
+  /**
    * Пагинация списков сделок. Страница у каждого таба своя, размер — общий:
    * закрытых сделок обычно на порядок больше открытых, и один общий pageIndex
    * оставлял бы «Открытые» пустыми после листания «Закрытых».
@@ -567,10 +649,10 @@ export class TradesPage {
   }
 
   protected readonly pagedOpen = computed(() =>
-    pageSlice(this.openTrades(), this.openPage(), this.pageSize()),
+    pageSlice(this.sortedOpen(), this.openPage(), this.pageSize()),
   );
   protected readonly pagedClosed = computed(() =>
-    pageSlice(this.closedTrades(), this.closedPage(), this.pageSize()),
+    pageSlice(this.sortedClosed(), this.closedPage(), this.pageSize()),
   );
 
   /**

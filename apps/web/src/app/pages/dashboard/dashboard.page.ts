@@ -15,6 +15,7 @@ import {
   Hint,
   KpiCard,
   seriesColor,
+  sortRows,
   StateMessage,
   ThemeService,
   type KpiTone,
@@ -622,28 +623,15 @@ export class DashboardPage {
   protected readonly effRows = computed<EffRow[]>(() => {
     const s = this.api.summary.value();
     if (!s) return [];
-    const rows =
+    // Аннотация обязательна: без неё тип выводится как объединение ДВУХ массивов
+    // (bySystem[] | byPortfolio[]), а такое объединение не подходит под readonly T[]
+    const rows: EffRow[] =
       this.groupBy() === 'system'
         ? s.bySystem.map((r) => ({ ...r, id: r.systemId }))
         : s.byPortfolio.map((r) => ({ ...r, id: r.portfolioId }));
 
-    const { active, direction } = this.effSort();
-    if (!active || !direction) return rows;
-
-    const sign = direction === 'asc' ? 1 : -1;
-    return [...rows].sort((a, b) => {
-      const av = this.effValue(a, active);
-      const bv = this.effValue(b, active);
-      // «—» (метрика не определена) держим внизу при ЛЮБОМ направлении: иначе при
-      // сортировке по XIRR вверх список начинается с прочерков, а не с худших чисел
-      if (av === null && bv === null) return 0;
-      if (av === null) return 1;
-      if (bv === null) return -1;
-      if (typeof av === 'string' || typeof bv === 'string') {
-        return sign * String(av).localeCompare(String(bv), 'ru');
-      }
-      return sign * (av - bv);
-    });
+    // «—» (метрика не определена) держит внизу сам sortRows — при любом направлении
+    return sortRows(rows, this.effSort(), (row, column) => this.effValue(row, column));
   });
 
   /**
