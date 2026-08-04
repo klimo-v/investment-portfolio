@@ -35,12 +35,42 @@ import { ReassignOperationsDialog } from '../../features/reassign-operations/rea
 import { queryParam } from '../../shared/query-param';
 
 /** Операция журнала, готовая к показу: имена справочников и строка поиска подставлены */
-interface OperationRow extends Operation {
+export interface OperationRow extends Operation {
   id: string;
   systemName: string;
   portfolioName: string;
   /** Склеенные в нижнем регистре поля, по которым ищет строка поиска */
   haystack: string;
+}
+
+/** Активный срез журнала; null/пусто в поле означает «не фильтровать по нему» */
+export interface OperationFilter {
+  systemId: string | null;
+  portfolioId: string | null;
+  type: OperationType | null;
+  query: string;
+}
+
+/**
+ * Отбор строк журнала. Отдельная чистая функция, а не тело computed'а: это единственное
+ * место, где решается, что пользователь увидит после ввода в поиск, и его нужно
+ * проверять тестом без TestBed.
+ *
+ * Поиск идёт по заранее склеенному `haystack` (см. displayRows) — иначе строка
+ * собиралась бы заново для каждой записи на каждый введённый символ.
+ */
+export function filterOperations(
+  rows: readonly OperationRow[],
+  filter: OperationFilter,
+): OperationRow[] {
+  const query = filter.query.trim().toLowerCase();
+  return rows.filter((r) => {
+    if (filter.systemId && r.systemId !== filter.systemId) return false;
+    if (filter.portfolioId && r.portfolioId !== filter.portfolioId) return false;
+    if (filter.type && r.operationType !== filter.type) return false;
+    if (query && !r.haystack.includes(query)) return false;
+    return true;
+  });
 }
 
 /**
@@ -391,20 +421,14 @@ export class OperationsPage {
   );
 
   /** Отфильтрованный (но ещё не отсортированный/не постраничный) срез журнала */
-  protected readonly filteredRows = computed(() => {
-    const system = this.systemFilter();
-    const portfolio = this.portfolioFilter();
-    const type = this.typeFilter();
-    const query = this.search().trim().toLowerCase();
-
-    return this.displayRows().filter((r) => {
-      if (system && r.systemId !== system) return false;
-      if (portfolio && r.portfolioId !== portfolio) return false;
-      if (type && r.operationType !== type) return false;
-      if (query && !r.haystack.includes(query)) return false;
-      return true;
-    });
-  });
+  protected readonly filteredRows = computed(() =>
+    filterOperations(this.displayRows(), {
+      systemId: this.systemFilter(),
+      portfolioId: this.portfolioFilter(),
+      type: this.typeFilter(),
+      query: this.search(),
+    }),
+  );
 
   /** Ключ сортировки колонки — механика сравнения общая (web-shared: sortRows) */
   private sortKey(row: OperationRow, column: string): SortKey {

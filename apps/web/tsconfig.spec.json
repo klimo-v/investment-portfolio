@@ -4,5 +4,10 @@
     "outDir": "../../dist/out-tsc",
     "types": ["node", "vitest/globals"]
   },
-  "include": ["src/**/*.spec.ts", "src/**/*.test.ts", "src/**/*.d.ts"]
+  // Весь src, а не только спеки: билдер требует, чтобы каждый файл с Angular-метаданными
+  // ({@}Component/{@}Injectable) входил в программу TypeScript, включая импортируемые из
+  // тестов страницы и виджеты. `exclude` переопределяем явно — базовый tsconfig.json
+  // выкидывает спеки, и без этого они бы не попали в собственную тестовую программу.
+  "include": ["src/**/*.ts"],
+  "exclude": []
 }
