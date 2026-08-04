@@ -6,7 +6,7 @@ import { MatListModule } from '@angular/material/list';
 import { MatFormFieldModule } from '@angular/material/form-field';
 import { MatInputModule } from '@angular/material/input';
 import { form, FormField, required } from '@angular/forms/signals';
-import { extractErrorMessage } from '@web-shared';
+import { ConfirmService, extractErrorMessage } from '@web-shared';
 import { ReferenceApi } from '../../entities/reference/reference.api';
 
 /**
@@ -105,6 +105,7 @@ import { ReferenceApi } from '../../entities/reference/reference.api';
 })
 export class ManagePortfoliosDialog {
   private readonly dialogRef = inject(MatDialogRef<ManagePortfoliosDialog>);
+  private readonly confirm = inject(ConfirmService);
   private readonly referenceApi = inject(ReferenceApi);
 
   protected readonly portfolios = computed(() => this.referenceApi.portfolios.value() ?? []);
@@ -137,7 +138,13 @@ export class ManagePortfoliosDialog {
   }
 
   protected async remove(id: string): Promise<void> {
-    if (!confirm('Удалить этот портфель?')) return;
+    const confirmed = await this.confirm.ask({
+      title: 'Удалить портфель?',
+      message: 'Действие необратимо.',
+      confirmLabel: 'Удалить',
+      danger: true,
+    });
+    if (!confirmed) return;
     this.errorMessage.set('');
     this.deletingId.set(id);
     try {

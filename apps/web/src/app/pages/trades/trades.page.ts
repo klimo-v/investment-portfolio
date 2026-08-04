@@ -9,7 +9,15 @@ import { MatSelectModule } from '@angular/material/select';
 import { MatButtonToggleModule } from '@angular/material/button-toggle';
 import { OperationApi } from '../../entities/operation/operation.api';
 import { ReferenceApi } from '../../entities/reference/reference.api';
-import { formatMoney, KpiCard, pnlColorClass, type KpiTone } from '@web-shared';
+import {
+  formatMoney,
+  KpiCard,
+  pnlColorClass,
+  StateMessage,
+  StatusChip,
+  type ChipTone,
+  type KpiTone,
+} from '@web-shared';
 import { tradeStats, type Trade, type TradeStats, type TradeStatInput } from '@core';
 
 interface StatsRow extends TradeStats {
@@ -38,15 +46,21 @@ interface StatsRow extends TradeStats {
     MatButtonToggleModule,
     NgTemplateOutlet,
     KpiCard,
+    StateMessage,
+    StatusChip,
   ],
   template: `
     <h1 class="page-title">Сделки</h1>
 
-    @if (api.trades.isLoading()) {
-      <p>Загрузка…</p>
-    } @else if (api.trades.error()) {
-      <p class="error">Не удалось загрузить сделки. Запущен ли API?</p>
-    } @else {
+    @if (api.trades.error()) {
+      <app-state-message
+        kind="error"
+        title="Не удалось загрузить сделки"
+        hint="Проверьте, что сервер запущен, и попробуйте ещё раз."
+        retryLabel="Повторить"
+        (retry)="api.reload()"
+      />
+    } @else if (!api.trades.isLoading()) {
       <mat-tab-group class="top-tabs">
         <mat-tab label="Открытые и закрытые">
           <div class="tab-content trades-tab-content">
@@ -190,7 +204,7 @@ interface StatsRow extends TradeStats {
             <ng-container matColumnDef="status">
               <th mat-header-cell *matHeaderCellDef>Статус</th>
               <td mat-cell *matCellDef="let t">
-                <span class="chip" [class]="'status-' + t.status.toLowerCase()">{{ statusLabel(t.status) }}</span>
+                <app-status-chip [tone]="statusTone(t.status)">{{ statusLabel(t.status) }}</app-status-chip>
               </td>
             </ng-container>
             <ng-container matColumnDef="ticker">
@@ -224,7 +238,20 @@ interface StatsRow extends TradeStats {
             <ng-container matColumnDef="expand">
               <th mat-header-cell *matHeaderCellDef></th>
               <td mat-cell *matCellDef="let t">
-                <mat-icon>{{ expandedId() === t.id ? 'expand_less' : 'expand_more' }}</mat-icon>
+                <!--
+                  Кнопка, а не голая mat-icon: раскрытие было доступно ТОЛЬКО кликом
+                  по строке, то есть с клавиатуры операции сделки было не посмотреть.
+                  stopPropagation — иначе клик дойдёт до строки и схлопнет обратно.
+                -->
+                <button
+                  mat-icon-button
+                  type="button"
+                  [attr.aria-expanded]="expandedId() === t.id"
+                  [attr.aria-label]="(expandedId() === t.id ? 'Скрыть' : 'Показать') + ' операции сделки ' + t.ticker"
+                  (click)="$event.stopPropagation(); toggle(t.id)"
+                >
+                  <mat-icon>{{ expandedId() === t.id ? 'expand_less' : 'expand_more' }}</mat-icon>
+                </button>
               </td>
             </ng-container>
 
@@ -389,18 +416,6 @@ interface StatsRow extends TradeStats {
         border-radius: 12px;
         font-size: 12px;
       }
-      .status-open {
-        background: var(--app-chip-info-bg);
-        color: var(--app-chip-info-fg);
-      }
-      .status-partial {
-        background: var(--app-chip-warn-bg);
-        color: var(--app-chip-warn-fg);
-      }
-      .status-closed {
-        background: var(--app-chip-neutral-bg);
-        color: var(--app-chip-neutral-fg);
-      }
       /* .pnl-*, .error — глобальные (styles.scss), локальных копий не держим */
       .empty {
         padding: 24px;
@@ -529,6 +544,10 @@ export class TradesPage {
 
   protected statusLabel(status: Trade['status']): string {
     return { Open: 'Открыта', Partial: 'Частично', Closed: 'Закрыта' }[status];
+  }
+
+  protected statusTone(status: Trade['status']): ChipTone {
+    return ({ Open: 'info', Partial: 'warn', Closed: 'neutral' } as const)[status];
   }
 
   protected plus(a: string, b: string): string {

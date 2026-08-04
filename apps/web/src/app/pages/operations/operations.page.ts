@@ -12,6 +12,7 @@ import { MatPaginatorModule, PageEvent } from '@angular/material/paginator';
 import { MatDialog } from '@angular/material/dialog';
 import { firstValueFrom } from 'rxjs';
 import { OperationType } from '@core';
+import { ConfirmService, StateMessage } from '@web-shared';
 import { OperationApi } from '../../entities/operation/operation.api';
 import { ReferenceApi } from '../../entities/reference/reference.api';
 import { AddOperationDialog } from '../../features/add-operation/add-operation.dialog';
@@ -44,6 +45,7 @@ import { ReassignOperationsDialog } from '../../features/reassign-operations/rea
     MatSelectModule,
     MatSortModule,
     MatPaginatorModule,
+    StateMessage,
   ],
   template: `
     <div class="header">
@@ -66,11 +68,15 @@ import { ReassignOperationsDialog } from '../../features/reassign-operations/rea
       </div>
     </div>
 
-    @if (api.operations.isLoading()) {
-      <p>Загрузка…</p>
-    } @else if (api.operations.error()) {
-      <p class="error">Не удалось загрузить операции. Запущен ли API?</p>
-    } @else {
+    @if (api.operations.error()) {
+      <app-state-message
+        kind="error"
+        title="Не удалось загрузить операции"
+        hint="Проверьте, что сервер запущен, и попробуйте ещё раз."
+        retryLabel="Повторить"
+        (retry)="api.reload()"
+      />
+    } @else if (!api.operations.isLoading()) {
       <mat-card>
         <div class="filters">
           <mat-form-field appearance="outline" subscriptSizing="dynamic">
@@ -168,9 +174,19 @@ import { ReassignOperationsDialog } from '../../features/reassign-operations/rea
         </div>
 
         @if (allRows().length === 0) {
-          <p class="empty">Операций пока нет. Добавьте первую или импортируйте отчёт брокера.</p>
+          <app-state-message
+            kind="empty"
+            title="Операций пока нет"
+            hint="Добавьте первую операцию или загрузите отчёт брокера на странице «Импорт»."
+          />
         } @else if (filteredRows().length === 0) {
-          <p class="empty">Нет операций по заданным фильтрам.</p>
+          <app-state-message
+            kind="empty"
+            icon="filter_alt_off"
+            title="Нет операций по заданным фильтрам"
+            retryLabel="Сбросить фильтры"
+            (retry)="resetFilters()"
+          />
         } @else {
           <mat-paginator
             [length]="filteredRows().length"
@@ -240,6 +256,7 @@ import { ReassignOperationsDialog } from '../../features/reassign-operations/rea
 })
 export class OperationsPage {
   protected readonly api = inject(OperationApi);
+  private readonly confirm = inject(ConfirmService);
   protected readonly reference = inject(ReferenceApi);
   private readonly dialog = inject(MatDialog);
 
@@ -458,11 +475,16 @@ export class OperationsPage {
   protected async removeSelected(): Promise<void> {
     const ids = [...this.selected()];
     if (ids.length === 0) return;
-    const confirmed = confirm(
-      `Удалить ${ids.length} операц${ids.length === 1 ? 'ию' : 'ий'} без возможности восстановления? ` +
-        'Это также сотрёт накопленную историю снимков портфеля (просадка и график динамики на дашборде) — ' +
-        'она начнёт копиться заново со следующего «Обновить цены». Вы точно уверены?',
-    );
+    const confirmed = await this.confirm.ask({
+      title: `Удалить ${ids.length} операц${ids.length === 1 ? 'ию' : 'ий'}?`,
+      message:
+        'Восстановить их будет нельзя.\n\n' +
+        'Это также сотрёт накопленную историю снимков портфеля (просадка и график ' +
+        'динамики на дашборде) — она начнёт копиться заново со следующего ' +
+        '«Обновить цены».',
+      confirmLabel: 'Удалить',
+      danger: true,
+    });
     if (!confirmed) return;
 
     this.deleting.set(true);

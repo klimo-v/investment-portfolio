@@ -19,7 +19,7 @@ import {
 } from '../../entities/instrument/instrument-type.tokens';
 import { ManagePortfoliosDialog } from '../../features/manage-portfolios/manage-portfolios.dialog';
 import { ManageSystemsDialog } from '../../features/manage-systems/manage-systems.dialog';
-import { formatMoney, KpiCard, pnlColorClass, ThemeService, type KpiTone } from '@web-shared';
+import { formatMoney, KpiCard, type KpiTone, pnlColorClass, StateMessage, ThemeService } from '@web-shared';
 
 /**
  * Страница «Портфель» (docs/03-ux-plan.md, шаг 3; roadmap Фаза 2).
@@ -57,6 +57,7 @@ interface Group {
     MatTooltipModule,
     BaseChartDirective,
     KpiCard,
+    StateMessage,
   ],
   template: `
     <div class="header">
@@ -114,21 +115,32 @@ interface Group {
       />
     </div>
 
-    @if (api.positions.isLoading()) {
-      <p>Загрузка…</p>
-    } @else if (api.positions.error()) {
-      <p class="error">Не удалось загрузить позиции. Запущен ли API?</p>
-    } @else if (groups().length === 0) {
+    @if (api.positions.error()) {
+      <app-state-message
+        kind="error"
+        title="Не удалось загрузить позиции"
+        hint="Проверьте, что сервер запущен, и попробуйте ещё раз."
+        retryLabel="Повторить"
+        (retry)="api.reload()"
+      />
+    } @else if (!api.positions.isLoading() && groups().length === 0) {
       <mat-card>
-        <p class="empty">
-          @if (positions().length === 0) {
-            Позиций пока нет. Добавьте операции на странице «Операции».
-          } @else {
-            Нет позиций под выбранные фильтры.
-          }
-        </p>
+        @if (positions().length === 0) {
+          <app-state-message
+            kind="empty"
+            title="Позиций пока нет"
+            hint="Добавьте операции на странице «Операции» или загрузите отчёт брокера на странице «Импорт»."
+          />
+        } @else {
+          <app-state-message
+            kind="empty"
+            icon="filter_alt_off"
+            title="Нет позиций под выбранные фильтры"
+            hint="Сбросьте фильтр системы или портфеля, чтобы увидеть остальные позиции."
+          />
+        }
       </mat-card>
-    } @else {
+    } @else if (!api.positions.isLoading()) {
       <div class="content">
         <div class="tables">
           @for (g of groups(); track g.type) {

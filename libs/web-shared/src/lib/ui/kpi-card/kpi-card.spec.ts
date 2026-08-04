@@ -22,16 +22,19 @@ describe('KpiCard', () => {
   it('без hint бейдж «?» не рисуется — иначе на карточках без пояснения был бы мусор', () => {
     fixture.detectChanges();
 
-    expect(fixture.nativeElement.querySelector('.hint')).toBeNull();
+    expect(fixture.nativeElement.querySelector('app-hint')).toBeNull();
   });
 
-  it('с hint появляется бейдж с тултипом', () => {
+  it('с hint появляется доступный бейдж app-hint (кнопка, а не span)', () => {
     fixture.componentRef.setInput('hint', 'Себестоимость держимого остатка');
     fixture.detectChanges();
 
-    const hint = fixture.nativeElement.querySelector('.hint');
-    expect(hint).not.toBeNull();
-    expect(hint.getAttribute('aria-describedby')).toBeDefined();
+    const badge = fixture.nativeElement.querySelector('app-hint .badge');
+    expect(badge).not.toBeNull();
+    expect(badge.tagName).toBe('BUTTON');
+    // Подпись карточки уходит в доступное имя — иначе скринридер зачитает
+    // объяснение, не назвав, к чему оно относится
+    expect(badge.getAttribute('aria-label')).toContain('Вложено');
   });
 
   it('tone превращается в глобальный класс pnl-*, который красит значение', () => {

@@ -82,6 +82,15 @@ export class OperationApi {
     { parse: DashboardSummarySchema.parse },
   );
 
+  /**
+   * Перезапросить все ресурсы. Нужен кнопке «Повторить» в состоянии ошибки: до
+   * этого единственным способом выйти из «не удалось загрузить» была перезагрузка
+   * страницы целиком.
+   */
+  reload(): void {
+    this.reloadTrigger.update((n) => n + 1);
+  }
+
   /** Добавить операцию (мутация через HttpClient), затем перезагрузить ресурсы */
   async add(operation: Operation): Promise<Operation> {
     const created = await firstValueFrom(

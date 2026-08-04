@@ -52,6 +52,14 @@ const OPERATION_TYPES = [
         <mat-form-field appearance="outline">
           <mat-label>Дата</mat-label>
           <input matInput type="date" [formField]="opForm.date" />
+          <!--
+            Сообщения валидаторов объявлены в схеме формы ниже, но до этой правки
+            нигде не рендерились: пользователь видел только задизейбленную кнопку
+            «Сохранить» и не понимал, какое поле не заполнено.
+          -->
+          @for (e of opForm.date().errors(); track e.kind) {
+            <mat-error>{{ e.message }}</mat-error>
+          }
         </mat-form-field>
 
         <mat-form-field appearance="outline">
@@ -62,6 +70,9 @@ const OPERATION_TYPES = [
               <option [value]="s.id">{{ s.name }}</option>
             }
           </select>
+          @for (e of opForm.systemId().errors(); track e.kind) {
+            <mat-error>{{ e.message }}</mat-error>
+          }
         </mat-form-field>
 
         <mat-form-field appearance="outline">
@@ -72,6 +83,9 @@ const OPERATION_TYPES = [
               <option [value]="p.id">{{ p.name }}</option>
             }
           </select>
+          @for (e of opForm.portfolioId().errors(); track e.kind) {
+            <mat-error>{{ e.message }}</mat-error>
+          }
         </mat-form-field>
 
         @if (needsInstrument()) {

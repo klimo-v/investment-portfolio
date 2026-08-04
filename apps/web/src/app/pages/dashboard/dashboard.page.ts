@@ -9,7 +9,15 @@ import { MatDatepickerModule } from '@angular/material/datepicker';
 import { BaseChartDirective } from 'ng2-charts';
 import type { ChartConfiguration } from 'chart.js';
 import { maxDrawdown, type Effectiveness } from '@core';
-import { chartSemantic, KpiCard, seriesColor, ThemeService, type KpiTone } from '@web-shared';
+import {
+  chartSemantic,
+  Hint,
+  KpiCard,
+  seriesColor,
+  StateMessage,
+  ThemeService,
+  type KpiTone,
+} from '@web-shared';
 import { OperationApi } from '../../entities/operation/operation.api';
 import { SnapshotApi } from '../../entities/snapshot/snapshot.api';
 import { BenchmarkApi } from '../../entities/benchmark/benchmark.api';
@@ -52,6 +60,8 @@ interface EffRow extends Effectiveness {
     MatDatepickerModule,
     BaseChartDirective,
     KpiCard,
+    Hint,
+    StateMessage,
   ],
   template: `
     <div class="page-header">
@@ -84,13 +94,17 @@ interface EffRow extends Effectiveness {
           [value]="period()"
           (change)="period.set($event.value)"
           hideSingleSelectionIndicator
-          matTooltip="Период сужает окно: Реализ./Дивиденды/P&L/ROI/XIRR и помесячный график считаются по операциям ВНУТРИ выбранного отрезка. Вложено/Текущая стоимость/Нереализ. — это состояние текущего остатка, оно не меняется от периода (себестоимость держимого нельзя посчитать иначе, чем по всей истории покупок). На коротком окне XIRR может быть не определён (—) — это статистический шум, а не ошибка."
+          aria-label="Период"
         >
           <mat-button-toggle value="ytd">YTD</mat-button-toggle>
           <mat-button-toggle value="1y">1 год</mat-button-toggle>
           <mat-button-toggle value="all">Всё время</mat-button-toggle>
           <mat-button-toggle value="custom">Произвольный</mat-button-toggle>
         </mat-button-toggle-group>
+        <app-hint
+          label="Период"
+          text="Период сужает окно: Реализ./Дивиденды/P&L/ROI/XIRR и помесячный график считаются по операциям ВНУТРИ выбранного отрезка. Вложено/Текущая стоимость/Нереализ. — это состояние текущего остатка, оно не меняется от периода (себестоимость держимого нельзя посчитать иначе, чем по всей истории покупок). На коротком окне XIRR может быть не определён (—) — это статистический шум, а не ошибка."
+        />
         @if (period() === 'custom') {
           <mat-form-field appearance="outline" subscriptSizing="dynamic" class="range-field">
             <mat-label>Диапазон</mat-label>
@@ -115,11 +129,15 @@ interface EffRow extends Effectiveness {
       </div>
     </div>
 
-    @if (api.summary.isLoading()) {
-      <p>Загрузка…</p>
-    } @else if (api.summary.error()) {
-      <p class="error">Не удалось загрузить сводку. Запущен ли API?</p>
-    } @else {
+    @if (api.summary.error()) {
+      <app-state-message
+        kind="error"
+        title="Не удалось загрузить сводку"
+        hint="Проверьте, что сервер запущен, и попробуйте ещё раз."
+        retryLabel="Повторить"
+        (retry)="api.reload()"
+      />
+    } @else if (!api.summary.isLoading()) {
       <div class="kpi-grid">
         <app-kpi-card
           label="Вложено"
@@ -135,7 +153,7 @@ interface EffRow extends Effectiveness {
         -->
         <mat-card class="kpi-manual">
           <mat-card-subtitle
-            >P&L <span class="hint" [matTooltip]="pnlHint">?</span></mat-card-subtitle
+            >P&L <app-hint [text]="pnlHint" label="P&L" /></mat-card-subtitle
           >
           <mat-card-title [class]="cls(totals().pnlRub)">{{ money(totals().pnlRub) }}</mat-card-title>
           <div class="sub">
@@ -188,11 +206,7 @@ interface EffRow extends Effectiveness {
             <ng-container matColumnDef="invested">
               <th mat-header-cell *matHeaderCellDef
                 >Вложено
-                <span
-                  class="hint"
-                  matTooltip="Себестоимость ТЕКУЩЕГО остатка (открытых позиций). Уже закрытые (полностью проданные) позиции сюда не входят — их результат учтён отдельно в «Реализ.», а вложенный в них капитал уже вернулся при продаже. Поэтому P&L = Реализ. + Нереал. + Дивиденды, а не «Вложено − Стоимость − Дивиденды»."
-                  >?</span
-                ></th
+                <app-hint label="Вложено" text="Себестоимость ТЕКУЩЕГО остатка (открытых позиций). Уже закрытые (полностью проданные) позиции сюда не входят — их результат учтён отдельно в «Реализ.», а вложенный в них капитал уже вернулся при продаже. Поэтому P&L = Реализ. + Нереал. + Дивиденды, а не «Вложено − Стоимость − Дивиденды»." /></th
               >
               <td mat-cell *matCellDef="let r">{{ money(r.investedRub) }}</td>
             </ng-container>
@@ -203,11 +217,7 @@ interface EffRow extends Effectiveness {
             <ng-container matColumnDef="realized">
               <th mat-header-cell *matHeaderCellDef
                 >Реализ. / Нереализ.
-                <span
-                  class="hint"
-                  matTooltip="Реализ. — результат от продаж ВНУТРИ выбранного периода (себестоимость проданного всё равно берётся по всей истории покупок). Нереал. — бумажная переоценка того, что держите сейчас (Стоимость − Вложено), от периода не зависит. P&L складывается из обоих плюс дивиденды/купоны."
-                  >?</span
-                ></th
+                <app-hint label="Реализ. / Нереализ." text="Реализ. — результат от продаж ВНУТРИ выбранного периода (себестоимость проданного всё равно берётся по всей истории покупок). Нереал. — бумажная переоценка того, что держите сейчас (Стоимость − Вложено), от периода не зависит. P&L складывается из обоих плюс дивиденды/купоны." /></th
               >
               <td mat-cell *matCellDef="let r">
                 <span [class]="cls(r.realizedPnlRub)">{{ money(r.realizedPnlRub) }}</span>
@@ -217,7 +227,7 @@ interface EffRow extends Effectiveness {
             </ng-container>
             <ng-container matColumnDef="pnl">
               <th mat-header-cell *matHeaderCellDef
-                >P&L <span class="hint" [matTooltip]="pnlHint">?</span></th
+                >P&L <app-hint [text]="pnlHint" label="P&L" /></th
               >
               <td mat-cell *matCellDef="let r" [class]="cls(r.pnlRub)">{{ money(r.pnlRub) }}</td>
             </ng-container>
@@ -228,22 +238,14 @@ interface EffRow extends Effectiveness {
             <ng-container matColumnDef="xirr">
               <th mat-header-cell *matHeaderCellDef
                 >XIRR
-                <span
-                  class="hint"
-                  matTooltip="Денежно-взвешенная годовая доходность (IRR) по фактическим датам всех вложений/выводов и текущей стоимости остатка — не то же самое, что ROI за весь период (тот не годовой). «—» означает, что результат ненадёжен: слишком короткое окно операций или доходность экстраполируется с нереалистичным перекосом (напр. одна короткая прибыльная сделка внутри длинного окна) — тогда ориентируйтесь на P&L в рублях."
-                  >?</span
-                ></th
+                <app-hint label="XIRR" text="Денежно-взвешенная годовая доходность (IRR) по фактическим датам всех вложений/выводов и текущей стоимости остатка — не то же самое, что ROI за весь период (тот не годовой). «—» означает, что результат ненадёжен: слишком короткое окно операций или доходность экстраполируется с нереалистичным перекосом (напр. одна короткая прибыльная сделка внутри длинного окна) — тогда ориентируйтесь на P&L в рублях." /></th
               >
               <td mat-cell *matCellDef="let r" [class]="cls(r.xirrPct ?? 0)">{{ pctOrDash(r.xirrPct) }}</td>
             </ng-container>
             <ng-container matColumnDef="dividends">
               <th mat-header-cell *matHeaderCellDef
                 >Дивиденды
-                <span
-                  class="hint"
-                  matTooltip="Дивиденды и купоны, полученные вами деньгами ВНУТРИ выбранного периода — сумма операций типа «Дивиденд»/«Купон» из журнала, как есть. Именно эта сумма и входит в P&L (см. подсказку у P&L)."
-                  >?</span
-                ></th
+                <app-hint label="Дивиденды" text="Дивиденды и купоны, полученные вами деньгами ВНУТРИ выбранного периода — сумма операций типа «Дивиденд»/«Купон» из журнала, как есть. Именно эта сумма и входит в P&L (см. подсказку у P&L)." /></th
               >
               <td mat-cell *matCellDef="let r">{{ money(r.dividendsRub) }}</td>
             </ng-container>

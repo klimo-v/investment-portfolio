@@ -7,6 +7,7 @@ import { MatFormFieldModule } from '@angular/material/form-field';
 import { MatSelectModule } from '@angular/material/select';
 import { ImportApi, type PreviewResult, type ImportFormat } from '../../entities/import/import.api';
 import { ReferenceApi } from '../../entities/reference/reference.api';
+import { StatusChip, type ChipTone } from '@web-shared';
 
 /**
  * Страница «Импорт» (docs/03-ux-plan.md, шаг 5).
@@ -24,6 +25,7 @@ import { ReferenceApi } from '../../entities/reference/reference.api';
     MatTableModule,
     MatFormFieldModule,
     MatSelectModule,
+    StatusChip,
   ],
   template: `
     <h1 class="page-title">Импорт</h1>
@@ -35,11 +37,24 @@ import { ReferenceApi } from '../../entities/reference/reference.api';
         портфелями, Количество, Цена, Комиссия, Курс к RUB, Примечание. Формат
         HTML/xlsx-отчёта распознаётся автоматически.
       </p>
+      <!--
+        Голый <input type="file"> не имел ни подписи, ни aria-label: скринридер
+        объявлял его просто «кнопка выбора файла», а прозаическое описание выше
+        программно с ним связано не было. Прячем нативный контрол и вешаем на него
+        <label>, оформленный как кнопка Material — доступное имя приходит от label,
+        клавиатурная активация работает штатно.
+      -->
       <input
+        id="import-file"
+        class="file-input"
         type="file"
         accept=".csv,.html,.htm,.xlsx,text/csv,text/html,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         (change)="onFile($event)"
       />
+      <label class="file-picker" for="import-file">
+        <mat-icon>attach_file</mat-icon>
+        <span>Выбрать файл</span>
+      </label>
 
       @if (fileName()) {
         <p class="file">
@@ -73,10 +88,10 @@ import { ReferenceApi } from '../../entities/reference/reference.api';
 
     @if (preview()) {
       <mat-card class="summary">
-        <span class="chip ok">Распознано: {{ preview()!.summary.ok }}</span>
-        <span class="chip warn">Проверить: {{ preview()!.summary.warn }}</span>
-        <span class="chip dup">Дубли: {{ preview()!.summary.duplicate }}</span>
-        <span class="chip err">Ошибки: {{ preview()!.summary.error }}</span>
+        <app-status-chip tone="success">Распознано: {{ preview()!.summary.ok }}</app-status-chip>
+        <app-status-chip tone="warn">Проверить: {{ preview()!.summary.warn }}</app-status-chip>
+        <app-status-chip tone="neutral">Дубли: {{ preview()!.summary.duplicate }}</app-status-chip>
+        <app-status-chip tone="danger">Ошибки: {{ preview()!.summary.error }}</app-status-chip>
         <span class="spacer"></span>
         <button
           mat-flat-button
@@ -117,7 +132,7 @@ import { ReferenceApi } from '../../entities/reference/reference.api';
           <ng-container matColumnDef="status">
             <th mat-header-cell *matHeaderCellDef>Статус</th>
             <td mat-cell *matCellDef="let r">
-              <span class="chip" [class]="statusClass(r.confidence)">{{ statusLabel(r.confidence) }}</span>
+              <app-status-chip [tone]="statusTone(r.confidence)">{{ statusLabel(r.confidence) }}</app-status-chip>
             </td>
           </ng-container>
           <ng-container matColumnDef="date">
@@ -176,6 +191,41 @@ import { ReferenceApi } from '../../entities/reference/reference.api';
         align-items: center;
         gap: 12px;
       }
+      /*
+       * Нативный input скрыт, но НЕ через display:none — так он выпал бы из
+       * таб-порядка, и выбрать файл с клавиатуры стало бы нельзя вообще.
+       * Клип оставляет его фокусируемым, а видимую роль играет label.
+       */
+      .file-input {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        overflow: hidden;
+        clip: rect(0 0 0 0);
+        white-space: nowrap;
+      }
+      .file-picker {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        margin-top: 8px;
+        padding: 0 16px;
+        height: 40px;
+        border: 1px solid var(--app-outline);
+        border-radius: var(--mat-sys-corner-full);
+        color: var(--mat-sys-primary);
+        cursor: pointer;
+        user-select: none;
+      }
+      .file-picker:hover {
+        background: color-mix(in srgb, var(--mat-sys-primary) 8%, transparent);
+      }
+      /* Фокус нативного input'а отражаем на label — он и есть видимый контрол */
+      .file-input:focus-visible + .file-picker,
+      .file-picker:focus-within {
+        outline: 2px solid var(--mat-sys-primary);
+        outline-offset: 2px;
+      }
       .batch {
         display: flex;
         flex-wrap: wrap;
@@ -223,28 +273,6 @@ import { ReferenceApi } from '../../entities/reference/reference.api';
       }
       table {
         width: 100%;
-      }
-      .chip {
-        padding: 2px 10px;
-        border-radius: 12px;
-        font-size: 12px;
-        white-space: nowrap;
-      }
-      .chip.ok {
-        background: var(--app-chip-success-bg);
-        color: var(--app-chip-success-fg);
-      }
-      .chip.warn {
-        background: var(--app-chip-warn-bg);
-        color: var(--app-chip-warn-fg);
-      }
-      .chip.dup {
-        background: var(--app-chip-neutral-bg);
-        color: var(--app-chip-neutral-fg);
-      }
-      .chip.err {
-        background: var(--app-chip-danger-bg);
-        color: var(--app-chip-danger-fg);
       }
       /* .error — глобальный (styles.scss) */
     `,
@@ -409,8 +437,11 @@ export class ImportPage {
     };
   }
 
-  protected statusClass(c: string): string {
-    return { ok: 'ok', warn: 'warn', duplicate: 'dup', error: 'err' }[c] ?? '';
+  protected statusTone(c: string): ChipTone {
+    return (
+      ({ ok: 'success', warn: 'warn', duplicate: 'neutral', error: 'danger' } as const)[c] ??
+      'neutral'
+    );
   }
 
   protected statusLabel(c: string): string {

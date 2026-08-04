@@ -1,6 +1,6 @@
 import { ChangeDetectionStrategy, Component, computed, input } from '@angular/core';
 import { MatCardModule } from '@angular/material/card';
-import { MatTooltipModule } from '@angular/material/tooltip';
+import { Hint } from '../hint/hint';
 
 /** Знак результата — красит значение; 'neutral' оставляет цвет текста как есть */
 export type KpiTone = 'neutral' | 'positive' | 'negative';
@@ -17,13 +17,13 @@ export type KpiTone = 'neutral' | 'positive' | 'negative';
 @Component({
   selector: 'app-kpi-card',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [MatCardModule, MatTooltipModule],
+  imports: [MatCardModule, Hint],
   template: `
     <mat-card>
       <mat-card-subtitle>
         {{ label() }}
         @if (hint()) {
-          <span class="hint" [matTooltip]="hint()" matTooltipTouchGestures="on">?</span>
+          <app-hint [text]="hint()" [label]="label()" />
         }
       </mat-card-subtitle>
       <mat-card-title [class]="toneClass()">{{ value() }}</mat-card-title>
@@ -46,18 +46,6 @@ export type KpiTone = 'neutral' | 'positive' | 'negative';
         margin-top: 4px;
         font-size: 12px;
         color: var(--app-text-muted);
-      }
-      .hint {
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        width: 14px;
-        height: 14px;
-        border-radius: 50%;
-        border: 1px solid var(--app-text-muted);
-        color: var(--app-text-muted);
-        font-size: 10px;
-        cursor: help;
       }
     `,
   ],
