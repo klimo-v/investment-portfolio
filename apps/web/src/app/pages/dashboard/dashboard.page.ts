@@ -6,6 +6,7 @@ import { MatTooltipModule } from '@angular/material/tooltip';
 import { MatFormFieldModule } from '@angular/material/form-field';
 import { MatSelectModule } from '@angular/material/select';
 import { MatDatepickerModule } from '@angular/material/datepicker';
+import { MatSortModule, type Sort } from '@angular/material/sort';
 import { BaseChartDirective } from 'ng2-charts';
 import type { ChartConfiguration } from 'chart.js';
 import { maxDrawdown, type Effectiveness } from '@core';
@@ -58,6 +59,7 @@ interface EffRow extends Effectiveness {
     MatFormFieldModule,
     MatSelectModule,
     MatDatepickerModule,
+    MatSortModule,
     BaseChartDirective,
     KpiCard,
     Hint,
@@ -198,24 +200,24 @@ interface EffRow extends Effectiveness {
         @if (effRows().length === 0) {
           <p class="note">Нет данных — добавьте операции и обновите цены.</p>
         } @else {
-          <table mat-table [dataSource]="effRows()">
+          <table mat-table matSort [dataSource]="effRows()" (matSortChange)="effSort.set($event)">
             <ng-container matColumnDef="name">
-              <th mat-header-cell *matHeaderCellDef>Название</th>
+              <th mat-header-cell *matHeaderCellDef mat-sort-header>Название</th>
               <td mat-cell *matCellDef="let r">{{ r.name }}</td>
             </ng-container>
             <ng-container matColumnDef="invested">
-              <th mat-header-cell *matHeaderCellDef
+              <th mat-header-cell *matHeaderCellDef mat-sort-header
                 >Вложено
                 <app-hint label="Вложено" text="Себестоимость ТЕКУЩЕГО остатка (открытых позиций). Уже закрытые (полностью проданные) позиции сюда не входят — их результат учтён отдельно в «Реализ.», а вложенный в них капитал уже вернулся при продаже. Поэтому P&L = Реализ. + Нереал. + Дивиденды, а не «Вложено − Стоимость − Дивиденды»." /></th
               >
               <td mat-cell *matCellDef="let r">{{ money(r.investedRub) }}</td>
             </ng-container>
             <ng-container matColumnDef="value">
-              <th mat-header-cell *matHeaderCellDef>Стоимость</th>
+              <th mat-header-cell *matHeaderCellDef mat-sort-header>Стоимость</th>
               <td mat-cell *matCellDef="let r">{{ money(r.currentValueRub) }}</td>
             </ng-container>
             <ng-container matColumnDef="realized">
-              <th mat-header-cell *matHeaderCellDef
+              <th mat-header-cell *matHeaderCellDef mat-sort-header
                 >Реализ. / Нереализ.
                 <app-hint label="Реализ. / Нереализ." text="Реализ. — результат от продаж ВНУТРИ выбранного периода (себестоимость проданного всё равно берётся по всей истории покупок). Нереал. — бумажная переоценка того, что держите сейчас (Стоимость − Вложено), от периода не зависит. P&L складывается из обоих плюс дивиденды/купоны." /></th
               >
@@ -226,31 +228,31 @@ interface EffRow extends Effectiveness {
               </td>
             </ng-container>
             <ng-container matColumnDef="pnl">
-              <th mat-header-cell *matHeaderCellDef
+              <th mat-header-cell *matHeaderCellDef mat-sort-header
                 >P&L <app-hint [text]="pnlHint" label="P&L" /></th
               >
               <td mat-cell *matCellDef="let r" [class]="cls(r.pnlRub)">{{ money(r.pnlRub) }}</td>
             </ng-container>
             <ng-container matColumnDef="roi">
-              <th mat-header-cell *matHeaderCellDef>ROI</th>
+              <th mat-header-cell *matHeaderCellDef mat-sort-header>ROI</th>
               <td mat-cell *matCellDef="let r" [class]="cls(r.roiPct ?? 0)">{{ pctOrDash(r.roiPct) }}</td>
             </ng-container>
             <ng-container matColumnDef="xirr">
-              <th mat-header-cell *matHeaderCellDef
+              <th mat-header-cell *matHeaderCellDef mat-sort-header
                 >XIRR
                 <app-hint label="XIRR" text="Денежно-взвешенная годовая доходность (IRR) по фактическим датам всех вложений/выводов и текущей стоимости остатка — не то же самое, что ROI за весь период (тот не годовой). «—» означает, что результат ненадёжен: слишком короткое окно операций или доходность экстраполируется с нереалистичным перекосом (напр. одна короткая прибыльная сделка внутри длинного окна) — тогда ориентируйтесь на P&L в рублях." /></th
               >
               <td mat-cell *matCellDef="let r" [class]="cls(r.xirrPct ?? 0)">{{ pctOrDash(r.xirrPct) }}</td>
             </ng-container>
             <ng-container matColumnDef="dividends">
-              <th mat-header-cell *matHeaderCellDef
+              <th mat-header-cell *matHeaderCellDef mat-sort-header
                 >Дивиденды
                 <app-hint label="Дивиденды" text="Дивиденды и купоны, полученные вами деньгами ВНУТРИ выбранного периода — сумма операций типа «Дивиденд»/«Купон» из журнала, как есть. Именно эта сумма и входит в P&L (см. подсказку у P&L)." /></th
               >
               <td mat-cell *matCellDef="let r">{{ money(r.dividendsRub) }}</td>
             </ng-container>
             <ng-container matColumnDef="divyield">
-              <th mat-header-cell *matHeaderCellDef>Див. дох.</th>
+              <th mat-header-cell *matHeaderCellDef mat-sort-header>Див. дох.</th>
               <td mat-cell *matCellDef="let r">{{ pctOrDash(r.dividendYieldPct) }}</td>
             </ng-container>
             <tr mat-header-row *matHeaderRowDef="effColumns"></tr>
@@ -309,38 +311,50 @@ interface EffRow extends Effectiveness {
           <p class="note">
             Столбцы на одной оске: поток кэша (депозиты/выводы) и доход (дивиденды/купоны).
           </p>
-          <div class="chart-box">
-            <canvas
-              baseChart
-              [type]="timelineChart().type"
-              [data]="timelineChart().data"
-              [options]="timelineChart().options"
-            ></canvas>
-          </div>
+          @if (timelineChart(); as tc) {
+            <div class="chart-box">
+              <canvas baseChart [type]="tc.type" [data]="tc.data" [options]="tc.options"></canvas>
+            </div>
+          } @else {
+            <app-state-message
+              kind="empty"
+              icon="bar_chart"
+              title="Нет движений за период"
+              hint="Здесь появятся депозиты, выводы и полученные дивиденды по месяцам."
+            />
+          }
         </mat-card>
 
         <mat-card>
           <h3>P&L по системам</h3>
-          <div class="chart-box">
-            <canvas
-              baseChart
-              [type]="systemChart().type"
-              [data]="systemChart().data"
-              [options]="systemChart().options"
-            ></canvas>
-          </div>
+          @if (systemChart(); as sc) {
+            <div class="chart-box">
+              <canvas baseChart [type]="sc.type" [data]="sc.data" [options]="sc.options"></canvas>
+            </div>
+          } @else {
+            <app-state-message
+              kind="empty"
+              icon="bar_chart"
+              title="Нет данных по системам"
+              hint="Добавьте операции — P&L разложится по торговым системам."
+            />
+          }
         </mat-card>
 
         <mat-card class="wide">
           <h3>Прибыль / убыток по инструментам</h3>
-          <div class="chart-box tall">
-            <canvas
-              baseChart
-              [type]="breakdownChart().type"
-              [data]="breakdownChart().data"
-              [options]="breakdownChart().options"
-            ></canvas>
-          </div>
+          @if (breakdownChart(); as bc) {
+            <div class="chart-box tall">
+              <canvas baseChart [type]="bc.type" [data]="bc.data" [options]="bc.options"></canvas>
+            </div>
+          } @else {
+            <app-state-message
+              kind="empty"
+              icon="bar_chart"
+              title="Нет данных по инструментам"
+              hint="Обновите цены на странице «Портфель», чтобы увидеть прибыль и убыток по тикерам."
+            />
+          }
         </mat-card>
       </div>
     }
@@ -541,13 +555,65 @@ export class DashboardPage {
     () => this.api.summary.value()?.totals ?? DashboardPage.EMPTY,
   );
 
-  /** Строки таблицы эффективности — по системам или по портфелям */
+  /** Текущая сортировка таблицы «Эффективность»; пустое direction — порядок с сервера */
+  protected readonly effSort = signal<Sort>({ active: '', direction: '' });
+
+  /**
+   * Ключ строки по имени колонки. Возвращает `string | number`, потому что
+   * «Название» сравнивается лексикографически, а остальные — численно.
+   * null (метрика не определена) всегда уезжает вниз — см. compare().
+   */
+  private effValue(row: EffRow, column: string): string | number | null {
+    switch (column) {
+      case 'name':
+        return row.name;
+      case 'invested':
+        return row.investedRub;
+      case 'value':
+        return row.currentValueRub;
+      case 'realized':
+        return row.realizedPnlRub;
+      case 'pnl':
+        return row.pnlRub;
+      case 'roi':
+        return row.roiPct;
+      case 'xirr':
+        return row.xirrPct;
+      case 'dividends':
+        return row.dividendsRub;
+      case 'divyield':
+        return row.dividendYieldPct;
+      default:
+        return null;
+    }
+  }
+
+  /** Строки таблицы эффективности — по системам или по портфелям, с учётом сортировки */
   protected readonly effRows = computed<EffRow[]>(() => {
     const s = this.api.summary.value();
     if (!s) return [];
-    return this.groupBy() === 'system'
-      ? s.bySystem.map((r) => ({ ...r, id: r.systemId }))
-      : s.byPortfolio.map((r) => ({ ...r, id: r.portfolioId }));
+    const rows =
+      this.groupBy() === 'system'
+        ? s.bySystem.map((r) => ({ ...r, id: r.systemId }))
+        : s.byPortfolio.map((r) => ({ ...r, id: r.portfolioId }));
+
+    const { active, direction } = this.effSort();
+    if (!active || !direction) return rows;
+
+    const sign = direction === 'asc' ? 1 : -1;
+    return [...rows].sort((a, b) => {
+      const av = this.effValue(a, active);
+      const bv = this.effValue(b, active);
+      // «—» (метрика не определена) держим внизу при ЛЮБОМ направлении: иначе при
+      // сортировке по XIRR вверх список начинается с прочерков, а не с худших чисел
+      if (av === null && bv === null) return 0;
+      if (av === null) return 1;
+      if (bv === null) return -1;
+      if (typeof av === 'string' || typeof bv === 'string') {
+        return sign * String(av).localeCompare(String(bv), 'ru');
+      }
+      return sign * (av - bv);
+    });
   });
 
   /**
@@ -723,8 +789,9 @@ export class DashboardPage {
   });
 
   /** Комбо по месяцам: столбцы Поток (серый) и Доход (зелёный/красный по знаку) */
-  protected readonly timelineChart = computed<ChartConfiguration<'bar'>>(() => {
+  protected readonly timelineChart = computed<ChartConfiguration<'bar'> | null>(() => {
     const t = this.api.summary.value()?.timeline ?? [];
+    if (t.length === 0) return null;
     const incomeColors = t.map((r) => (r.income >= 0 ? this.cc().positive : this.cc().negative));
     return {
       type: 'bar',
@@ -757,8 +824,9 @@ export class DashboardPage {
   });
 
   /** P&L по системам: столбцы, цвет по знаку */
-  protected readonly systemChart = computed<ChartConfiguration<'bar'>>(() => {
+  protected readonly systemChart = computed<ChartConfiguration<'bar'> | null>(() => {
     const s = this.api.summary.value()?.bySystem ?? [];
+    if (s.length === 0) return null;
     return {
       type: 'bar',
       data: {
@@ -785,8 +853,9 @@ export class DashboardPage {
   });
 
   /** Breakdown по инструментам: горизонтальные бары, цвет по знаку */
-  protected readonly breakdownChart = computed<ChartConfiguration<'bar'>>(() => {
+  protected readonly breakdownChart = computed<ChartConfiguration<'bar'> | null>(() => {
     const b = this.api.summary.value()?.breakdown ?? [];
+    if (b.length === 0) return null;
     return {
       type: 'bar',
       data: {
