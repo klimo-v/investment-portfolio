@@ -1,4 +1,4 @@
-import { ChangeDetectionStrategy, Component, computed, effect, inject, signal } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, inject, signal } from '@angular/core';
 import { MatCardModule } from '@angular/material/card';
 import { MatTableModule } from '@angular/material/table';
 import { MatButtonModule } from '@angular/material/button';
@@ -10,6 +10,8 @@ import { BaseChartDirective } from 'ng2-charts';
 import type { ChartConfiguration } from 'chart.js';
 import type { InstrumentType } from '@core';
 import { OperationApi } from '../../entities/operation/operation.api';
+import { PositionApi } from '../../entities/position/position.api';
+import { summaryResource, type SummaryFilter } from '../../entities/summary/summary.api';
 import { ReferenceApi } from '../../entities/reference/reference.api';
 import {
   TYPE_COLOR,
@@ -124,7 +126,7 @@ interface Group {
       />
     </div>
 
-    @if (api.positions.error()) {
+    @if (positionApi.positions.error()) {
       <app-state-message
         kind="error"
         title="Не удалось загрузить позиции"
@@ -134,7 +136,7 @@ interface Group {
       />
       <!-- hasValue(), а не !isLoading(): «Обновить цены» перезапрашивает позиции, и
            на !isLoading() таблицы с диаграммой пропадали на время запроса -->
-    } @else if (api.positions.hasValue() && groups().length === 0) {
+    } @else if (positionApi.positions.hasValue() && groups().length === 0) {
       <mat-card>
         @if (positions().length === 0) {
           <app-state-message
@@ -151,7 +153,7 @@ interface Group {
           />
         }
       </mat-card>
-    } @else if (api.positions.hasValue()) {
+    } @else if (positionApi.positions.hasValue()) {
       <div class="content">
         <div class="tables">
           @for (g of groups(); track g.type) {
@@ -304,6 +306,7 @@ interface Group {
 })
 export class PortfolioPage {
   protected readonly api = inject(OperationApi);
+  protected readonly positionApi = inject(PositionApi);
   private readonly reference = inject(ReferenceApi);
   private readonly dialog = inject(MatDialog);
   private readonly theme = inject(ThemeService);
@@ -339,19 +342,24 @@ export class PortfolioPage {
   protected readonly systemFilter = signal<string | null>(null);
   protected readonly portfolioFilter = signal<string | null>(null);
 
-  constructor() {
-    // Прокидываем фильтр в OperationApi — итоговые карточки берут те же
-    // отфильтрованные totals(), что и таблица «Эффективность» на дашборде.
-    effect(() => {
-      this.api.summaryFilter.set({
-        systemId: this.systemFilter() ?? undefined,
-        portfolioId: this.portfolioFilter() ?? undefined,
-      });
-    });
-  }
+  /**
+   * Фильтр сводки страницы: итоговые карточки берут те же отфильтрованные totals(),
+   * что и таблица «Эффективность» на дашборде. Период здесь не задаётся — карточки
+   * описывают состояние на сегодня.
+   *
+   * Раньше это писалось эффектом в общий на всё приложение
+   * `OperationApi.summaryFilter`, и фильтр «Портфеля» (без дат) затирал период,
+   * выбранный на дашборде, а вход на страницу стоил лишнего запроса.
+   */
+  private readonly summaryFilter = computed<SummaryFilter>(() => ({
+    systemId: this.systemFilter() ?? undefined,
+    portfolioId: this.portfolioFilter() ?? undefined,
+  }));
+
+  private readonly summary = summaryResource(this.summaryFilter);
 
   /** Все позиции из API */
-  private readonly allPositions = computed(() => this.api.positions.value() ?? []);
+  private readonly allPositions = computed(() => this.positionApi.positions.value() ?? []);
 
   /** Позиции после применения фильтров по системе/портфелю */
   protected readonly positions = computed(() => {
@@ -445,7 +453,7 @@ export class PortfolioPage {
    * Раньше это расходилось с дашбордом ровно на величину реализованного P&L
    * (напр. −84 248,81 ₽ здесь против −45 915,13 ₽ на дашборде для тех же данных).
    */
-  private readonly totals = computed(() => this.api.summary.value()?.totals);
+  private readonly totals = computed(() => this.summary.value()?.totals);
 
   protected readonly investedTotal = computed(() => formatRub(this.totals()?.investedRub));
 

@@ -19,6 +19,7 @@ import { MatPaginatorModule, type PageEvent } from '@angular/material/paginator'
 import { MatSortModule, type Sort } from '@angular/material/sort';
 import { OperationApi } from '../../entities/operation/operation.api';
 import { ReferenceApi } from '../../entities/reference/reference.api';
+import { TradeApi } from '../../entities/trade/trade.api';
 import {
   clampPageIndex,
   formatMoney,
@@ -73,7 +74,7 @@ interface StatsRow extends TradeStats {
   template: `
     <h1 class="page-title">Сделки</h1>
 
-    @if (api.trades.error()) {
+    @if (tradeApi.trades.error()) {
       <app-state-message
         kind="error"
         title="Не удалось загрузить сделки"
@@ -81,7 +82,7 @@ interface StatsRow extends TradeStats {
         retryLabel="Повторить"
         (retry)="api.reload()"
       />
-    } @else if (api.trades.hasValue()) {
+    } @else if (tradeApi.trades.hasValue()) {
       <!--
         Фильтр портфеля СНАРУЖИ табов и действует на все три, включая «Статистику»
         (раньше статистика его игнорировала). Пока он жил внутри списочного таба,
@@ -454,6 +455,7 @@ interface StatsRow extends TradeStats {
 })
 export class TradesPage {
   protected readonly api = inject(OperationApi);
+  protected readonly tradeApi = inject(TradeApi);
   protected readonly reference = inject(ReferenceApi);
 
   protected readonly statsColumns = [
@@ -551,7 +553,7 @@ export class TradesPage {
 
   private readonly trades = computed(() => {
     const portfolio = this.portfolioFilter();
-    const all = this.api.trades.value() ?? [];
+    const all = this.tradeApi.trades.value() ?? [];
     return portfolio ? all.filter((t) => t.portfolioId === portfolio) : all;
   });
 

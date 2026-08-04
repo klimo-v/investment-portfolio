@@ -1,4 +1,4 @@
-import { ChangeDetectionStrategy, Component, computed, effect, inject, signal } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, inject, signal } from '@angular/core';
 import { MatCardModule } from '@angular/material/card';
 import { MatTableModule } from '@angular/material/table';
 import { MatButtonToggleModule } from '@angular/material/button-toggle';
@@ -22,12 +22,13 @@ import {
   ThemeService,
   toneOf,
 } from '@web-shared';
-import { OperationApi } from '../../entities/operation/operation.api';
+import { summaryResource, type SummaryFilter } from '../../entities/summary/summary.api';
 import { SnapshotApi } from '../../entities/snapshot/snapshot.api';
-import { BenchmarkApi } from '../../entities/benchmark/benchmark.api';
+import { benchmarkResource, type BenchmarkRange } from '../../entities/benchmark/benchmark.api';
 import { PositionSeriesApi } from '../../entities/position-series/position-series.api';
 import { ReferenceApi } from '../../entities/reference/reference.api';
 import { provideAppCharts, syncChartDefaultsWithTheme } from '../../shared/chart.providers';
+import { DataRevision } from '../../shared/data-revision';
 
 /**
  * Дашборд (docs/03-ux-plan.md шаг 4; docs/05-review-usability.md §1).
@@ -135,13 +136,13 @@ interface EffRow extends Effectiveness {
       </div>
     </div>
 
-    @if (api.summary.error()) {
+    @if (summary.error()) {
       <app-state-message
         kind="error"
         title="Не удалось загрузить сводку"
         hint="Проверьте, что сервер запущен, и попробуйте ещё раз."
         retryLabel="Повторить"
-        (retry)="api.reload()"
+        (retry)="reload()"
       />
       <!--
         hasValue(), а НЕ !isLoading(): isLoading() истинно и при ПЕРЕЗАГРУЗКЕ, поэтому
@@ -151,7 +152,7 @@ interface EffRow extends Effectiveness {
         прежние цифры (о том, что идёт загрузка, сообщает mat-progress-bar в тулбаре),
         а скрыто всё только пока данных нет вообще — на первой загрузке.
       -->
-    } @else if (api.summary.hasValue()) {
+    } @else if (summary.hasValue()) {
       <div class="kpi-grid">
         <app-kpi-card
           label="Всего в портфеле"
@@ -482,9 +483,8 @@ interface EffRow extends Effectiveness {
   ],
 })
 export class DashboardPage {
-  protected readonly api = inject(OperationApi);
+  private readonly revision = inject(DataRevision);
   protected readonly snapshots = inject(SnapshotApi);
-  protected readonly benchmark = inject(BenchmarkApi);
   protected readonly positionSeries = inject(PositionSeriesApi);
   protected readonly reference = inject(ReferenceApi);
   private readonly theme = inject(ThemeService);
@@ -570,6 +570,30 @@ export class DashboardPage {
     return `${fmt(r.from)} – ${fmt(r.till)}`;
   });
 
+  /**
+   * Фильтр сводки одним сигналом. Раньше он эффектом писался в общий на всё
+   * приложение `OperationApi.summaryFilter`: фильтры страниц затирали друг друга
+   * при навигации, а на каждый вход на дашборд уходил лишний запрос — ресурс
+   * успевал сходить со старым фильтром, потом эффект менял URL.
+   */
+  private readonly summaryFilter = computed<SummaryFilter>(() => {
+    const r = this.periodRange();
+    return {
+      systemId: this.systemFilter() ?? undefined,
+      portfolioId: this.portfolioFilter() ?? undefined,
+      from: r.from,
+      till: r.till,
+    };
+  });
+
+  /** Агрегаты дашборда под фильтр ЭТОЙ страницы (см. entities/summary) */
+  protected readonly summary = summaryResource(this.summaryFilter);
+
+  /** Перезапросить всё после ошибки — кнопка «Повторить» */
+  protected reload(): void {
+    this.revision.bump();
+  }
+
   protected readonly effColumns = [
     'name',
     'invested',
@@ -595,14 +619,14 @@ export class DashboardPage {
   };
 
   protected readonly totals = computed<Effectiveness>(
-    () => this.api.summary.value()?.totals ?? DashboardPage.EMPTY,
+    () => this.summary.value()?.totals ?? DashboardPage.EMPTY,
   );
 
   private static readonly EMPTY_CASH: Cash = { cashRub: 0, totalValueRub: 0 };
 
   /** Свободные деньги и «всего в портфеле» — стоимость позиций плюс кэш */
   protected readonly cash = computed<Cash>(
-    () => this.api.summary.value()?.cash ?? DashboardPage.EMPTY_CASH,
+    () => this.summary.value()?.cash ?? DashboardPage.EMPTY_CASH,
   );
 
   /**
@@ -647,7 +671,7 @@ export class DashboardPage {
 
   /** Строки таблицы эффективности — по системам или по портфелям, с учётом сортировки */
   protected readonly effRows = computed<EffRow[]>(() => {
-    const s = this.api.summary.value();
+    const s = this.summary.value();
     if (!s) return [];
     // Аннотация обязательна: без неё тип выводится как объединение ДВУХ массивов
     // (bySystem[] | byPortfolio[]), а такое объединение не подходит под readonly T[]
@@ -677,29 +701,19 @@ export class DashboardPage {
     () => maxDrawdown(this.snaps().map((s) => s.currentValueRub)) * 100,
   );
 
-  constructor() {
-    // Прокидываем фильтр в OperationApi — summary() пересчитывается на сервере
-    effect(() => {
-      const r = this.periodRange();
-      this.api.summaryFilter.set({
-        systemId: this.systemFilter() ?? undefined,
-        portfolioId: this.portfolioFilter() ?? undefined,
-        from: r.from,
-        till: r.till,
-      });
-    });
+  /**
+   * Окно запроса истории индекса — от первого (отфильтрованного по периоду) снимка
+   * до сегодня. null (снимков меньше двух) означает «не запрашивать»: сравнивать
+   * не с чем. Раньше это же вычисление жило в effect'е и писало в общий сигнал
+   * BenchmarkApi.range.
+   */
+  private readonly benchmarkRange = computed<BenchmarkRange | null>(() => {
+    const s = this.snaps();
+    if (s.length < 2) return null;
+    return { from: s[0].date, till: new Date().toISOString().slice(0, 10) };
+  });
 
-    // Диапазон запроса истории индекса — от первого (отфильтрованного по периоду)
-    // снимка до сегодня
-    effect(() => {
-      const s = this.snaps();
-      if (s.length < 2) {
-        this.benchmark.range.set(null);
-        return;
-      }
-      this.benchmark.range.set({ from: s[0].date, till: new Date().toISOString().slice(0, 10) });
-    });
-  }
+  protected readonly benchmark = benchmarkResource(this.benchmarkRange);
 
   /**
    * Смысловые цвета графиков под текущую тему. Читается внутри чарт-computed()'ов,
@@ -781,7 +795,7 @@ export class DashboardPage {
    */
   protected readonly benchmarkChart = computed<ChartConfiguration<'line'> | null>(() => {
     const s = this.snaps();
-    const b = [...(this.benchmark.history.value() ?? [])].sort((a, b) => a.date.localeCompare(b.date));
+    const b = [...(this.benchmark.value() ?? [])].sort((a, b) => a.date.localeCompare(b.date));
     if (s.length < 2 || b.length === 0) return null;
 
     const baseValue = s[0].currentValueRub > 0 ? s[0].currentValueRub : s[0].investedRub;
@@ -834,7 +848,7 @@ export class DashboardPage {
 
   /** Комбо по месяцам: столбцы Поток (серый) и Доход (зелёный/красный по знаку) */
   protected readonly timelineChart = computed<ChartConfiguration<'bar'> | null>(() => {
-    const t = this.api.summary.value()?.timeline ?? [];
+    const t = this.summary.value()?.timeline ?? [];
     if (t.length === 0) return null;
     const incomeColors = t.map((r) => (r.income >= 0 ? this.cc().positive : this.cc().negative));
     return {
@@ -869,7 +883,7 @@ export class DashboardPage {
 
   /** P&L по системам: столбцы, цвет по знаку */
   protected readonly systemChart = computed<ChartConfiguration<'bar'> | null>(() => {
-    const s = this.api.summary.value()?.bySystem ?? [];
+    const s = this.summary.value()?.bySystem ?? [];
     if (s.length === 0) return null;
     return {
       type: 'bar',
@@ -898,7 +912,7 @@ export class DashboardPage {
 
   /** Breakdown по инструментам: горизонтальные бары, цвет по знаку */
   protected readonly breakdownChart = computed<ChartConfiguration<'bar'> | null>(() => {
-    const b = this.api.summary.value()?.breakdown ?? [];
+    const b = this.summary.value()?.breakdown ?? [];
     if (b.length === 0) return null;
     return {
       type: 'bar',

@@ -1,24 +1,31 @@
-import { Injectable, signal } from '@angular/core';
-import { httpResource } from '@angular/common/http';
+import type { Signal } from '@angular/core';
+import { httpResource, type HttpResourceRef } from '@angular/common/http';
 import { z } from 'zod';
 import { BenchmarkPointSchema, type BenchmarkPoint } from '@core';
 
-/**
- * API-клиент истории бенчмарка (индекс IMOEX) для линии «Портфель vs рынок»
- * на дашборде (docs/05-review-usability.md §1). Диапазон дат задаётся снаружи
- * (по датам снимков стоимости) — пока не задан, запрос не уходит (httpResource
- * с undefined-URL простаивает).
- */
-@Injectable({ providedIn: 'root' })
-export class BenchmarkApi {
-  /** Диапазон запроса; null — не запрашивать (нет снимков) */
-  readonly range = signal<{ from: string; till: string } | null>(null);
+/** Диапазон дат запроса истории индекса */
+export interface BenchmarkRange {
+  from: string;
+  till: string;
+}
 
-  readonly history = httpResource(
+/**
+ * История бенчмарка (индекс IMOEX) для линии «Портфель vs рынок» на дашборде
+ * (docs/05-review-usability.md §1). Диапазон приходит сигналом от страницы (он
+ * считается по датам снимков) и читается ЛЕНИВО внутри URL-функции: пока он null,
+ * httpResource простаивает на undefined-URL и запрос не уходит.
+ *
+ * Функция, а не root-сервис с публичным `range`: у сервиса значение переживало
+ * уход со страницы, и при возврате ресурс успевал сходить со СТАРЫМ диапазоном
+ * прежде, чем эффект страницы записывал новый.
+ */
+export function benchmarkResource(
+  range: Signal<BenchmarkRange | null>,
+): HttpResourceRef<BenchmarkPoint[] | undefined> {
+  return httpResource(
     () => {
-      const r = this.range();
-      if (!r) return undefined;
-      return `/api/quotes/benchmark?from=${r.from}&till=${r.till}`;
+      const r = range();
+      return r ? `/api/quotes/benchmark?from=${r.from}&till=${r.till}` : undefined;
     },
     { parse: z.array(BenchmarkPointSchema).parse },
   );
