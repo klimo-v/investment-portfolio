@@ -2,10 +2,9 @@ import {
   ChangeDetectionStrategy,
   Component,
   computed,
-  effect,
   inject,
+  linkedSignal,
   signal,
-  type WritableSignal,
 } from '@angular/core';
 import { NgTemplateOutlet } from '@angular/common';
 import { MatCardModule } from '@angular/material/card';
@@ -638,9 +637,22 @@ export class TradesPage {
    * частями эту выборку не отдать. Пагинация здесь — про то, сколько DOM-строк
    * рендерить, а не про объём запроса.
    */
-  private readonly openPage = signal(0);
-  private readonly closedPage = signal(0);
   protected readonly pageSize = signal(25);
+
+  /**
+   * linkedSignal, а не signal + effect: страница держится, пока существует, и
+   * подрезается, когда список схлопнулся. Эффект, писавший в сигнал, успевал
+   * отработать уже ПОСЛЕ отрисовки — paginator мигал «страница 3 из 1».
+   */
+  private pageFor(total: () => number) {
+    return linkedSignal<{ total: number; size: number }, number>({
+      source: () => ({ total: total(), size: this.pageSize() }),
+      computation: ({ total: t, size }, previous) => clampPageIndex(previous?.value ?? 0, t, size),
+    });
+  }
+
+  private readonly openPage = this.pageFor(() => this.openTrades().length);
+  private readonly closedPage = this.pageFor(() => this.closedTrades().length);
 
   protected pageIndex(key: TradeListKey): number {
     return key === 'open' ? this.openPage() : this.closedPage();
@@ -657,21 +669,6 @@ export class TradesPage {
   protected readonly pagedClosed = computed(() =>
     pageSlice(this.sortedClosed(), this.closedPage(), this.pageSize()),
   );
-
-  /**
-   * Сам pageSlice() индекс уже подрезает, но привязка [pageIndex] у MatPaginator
-   * читает сигнал напрямую — без этого эффекта таблица показывала бы первую
-   * страницу, а paginator продолжал утверждать «страница 3 из 1».
-   */
-  private readonly clampPages = effect(() => {
-    const size = this.pageSize();
-    const fit = (total: number, page: WritableSignal<number>): void => {
-      const fixed = clampPageIndex(page(), total, size);
-      if (fixed !== page()) page.set(fixed);
-    };
-    fit(this.openTrades().length, this.openPage);
-    fit(this.closedTrades().length, this.closedPage);
-  });
 
   protected toggle(id: string): void {
     this.expandedId.set(this.expandedId() === id ? null : id);

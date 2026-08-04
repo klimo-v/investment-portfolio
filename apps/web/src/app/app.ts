@@ -1,11 +1,4 @@
-import {
-  ChangeDetectionStrategy,
-  Component,
-  computed,
-  effect,
-  inject,
-  signal,
-} from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, inject, linkedSignal } from '@angular/core';
 import { RouterLink, RouterLinkActive, RouterOutlet } from '@angular/router';
 import { MatToolbarModule } from '@angular/material/toolbar';
 import { MatSidenavModule } from '@angular/material/sidenav';
@@ -158,19 +151,17 @@ export class App {
     this.isHandset() ? 'over' : 'side',
   );
 
-  protected readonly opened = signal(!this.isHandset());
+  /**
+   * Открыта ли шторка. linkedSignal, а не signal + effect: значение по умолчанию
+   * зависит от ширины экрана, но пользователь может его переопределить тумблером, и
+   * при смене режима (поворот, ресайз) оно должно вернуться к дефолту нового режима.
+   * Эффект, писавший в сигнал, выражал ровно это — но был обязан выполниться отдельным
+   * проходом планировщика и оставлял окно, где шторка не соответствует режиму.
+   */
+  protected readonly opened = linkedSignal(() => !this.isHandset());
 
   protected readonly themeIcon = computed(() => THEME_UI[this.theme.mode()].icon);
   protected readonly themeLabel = computed(() => THEME_UI[this.theme.mode()].label);
-
-  constructor() {
-    // Ширина изменилась — приводим шторку к состоянию по умолчанию для нового режима.
-    // Без этого ручной тумблер дерётся с computed-режимом: свёрнутая на узком экране
-    // шторка осталась бы свёрнутой и после разворота окна.
-    effect(() => {
-      this.opened.set(!this.isHandset());
-    });
-  }
 
   /**
    * В режиме оверлея шторка накрывает контент и после перехода остаётся висеть —

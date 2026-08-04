@@ -1,4 +1,11 @@
-import { ChangeDetectionStrategy, Component, computed, effect, inject, signal } from '@angular/core';
+import {
+  ChangeDetectionStrategy,
+  Component,
+  computed,
+  inject,
+  linkedSignal,
+  signal,
+} from '@angular/core';
 import { MatCardModule } from '@angular/material/card';
 import { MatTableModule } from '@angular/material/table';
 import { MatButtonModule } from '@angular/material/button';
@@ -362,8 +369,18 @@ export class OperationsPage {
   });
 
   protected readonly sortState = signal<SortState>({ active: 'date', direction: 'desc' });
-  protected readonly pageIndex = signal(0);
   protected readonly pageSize = signal(25);
+
+  /**
+   * Текущая страница. linkedSignal, а не signal + effect: страница сохраняется, пока
+   * она существует, и подрезается, когда список схлопнулся (сработал фильтр, удалили
+   * строки). Раньше это делал effect, писавший в сигнал — MatPaginator успевал
+   * отрисоваться с «страница 3 из 1» до того, как эффект его поправит.
+   */
+  protected readonly pageIndex = linkedSignal<{ total: number; size: number }, number>({
+    source: () => ({ total: this.filteredRows().length, size: this.pageSize() }),
+    computation: ({ total, size }, previous) => clampPageIndex(previous?.value ?? 0, total, size),
+  });
 
   protected readonly hasActiveFilters = computed(
     () =>
@@ -419,17 +436,6 @@ export class OperationsPage {
   protected readonly pagedRows = computed(() =>
     pageSlice(this.sortedRows(), this.pageIndex(), this.pageSize()),
   );
-
-  /**
-   * pageSlice() индекс уже подрезает, но привязка [pageIndex] у MatPaginator читает
-   * сигнал напрямую — без этого эффекта после массового удаления на последней
-   * странице таблица показывала бы первую страницу, а paginator утверждал бы
-   * «страница 3 из 1».
-   */
-  private readonly clampPage = effect(() => {
-    const fixed = clampPageIndex(this.pageIndex(), this.filteredRows().length, this.pageSize());
-    if (fixed !== this.pageIndex()) this.pageIndex.set(fixed);
-  });
 
   protected readonly selected = signal<ReadonlySet<string>>(new Set());
   protected readonly deleting = signal(false);
