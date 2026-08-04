@@ -143,7 +143,15 @@ interface EffRow extends Effectiveness {
         retryLabel="Повторить"
         (retry)="api.reload()"
       />
-    } @else if (!api.summary.isLoading()) {
+      <!--
+        hasValue(), а НЕ !isLoading(): isLoading() истинно и при ПЕРЕЗАГРУЗКЕ, поэтому
+        каждая смена системы/портфеля/периода уничтожала всё тело дашборда вместе с
+        шестью <canvas> и строила заново — Chart.js получал destroy + новый инстанс,
+        а пользователь видел мигание. Теперь при перезапросе на экране остаются
+        прежние цифры (о том, что идёт загрузка, сообщает mat-progress-bar в тулбаре),
+        а скрыто всё только пока данных нет вообще — на первой загрузке.
+      -->
+    } @else if (api.summary.hasValue()) {
       <div class="kpi-grid">
         <app-kpi-card
           label="Всего в портфеле"
@@ -292,9 +300,19 @@ interface EffRow extends Effectiveness {
             }
           </p>
           @if (benchmarkChart(); as bc) {
-            <div class="chart-box">
-              <canvas baseChart [type]="bc.type" [data]="bc.data" [options]="bc.options"></canvas>
-            </div>
+            <!--
+              @defer (on viewport) на каждом графике (CLAUDE.md §9): пять Chart.js
+              инстансов на одной странице строились разом при открытии дашборда,
+              включая те, до которых пользователь может и не долистать. Плейсхолдер
+              повторяет геометрию .chart-box, поэтому вёрстка не прыгает.
+            -->
+            @defer (on viewport) {
+              <div class="chart-box">
+                <canvas baseChart [type]="bc.type" [data]="bc.data" [options]="bc.options"></canvas>
+              </div>
+            } @placeholder {
+              <div class="chart-box"></div>
+            }
           } @else {
             <p class="note">
               Нужно минимум два снимка стоимости и данные индекса. Снимки появляются на
@@ -315,9 +333,13 @@ interface EffRow extends Effectiveness {
             }
           </p>
           @if (positionsChart(); as pc) {
-            <div class="chart-box tall">
-              <canvas baseChart [type]="pc.type" [data]="pc.data" [options]="pc.options"></canvas>
-            </div>
+            @defer (on viewport) {
+              <div class="chart-box tall">
+                <canvas baseChart [type]="pc.type" [data]="pc.data" [options]="pc.options"></canvas>
+              </div>
+            } @placeholder {
+              <div class="chart-box tall"></div>
+            }
           } @else {
             <p class="note">
               Снимков пока нет — они появляются на странице «Портфель» при нажатии
@@ -332,9 +354,13 @@ interface EffRow extends Effectiveness {
             Столбцы на одной оске: поток кэша (депозиты/выводы) и доход (дивиденды/купоны).
           </p>
           @if (timelineChart(); as tc) {
-            <div class="chart-box">
-              <canvas baseChart [type]="tc.type" [data]="tc.data" [options]="tc.options"></canvas>
-            </div>
+            @defer (on viewport) {
+              <div class="chart-box">
+                <canvas baseChart [type]="tc.type" [data]="tc.data" [options]="tc.options"></canvas>
+              </div>
+            } @placeholder {
+              <div class="chart-box"></div>
+            }
           } @else {
             <app-state-message
               kind="empty"
@@ -348,9 +374,13 @@ interface EffRow extends Effectiveness {
         <mat-card>
           <h3>P&L по системам</h3>
           @if (systemChart(); as sc) {
-            <div class="chart-box">
-              <canvas baseChart [type]="sc.type" [data]="sc.data" [options]="sc.options"></canvas>
-            </div>
+            @defer (on viewport) {
+              <div class="chart-box">
+                <canvas baseChart [type]="sc.type" [data]="sc.data" [options]="sc.options"></canvas>
+              </div>
+            } @placeholder {
+              <div class="chart-box"></div>
+            }
           } @else {
             <app-state-message
               kind="empty"
@@ -364,9 +394,13 @@ interface EffRow extends Effectiveness {
         <mat-card class="wide">
           <h3>Прибыль / убыток по инструментам</h3>
           @if (breakdownChart(); as bc) {
-            <div class="chart-box tall">
-              <canvas baseChart [type]="bc.type" [data]="bc.data" [options]="bc.options"></canvas>
-            </div>
+            @defer (on viewport) {
+              <div class="chart-box tall">
+                <canvas baseChart [type]="bc.type" [data]="bc.data" [options]="bc.options"></canvas>
+              </div>
+            } @placeholder {
+              <div class="chart-box tall"></div>
+            }
           } @else {
             <app-state-message
               kind="empty"

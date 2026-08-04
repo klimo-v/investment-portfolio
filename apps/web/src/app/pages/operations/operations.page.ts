@@ -7,16 +7,33 @@ import { MatCheckboxModule } from '@angular/material/checkbox';
 import { MatFormFieldModule } from '@angular/material/form-field';
 import { MatInputModule } from '@angular/material/input';
 import { MatSelectModule } from '@angular/material/select';
-import { MatSortModule, Sort } from '@angular/material/sort';
+import { MatSortModule, type Sort } from '@angular/material/sort';
 import { MatPaginatorModule, PageEvent } from '@angular/material/paginator';
 import { MatDialog } from '@angular/material/dialog';
 import { firstValueFrom } from 'rxjs';
-import { OperationType } from '@core';
-import { clampPageIndex, ConfirmService, pageSlice, StateMessage } from '@web-shared';
+import { OperationType, type Operation } from '@core';
+import {
+  clampPageIndex,
+  ConfirmService,
+  pageSlice,
+  sortRows,
+  StateMessage,
+  type SortKey,
+  type SortState,
+} from '@web-shared';
 import { OperationApi } from '../../entities/operation/operation.api';
 import { ReferenceApi } from '../../entities/reference/reference.api';
 import { AddOperationDialog } from '../../features/add-operation/add-operation.dialog';
 import { ReassignOperationsDialog } from '../../features/reassign-operations/reassign-operations.dialog';
+
+/** Операция журнала, готовая к показу: имена справочников и строка поиска подставлены */
+interface OperationRow extends Operation {
+  id: string;
+  systemName: string;
+  portfolioName: string;
+  /** Склеенные в нижнем регистре поля, по которым ищет строка поиска */
+  haystack: string;
+}
 
 /**
  * Страница «Операции» (docs/03-ux-plan.md, шаг 1).
@@ -76,7 +93,9 @@ import { ReassignOperationsDialog } from '../../features/reassign-operations/rea
         retryLabel="Повторить"
         (retry)="api.reload()"
       />
-    } @else if (!api.operations.isLoading()) {
+      <!-- hasValue(), а не !isLoading(): при перезагрузке (удаление, добавление,
+           переназначение) таблица не должна схлопываться — см. дашборд -->
+    } @else if (api.operations.hasValue()) {
       <mat-card>
         <div class="filters">
           <mat-form-field appearance="outline" subscriptSizing="dynamic">
@@ -124,7 +143,16 @@ import { ReassignOperationsDialog } from '../../features/reassign-operations/rea
         </div>
 
         <div class="table-scroll">
-          <table mat-table matSort [dataSource]="pagedRows()" (matSortChange)="onSortChange($event)">
+          <!-- matSortActive/Direction обязательны: без них таблица отсортирована по
+               дате вниз, а стрелка в заголовке этого не показывает -->
+          <table
+            mat-table
+            matSort
+            [matSortActive]="sortState().active"
+            [matSortDirection]="sortState().direction"
+            [dataSource]="pagedRows()"
+            (matSortChange)="onSortChange($event)"
+          >
             <ng-container matColumnDef="select">
               <th mat-header-cell *matHeaderCellDef>
                 <mat-checkbox
@@ -146,11 +174,11 @@ import { ReassignOperationsDialog } from '../../features/reassign-operations/rea
             </ng-container>
             <ng-container matColumnDef="system">
               <th mat-header-cell *matHeaderCellDef mat-sort-header>Система</th>
-              <td mat-cell *matCellDef="let r">{{ systemName(r.systemId) }}</td>
+              <td mat-cell *matCellDef="let r">{{ r.systemName }}</td>
             </ng-container>
             <ng-container matColumnDef="portfolio">
               <th mat-header-cell *matHeaderCellDef mat-sort-header>Портфель</th>
-              <td mat-cell *matCellDef="let r">{{ portfolioName(r.portfolioId) }}</td>
+              <td mat-cell *matCellDef="let r">{{ r.portfolioName }}</td>
             </ng-container>
             <ng-container matColumnDef="type">
               <th mat-header-cell *matHeaderCellDef mat-sort-header>Тип</th>
@@ -270,11 +298,46 @@ export class OperationsPage {
 
   protected readonly allRows = computed(() => this.api.operations.value() ?? []);
 
+  private readonly systemNameById = computed(
+    () => new Map((this.reference.systems.value() ?? []).map((s) => [s.id, s.name])),
+  );
+  private readonly portfolioNameById = computed(
+    () => new Map((this.reference.portfolios.value() ?? []).map((p) => [p.id, p.name])),
+  );
+
+  /**
+   * Журнал, подготовленный к показу: имена системы и портфеля подставлены один раз,
+   * а не на каждый вызов из шаблона и из компаратора сортировки. `haystack` —
+   * заранее склеенная строка для поиска: раньше она собиралась заново для КАЖДОЙ
+   * строки на КАЖДЫЙ введённый символ.
+   *
+   * Пересчитывается только при смене журнала или справочников — не при фильтрации,
+   * сортировке и листании.
+   */
+  private readonly displayRows = computed(() => {
+    const systems = this.systemNameById();
+    const portfolios = this.portfolioNameById();
+    return this.allRows().map((op) => {
+      const systemName = systems.get(op.systemId) ?? op.systemId;
+      const portfolioName = portfolios.get(op.portfolioId) ?? op.portfolioId;
+      return {
+        ...op,
+        // Список из API всегда с id; пустая строка — чтобы не тащить `!` в разметку
+        id: op.id ?? '',
+        systemName,
+        portfolioName,
+        haystack: [op.date, systemName, portfolioName, op.operationType, op.instrumentId ?? '']
+          .join(' ')
+          .toLowerCase(),
+      };
+    });
+  });
+
   protected readonly search = signal('');
   protected readonly systemFilter = signal<string | null>(null);
   protected readonly portfolioFilter = signal<string | null>(null);
   protected readonly typeFilter = signal<OperationType | null>(null);
-  protected readonly sortState = signal<Sort>({ active: 'date', direction: 'desc' });
+  protected readonly sortState = signal<SortState>({ active: 'date', direction: 'desc' });
   protected readonly pageIndex = signal(0);
   protected readonly pageSize = signal(25);
 
@@ -293,56 +356,40 @@ export class OperationsPage {
     const type = this.typeFilter();
     const query = this.search().trim().toLowerCase();
 
-    return this.allRows().filter((r) => {
+    return this.displayRows().filter((r) => {
       if (system && r.systemId !== system) return false;
       if (portfolio && r.portfolioId !== portfolio) return false;
       if (type && r.operationType !== type) return false;
-      if (query) {
-        const haystack = [
-          r.date,
-          this.systemName(r.systemId),
-          this.portfolioName(r.portfolioId),
-          r.operationType,
-          r.instrumentId ?? '',
-        ]
-          .join(' ')
-          .toLowerCase();
-        if (!haystack.includes(query)) return false;
-      }
+      if (query && !r.haystack.includes(query)) return false;
       return true;
     });
   });
 
-  private readonly sortedRows = computed(() => {
-    const { active, direction } = this.sortState();
-    const rows = [...this.filteredRows()];
-    if (!direction) return rows;
+  /** Ключ сортировки колонки — механика сравнения общая (web-shared: sortRows) */
+  private sortKey(row: OperationRow, column: string): SortKey {
+    switch (column) {
+      case 'date':
+        return row.date;
+      case 'system':
+        return row.systemName;
+      case 'portfolio':
+        return row.portfolioName;
+      case 'type':
+        return row.operationType;
+      case 'ticker':
+        return row.instrumentId ?? '';
+      case 'qty':
+        return Number(row.quantity);
+      case 'price':
+        return Number(row.price);
+      default:
+        return null;
+    }
+  }
 
-    const dir = direction === 'asc' ? 1 : -1;
-    rows.sort((a, b) => {
-      switch (active) {
-        case 'date':
-          return a.date.localeCompare(b.date) * dir;
-        case 'system':
-          return this.systemName(a.systemId).localeCompare(this.systemName(b.systemId)) * dir;
-        case 'portfolio':
-          return (
-            this.portfolioName(a.portfolioId).localeCompare(this.portfolioName(b.portfolioId)) * dir
-          );
-        case 'type':
-          return a.operationType.localeCompare(b.operationType) * dir;
-        case 'ticker':
-          return (a.instrumentId ?? '').localeCompare(b.instrumentId ?? '') * dir;
-        case 'qty':
-          return (Number(a.quantity) - Number(b.quantity)) * dir;
-        case 'price':
-          return (Number(a.price) - Number(b.price)) * dir;
-        default:
-          return 0;
-      }
-    });
-    return rows;
-  });
+  private readonly sortedRows = computed(() =>
+    sortRows(this.filteredRows(), this.sortState(), (row, column) => this.sortKey(row, column)),
+  );
 
   /** Текущая страница — то, что реально попадает в `mat-table` */
   protected readonly pagedRows = computed(() =>
@@ -364,25 +411,10 @@ export class OperationsPage {
   protected readonly deleting = signal(false);
   protected readonly reassigning = signal(false);
 
-  private readonly systemNameById = computed(
-    () => new Map((this.reference.systems.value() ?? []).map((s) => [s.id, s.name])),
-  );
-  private readonly portfolioNameById = computed(
-    () => new Map((this.reference.portfolios.value() ?? []).map((p) => [p.id, p.name])),
-  );
-
-  protected systemName(id: string): string {
-    return this.systemNameById().get(id) ?? id;
-  }
-
-  protected portfolioName(id: string): string {
-    return this.portfolioNameById().get(id) ?? id;
-  }
-
   /** «Выбрать всё» — по всем операциям, подходящим под фильтр (а не только на странице) */
   protected readonly allSelected = computed(() => {
     const rows = this.filteredRows();
-    return rows.length > 0 && rows.every((r) => this.selected().has(r.id!));
+    return rows.length > 0 && rows.every((r) => this.selected().has(r.id));
   });
 
   protected readonly someSelected = computed(
@@ -442,7 +474,7 @@ export class OperationsPage {
   }
 
   protected toggleAll(checked: boolean): void {
-    this.selected.set(checked ? new Set(this.filteredRows().map((r) => r.id!)) : new Set());
+    this.selected.set(checked ? new Set(this.filteredRows().map((r) => r.id)) : new Set());
   }
 
   protected async openReassign(): Promise<void> {

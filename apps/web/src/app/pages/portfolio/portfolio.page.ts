@@ -132,7 +132,9 @@ interface Group {
         retryLabel="Повторить"
         (retry)="api.reload()"
       />
-    } @else if (!api.positions.isLoading() && groups().length === 0) {
+      <!-- hasValue(), а не !isLoading(): «Обновить цены» перезапрашивает позиции, и
+           на !isLoading() таблицы с диаграммой пропадали на время запроса -->
+    } @else if (api.positions.hasValue() && groups().length === 0) {
       <mat-card>
         @if (positions().length === 0) {
           <app-state-message
@@ -149,7 +151,7 @@ interface Group {
           />
         }
       </mat-card>
-    } @else if (!api.positions.isLoading()) {
+    } @else if (api.positions.hasValue()) {
       <div class="content">
         <div class="tables">
           @for (g of groups(); track g.type) {
@@ -193,14 +195,20 @@ interface Group {
         <mat-card class="pie">
           <h3>Распределение по типам</h3>
           @if (pieHasData()) {
-            <div class="chart-box">
-              <canvas
-                baseChart
-                [type]="pieChart().type"
-                [data]="pieChart().data"
-                [options]="pieChart().options"
-              ></canvas>
-            </div>
+            <!-- @defer: диаграмма живёт в правой колонке и на узком экране уезжает
+                 под таблицы — строить Chart.js до того, как до неё долистают, незачем -->
+            @defer (on viewport) {
+              <div class="chart-box">
+                <canvas
+                  baseChart
+                  [type]="pieChart().type"
+                  [data]="pieChart().data"
+                  [options]="pieChart().options"
+                ></canvas>
+              </div>
+            } @placeholder {
+              <div class="chart-box"></div>
+            }
           } @else {
             <app-state-message
               kind="empty"

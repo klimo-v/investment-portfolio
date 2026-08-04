@@ -81,7 +81,7 @@ interface StatsRow extends TradeStats {
         retryLabel="Повторить"
         (retry)="api.reload()"
       />
-    } @else if (!api.trades.isLoading()) {
+    } @else if (api.trades.hasValue()) {
       <!--
         Фильтр портфеля СНАРУЖИ табов и действует на все три, включая «Статистику»
         (раньше статистика его игнорировала). Пока он жил внутри списочного таба,
@@ -107,25 +107,35 @@ interface StatsRow extends TradeStats {
           Каждому табу — своя страница (key). Один общий pageIndex был бы багом:
           открытых сделок обычно единицы, закрытых сотни, и переключение на «Открытые»
           со страницы 5 показывало бы пустую таблицу.
+
+          ng-template matTabContent вокруг тела каждого таба — не украшение:
+          инлайновое содержимое Material строит СРАЗУ у всех табов, то есть обе
+          таблицы сделок и весь блок статистики оказывались в DOM, даже когда
+          открыт один таб. С matTabContent тело создаётся при первом переходе.
         -->
         <mat-tab [label]="'Открытые (' + openTrades().length + ')'">
-          <ng-container
-            [ngTemplateOutlet]="table"
-            [ngTemplateOutletContext]="{ rows: pagedOpen(), total: openTrades().length, key: 'open' }"
-          />
+          <ng-template matTabContent>
+            <ng-container
+              [ngTemplateOutlet]="table"
+              [ngTemplateOutletContext]="{ rows: pagedOpen(), total: openTrades().length, key: 'open' }"
+            />
+          </ng-template>
         </mat-tab>
         <mat-tab [label]="'Закрытые (' + closedTrades().length + ')'">
-          <ng-container
-            [ngTemplateOutlet]="table"
-            [ngTemplateOutletContext]="{
-              rows: pagedClosed(),
-              total: closedTrades().length,
-              key: 'closed',
-            }"
-          />
+          <ng-template matTabContent>
+            <ng-container
+              [ngTemplateOutlet]="table"
+              [ngTemplateOutletContext]="{
+                rows: pagedClosed(),
+                total: closedTrades().length,
+                key: 'closed',
+              }"
+            />
+          </ng-template>
         </mat-tab>
 
         <mat-tab label="Статистика">
+          <ng-template matTabContent>
           <div class="stats-tab-content">
             @if (overall().closedCount > 0) {
               <mat-card class="stats">
@@ -191,6 +201,7 @@ interface StatsRow extends TradeStats {
               />
             }
           </div>
+          </ng-template>
         </mat-tab>
       </mat-tab-group>
     }
@@ -318,7 +329,7 @@ interface StatsRow extends TradeStats {
                   <div class="detail">
                     <p class="detail-title">Операции сделки:</p>
                     <ul>
-                      @for (op of operationsFor(t); track op.id) {
+                      @for (op of expandedOperations(); track op.id) {
                         <li>
                           {{ op.date }} — {{ op.operationType }} {{ op.quantity }} @ {{ op.price }}
                           @if (op.fee !== '0') { (комиссия {{ op.fee }}) }
@@ -664,11 +675,20 @@ export class TradesPage {
     this.expandedId.set(this.expandedId() === id ? null : id);
   }
 
-  protected operationsFor(trade: Trade) {
-    const ops = this.api.operations.value() ?? [];
+  /**
+   * Операции раскрытой сделки. Именно computed, а не метод `operationsFor(trade)`
+   * из шаблона: тот вызывался на каждом проходе change detection и каждый раз
+   * заново прогонял ВЕСЬ журнал операций. Теперь пересчёт только при смене
+   * раскрытой строки или самого журнала (CLAUDE.md §3: логика — в computed).
+   */
+  protected readonly expandedOperations = computed(() => {
+    const id = this.expandedId();
+    if (id === null) return [];
+    const trade = this.trades().find((t) => t.id === id);
+    if (!trade) return [];
     const ids = new Set(trade.operationIds);
-    return ops.filter((op) => op.id && ids.has(op.id));
-  }
+    return (this.api.operations.value() ?? []).filter((op) => op.id && ids.has(op.id));
+  });
 
   protected statusLabel(status: Trade['status']): string {
     return { Open: 'Открыта', Partial: 'Частично', Closed: 'Закрыта' }[status];
