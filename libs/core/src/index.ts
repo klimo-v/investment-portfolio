@@ -2,6 +2,7 @@
 // Импорт из приложений — только через '@core' (Nx path alias).
 export * from './lib/schemas';
 export * from './lib/engine';
+export * from './lib/cash';
 export * from './lib/metrics';
 export * from './lib/import';
 export * from './lib/parsers/broker-html-report';

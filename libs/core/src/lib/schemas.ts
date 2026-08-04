@@ -147,6 +147,20 @@ export const EffectivenessSchema = z.object({
 export type Effectiveness = z.infer<typeof EffectivenessSchema>;
 
 /**
+ * Денежный срез портфеля: сколько всего в нём сейчас лежит.
+ *
+ * Намеренно НЕ часть EffectivenessSchema, хотя туда просилось: та считается ещё и по
+ * системам, а денежный остаток по торговой системе бессмысленен — деньги лежат на
+ * брокерском СЧЁТЕ (портфеле), а не в стратегии. Плюс Effectiveness — метрики за
+ * период, а остаток периода не имеет (только дату, см. cash.ts).
+ */
+export const CashSchema = z.object({
+  cashRub: z.number(), // свободные деньги; отрицательные = журнал неполон (см. cash.ts)
+  totalValueRub: z.number(), // всего в портфеле = стоимость позиций + свободные деньги
+});
+export type Cash = z.infer<typeof CashSchema>;
+
+/**
  * Агрегаты для дашборда (docs/03-ux-plan.md, шаг 4).
  * Логика построения графика — из portfolio_dashboard.html пользователя:
  * помесячные поток (депозиты/выводы) и доход (дивиденды/купоны/реализ. P&L),
@@ -183,6 +197,7 @@ export const DashboardSummarySchema = z.object({
     }),
   ),
   totals: EffectivenessSchema,
+  cash: CashSchema,
 });
 export type DashboardSummary = z.infer<typeof DashboardSummarySchema>;
 

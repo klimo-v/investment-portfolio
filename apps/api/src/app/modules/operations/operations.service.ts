@@ -4,6 +4,7 @@ import { eq } from 'drizzle-orm';
 import {
   calculatePositions,
   calculateTrades,
+  cashBalanceRub,
   realizedPnlInRange,
   xirr,
   periodCashFlows,
@@ -333,7 +334,14 @@ export class OperationsService {
 
     const totals = this.effectiveness(opsUpTo, positions, today, filter.from);
 
-    return { timeline, bySystem, byPortfolio, breakdown, totals };
+    // Свободные деньги считаем по opsUpTo, т.е. по ВСЕЙ истории до `till` и намеренно
+    // без `filter.from`: остаток на счёте — величина на момент, а не за период
+    // (см. cash.ts). Фильтр по системе/портфелю при этом действует — он уже применён
+    // к opsUpTo, и срез по портфелю даёт остаток именно этого счёта.
+    const cashRub = cashBalanceRub(opsUpTo).toNumber();
+    const cash = { cashRub, totalValueRub: totals.currentValueRub + cashRub };
+
+    return { timeline, bySystem, byPortfolio, breakdown, totals, cash };
   }
 
   /**

@@ -9,7 +9,7 @@ import { MatDatepickerModule } from '@angular/material/datepicker';
 import { MatSortModule, type Sort } from '@angular/material/sort';
 import { BaseChartDirective } from 'ng2-charts';
 import type { ChartConfiguration } from 'chart.js';
-import { maxDrawdown, type Effectiveness } from '@core';
+import { maxDrawdown, type Cash, type Effectiveness } from '@core';
 import {
   chartSemantic,
   Hint,
@@ -142,11 +142,27 @@ interface EffRow extends Effectiveness {
     } @else if (!api.summary.isLoading()) {
       <div class="kpi-grid">
         <app-kpi-card
+          label="Всего в портфеле"
+          [value]="money(cash().totalValueRub)"
+          hint="Сколько сейчас в портфеле всего: рыночная стоимость открытых позиций плюс свободные деньги. Не зависит от выбранного периода — это величина на сегодня, а не за окно."
+        />
+        <app-kpi-card
+          label="Позиции"
+          [value]="money(totals().currentValueRub)"
+          hint="Рыночная стоимость открытых позиций по последним известным ценам. Деньги на счёте сюда не входят — они в соседней карточке."
+        />
+        <app-kpi-card
+          label="Свободные деньги"
+          [value]="money(cash().cashRub)"
+          [tone]="cashIncomplete() ? 'negative' : 'neutral'"
+          [sub]="cashIncomplete() ? 'журнал неполон' : ''"
+          hint="Остаток на счёте по журналу: пополнения − выводы − покупки + продажи + дивиденды и купоны − налоги и комиссии. Минус означает, что в журнал попали не все движения денег (пополнения, переводы между счетами, отдельные налоги/комиссии) — либо позиции набирались с плечом."
+        />
+        <app-kpi-card
           label="Вложено"
           [value]="money(totals().investedRub)"
           hint="Себестоимость держимого остатка — сходится с колонкой «Вложено» на странице «Сделки»"
         />
-        <app-kpi-card label="Текущая стоимость" [value]="money(totals().currentValueRub)" />
 
         <!--
           Единственная карточка с ручной разметкой: подстрока несёт ДВА значения со
@@ -554,6 +570,20 @@ export class DashboardPage {
   protected readonly totals = computed<Effectiveness>(
     () => this.api.summary.value()?.totals ?? DashboardPage.EMPTY,
   );
+
+  private static readonly EMPTY_CASH: Cash = { cashRub: 0, totalValueRub: 0 };
+
+  /** Свободные деньги и «всего в портфеле» — стоимость позиций плюс кэш */
+  protected readonly cash = computed<Cash>(
+    () => this.api.summary.value()?.cash ?? DashboardPage.EMPTY_CASH,
+  );
+
+  /**
+   * Остаток ушёл в минус — значит журнал не содержит части денежных движений
+   * (см. cash.ts). Подписываем это прямо на карточке, а не прячем: минус здесь
+   * информативнее пустого места.
+   */
+  protected readonly cashIncomplete = computed(() => this.cash().cashRub < 0);
 
   /** Текущая сортировка таблицы «Эффективность»; пустое direction — порядок с сервера */
   protected readonly effSort = signal<Sort>({ active: '', direction: '' });
