@@ -1,4 +1,12 @@
-import { ChangeDetectionStrategy, Component, computed, inject, signal } from '@angular/core';
+import {
+  ChangeDetectionStrategy,
+  Component,
+  computed,
+  effect,
+  inject,
+  signal,
+  type WritableSignal,
+} from '@angular/core';
 import { NgTemplateOutlet } from '@angular/common';
 import { MatCardModule } from '@angular/material/card';
 import { MatTableModule } from '@angular/material/table';
@@ -7,11 +15,14 @@ import { MatIconModule } from '@angular/material/icon';
 import { MatFormFieldModule } from '@angular/material/form-field';
 import { MatSelectModule } from '@angular/material/select';
 import { MatButtonToggleModule } from '@angular/material/button-toggle';
+import { MatPaginatorModule, type PageEvent } from '@angular/material/paginator';
 import { OperationApi } from '../../entities/operation/operation.api';
 import { ReferenceApi } from '../../entities/reference/reference.api';
 import {
+  clampPageIndex,
   formatMoney,
   KpiCard,
+  pageSlice,
   pnlColorClass,
   StateMessage,
   StatusChip,
@@ -19,6 +30,9 @@ import {
   type KpiTone,
 } from '@web-shared';
 import { tradeStats, type Trade, type TradeStats, type TradeStatInput } from '@core';
+
+/** Какой из двух списков сделок листаем — у каждого своя страница */
+type TradeListKey = 'open' | 'closed';
 
 interface StatsRow extends TradeStats {
   id: string;
@@ -44,6 +58,7 @@ interface StatsRow extends TradeStats {
     MatFormFieldModule,
     MatSelectModule,
     MatButtonToggleModule,
+    MatPaginatorModule,
     NgTemplateOutlet,
     KpiCard,
     StateMessage,
@@ -82,11 +97,26 @@ interface StatsRow extends TradeStats {
       </div>
 
       <mat-tab-group>
+        <!--
+          Каждому табу — своя страница (key). Один общий pageIndex был бы багом:
+          открытых сделок обычно единицы, закрытых сотни, и переключение на «Открытые»
+          со страницы 5 показывало бы пустую таблицу.
+        -->
         <mat-tab [label]="'Открытые (' + openTrades().length + ')'">
-          <ng-container [ngTemplateOutlet]="table" [ngTemplateOutletContext]="{ rows: openTrades() }" />
+          <ng-container
+            [ngTemplateOutlet]="table"
+            [ngTemplateOutletContext]="{ rows: pagedOpen(), total: openTrades().length, key: 'open' }"
+          />
         </mat-tab>
         <mat-tab [label]="'Закрытые (' + closedTrades().length + ')'">
-          <ng-container [ngTemplateOutlet]="table" [ngTemplateOutletContext]="{ rows: closedTrades() }" />
+          <ng-container
+            [ngTemplateOutlet]="table"
+            [ngTemplateOutletContext]="{
+              rows: pagedClosed(),
+              total: closedTrades().length,
+              key: 'closed',
+            }"
+          />
         </mat-tab>
 
         <mat-tab label="Статистика">
@@ -193,10 +223,14 @@ interface StatsRow extends TradeStats {
       </table>
     </ng-template>
 
-    <ng-template #table let-rows="rows">
+    <ng-template #table let-rows="rows" let-total="total" let-key="key">
       <mat-card class="table-card">
-        @if (rows.length === 0) {
-          <p class="empty">Сделок нет.</p>
+        @if (total === 0) {
+          <app-state-message
+            kind="empty"
+            title="Сделок нет"
+            hint="Сделки собираются из журнала операций автоматически — добавьте покупки и продажи."
+          />
         } @else {
         <div class="table-scroll">
           <table mat-table [dataSource]="rows" multiTemplateDataRows>
@@ -282,6 +316,14 @@ interface StatsRow extends TradeStats {
             <tr mat-row *matRowDef="let row; columns: ['detail']" class="detail-row"></tr>
           </table>
         </div>
+
+        <mat-paginator
+          [length]="total"
+          [pageIndex]="pageIndex(key)"
+          [pageSize]="pageSize()"
+          [pageSizeOptions]="[25, 50, 100]"
+          (page)="onPage(key, $event)"
+        ></mat-paginator>
         }
       </mat-card>
     </ng-template>
@@ -500,6 +542,51 @@ export class TradesPage {
   protected readonly closedTrades = computed(() =>
     this.trades().filter((t) => t.status === 'Closed'),
   );
+
+  /**
+   * Пагинация списков сделок. Страница у каждого таба своя, размер — общий:
+   * закрытых сделок обычно на порядок больше открытых, и один общий pageIndex
+   * оставлял бы «Открытые» пустыми после листания «Закрытых».
+   *
+   * Резать на клиенте, а не на сервере, — сознательно: сделки не хранятся, их
+   * целиком пересобирает движок (@core: calculateTrades) из всей истории операций,
+   * частями эту выборку не отдать. Пагинация здесь — про то, сколько DOM-строк
+   * рендерить, а не про объём запроса.
+   */
+  private readonly openPage = signal(0);
+  private readonly closedPage = signal(0);
+  protected readonly pageSize = signal(25);
+
+  protected pageIndex(key: TradeListKey): number {
+    return key === 'open' ? this.openPage() : this.closedPage();
+  }
+
+  protected onPage(key: TradeListKey, event: PageEvent): void {
+    (key === 'open' ? this.openPage : this.closedPage).set(event.pageIndex);
+    this.pageSize.set(event.pageSize);
+  }
+
+  protected readonly pagedOpen = computed(() =>
+    pageSlice(this.openTrades(), this.openPage(), this.pageSize()),
+  );
+  protected readonly pagedClosed = computed(() =>
+    pageSlice(this.closedTrades(), this.closedPage(), this.pageSize()),
+  );
+
+  /**
+   * Сам pageSlice() индекс уже подрезает, но привязка [pageIndex] у MatPaginator
+   * читает сигнал напрямую — без этого эффекта таблица показывала бы первую
+   * страницу, а paginator продолжал утверждать «страница 3 из 1».
+   */
+  private readonly clampPages = effect(() => {
+    const size = this.pageSize();
+    const fit = (total: number, page: WritableSignal<number>): void => {
+      const fixed = clampPageIndex(page(), total, size);
+      if (fixed !== page()) page.set(fixed);
+    };
+    fit(this.openTrades().length, this.openPage);
+    fit(this.closedTrades().length, this.closedPage);
+  });
 
   protected toggle(id: string): void {
     this.expandedId.set(this.expandedId() === id ? null : id);

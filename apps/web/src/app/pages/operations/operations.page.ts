@@ -12,7 +12,7 @@ import { MatPaginatorModule, PageEvent } from '@angular/material/paginator';
 import { MatDialog } from '@angular/material/dialog';
 import { firstValueFrom } from 'rxjs';
 import { OperationType } from '@core';
-import { ConfirmService, StateMessage } from '@web-shared';
+import { clampPageIndex, ConfirmService, pageSlice, StateMessage } from '@web-shared';
 import { OperationApi } from '../../entities/operation/operation.api';
 import { ReferenceApi } from '../../entities/reference/reference.api';
 import { AddOperationDialog } from '../../features/add-operation/add-operation.dialog';
@@ -350,21 +350,19 @@ export class OperationsPage {
   });
 
   /** Текущая страница — то, что реально попадает в `mat-table` */
-  protected readonly pagedRows = computed(() => {
-    const start = this.pageIndex() * this.pageSize();
-    return this.sortedRows().slice(start, start + this.pageSize());
-  });
+  protected readonly pagedRows = computed(() =>
+    pageSlice(this.sortedRows(), this.pageIndex(), this.pageSize()),
+  );
 
   /**
-   * MatPaginator сам не подрезает pageIndex, если length уменьшился (например,
-   * после массового удаления на последней странице) — без этого таблица осталась
-   * бы пустой, хотя данные есть на предыдущих страницах.
+   * pageSlice() индекс уже подрезает, но привязка [pageIndex] у MatPaginator читает
+   * сигнал напрямую — без этого эффекта после массового удаления на последней
+   * странице таблица показывала бы первую страницу, а paginator утверждал бы
+   * «страница 3 из 1».
    */
-  private readonly clampPageIndex = effect(() => {
-    const pageCount = Math.max(1, Math.ceil(this.filteredRows().length / this.pageSize()));
-    if (this.pageIndex() > pageCount - 1) {
-      this.pageIndex.set(pageCount - 1);
-    }
+  private readonly clampPage = effect(() => {
+    const fixed = clampPageIndex(this.pageIndex(), this.filteredRows().length, this.pageSize());
+    if (fixed !== this.pageIndex()) this.pageIndex.set(fixed);
   });
 
   protected readonly selected = signal<ReadonlySet<string>>(new Set());
