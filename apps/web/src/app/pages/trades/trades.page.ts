@@ -61,37 +61,36 @@ interface StatsRow extends TradeStats {
         (retry)="api.reload()"
       />
     } @else if (!api.trades.isLoading()) {
-      <mat-tab-group class="top-tabs">
-        <mat-tab label="Открытые и закрытые">
-          <div class="tab-content trades-tab-content">
-            <div class="filters">
-              <mat-form-field appearance="outline" subscriptSizing="dynamic">
-                <mat-label>Портфель</mat-label>
-                <mat-select
-                  [value]="portfolioFilter()"
-                  (selectionChange)="portfolioFilter.set($event.value)"
-                >
-                  <mat-option [value]="null">Все</mat-option>
-                  @for (p of reference.portfolios.value(); track p.id) {
-                    <mat-option [value]="p.id">{{ p.name }}</mat-option>
-                  }
-                </mat-select>
-              </mat-form-field>
-            </div>
+      <!--
+        Фильтр портфеля СНАРУЖИ табов и действует на все три, включая «Статистику»
+        (раньше статистика его игнорировала). Пока он жил внутри списочного таба,
+        асимметрия была незаметна; над общей группой она сбивала бы с толку.
+      -->
+      <div class="filters">
+        <mat-form-field appearance="outline" subscriptSizing="dynamic">
+          <mat-label>Портфель</mat-label>
+          <mat-select
+            [value]="portfolioFilter()"
+            (selectionChange)="portfolioFilter.set($event.value)"
+          >
+            <mat-option [value]="null">Все</mat-option>
+            @for (p of reference.portfolios.value(); track p.id) {
+              <mat-option [value]="p.id">{{ p.name }}</mat-option>
+            }
+          </mat-select>
+        </mat-form-field>
+      </div>
 
-            <mat-tab-group class="tabs">
-              <mat-tab [label]="'Открытые (' + openTrades().length + ')'">
-                <ng-container [ngTemplateOutlet]="table" [ngTemplateOutletContext]="{ rows: openTrades() }" />
-              </mat-tab>
-              <mat-tab [label]="'Закрытые (' + closedTrades().length + ')'">
-                <ng-container [ngTemplateOutlet]="table" [ngTemplateOutletContext]="{ rows: closedTrades() }" />
-              </mat-tab>
-            </mat-tab-group>
-          </div>
+      <mat-tab-group>
+        <mat-tab [label]="'Открытые (' + openTrades().length + ')'">
+          <ng-container [ngTemplateOutlet]="table" [ngTemplateOutletContext]="{ rows: openTrades() }" />
+        </mat-tab>
+        <mat-tab [label]="'Закрытые (' + closedTrades().length + ')'">
+          <ng-container [ngTemplateOutlet]="table" [ngTemplateOutletContext]="{ rows: closedTrades() }" />
         </mat-tab>
 
         <mat-tab label="Статистика">
-          <div class="tab-content stats-tab-content">
+          <div class="stats-tab-content">
             @if (overall().closedCount > 0) {
               <mat-card class="stats">
                 <div class="stats-head">
@@ -289,45 +288,19 @@ interface StatsRow extends TradeStats {
   `,
   styles: [
     `
-      :host {
-        display: flex;
-        flex-direction: column;
-        flex: 1;
-        min-height: 0;
-      }
-      .top-tabs {
-        flex: 1;
-        min-height: 0;
-        display: flex;
-        flex-direction: column;
-      }
-      .top-tabs ::ng-deep .mat-mdc-tab-body-wrapper,
-      .top-tabs ::ng-deep .mat-mdc-tab-body,
-      .top-tabs ::ng-deep .mat-mdc-tab-body-content {
-        flex: 1;
-        min-height: 0;
-        height: 100%;
-      }
-      .tab-content {
-        height: 100%;
-      }
-      .trades-tab-content {
-        display: flex;
-        flex-direction: column;
-        min-height: 0;
-        padding: 20px 30px;
-        /* .tab-content задаёт height: 100% — без border-box паддинги добавились бы
-           к высоте и вкладка вылезла бы за пределы mat-tab-body на 40px */
-        box-sizing: border-box;
+      /*
+       * Ни :host на всю высоту, ни ::ng-deep. Раньше здесь была цепочка правил,
+       * протягивавших height: 100% сквозь ПРИВАТНЫЙ DOM Material
+       * (.mat-mdc-tab-body-wrapper/-body/-content) — она существовала только потому,
+       * что внутренняя группа табов была обязана заполнить внешнее тело таба.
+       * Табы расплющены, тело таба сайзится по содержимому, скроллит страница.
+       */
+      /* .filters — глобальный (styles.scss) */
+      .filters {
+        margin-bottom: 12px;
       }
       .stats-tab-content {
-        overflow: auto;
         padding-top: 12px;
-      }
-      /* .filters — глобальный (styles.scss); горизонтальный отступ даёт контейнер */
-      .filters {
-        flex: 0 0 auto;
-        padding-bottom: 12px;
       }
       .stats-group-toggle {
         margin-top: 12px;
@@ -362,30 +335,17 @@ interface StatsRow extends TradeStats {
         width: 100%;
         margin-top: 16px;
       }
-      .tabs {
-        flex: 1;
-        min-height: 0;
-        display: flex;
-        flex-direction: column;
-      }
-      .tabs ::ng-deep .mat-mdc-tab-body-wrapper,
-      .tabs ::ng-deep .mat-mdc-tab-body,
-      .tabs ::ng-deep .mat-mdc-tab-body-content {
-        flex: 1;
-        min-height: 0;
-        height: 100%;
-      }
       .table-card {
         margin-top: 16px;
-        height: calc(100% - 16px);
-        display: flex;
-        flex-direction: column;
-        overflow: hidden;
       }
+      /*
+       * Только горизонтальный скролл: вертикальный отдан странице. Внутренний
+       * скролл-контейнер был вторым источником цепочки height: 100% выше, а липкий
+       * заголовок (sticky: true у matHeaderRowDef) от этого не страдает — он липнет
+       * к ближайшему скроллящему предку, которым теперь стал .content из app.ts.
+       */
       .table-scroll {
-        flex: 1;
-        min-height: 0;
-        overflow: auto;
+        overflow-x: auto;
       }
       table {
         width: 100%;
@@ -440,10 +400,19 @@ export class TradesPage {
     'hold',
   ];
 
-  /** Вход для статистики: минимальные поля сделки, реализ. P&L строкой → числом */
+  /**
+   * Вход для статистики: минимальные поля сделки, реализ. P&L строкой → числом.
+   *
+   * Фильтр портфеля применяется И ЗДЕСЬ (изменение поведения, 2026-08-04). Раньше
+   * статистика считалась по всем сделкам независимо от фильтра — пока фильтр жил
+   * внутри списочного таба, это было незаметно. После расплющивания табов он стоит
+   * над всеми тремя, и читающий такой макет ждёт «win rate по портфелю X», а не
+   * «по всему сразу». Цифры на вкладке «Статистика» при выбранном портфеле теперь
+   * отличаются от прежних — это намеренно.
+   */
   private readonly statInputs = computed<(TradeStatInput & { systemId: string; portfolioId: string })[]>(
     () =>
-      (this.api.trades.value() ?? []).map((t) => ({
+      this.trades().map((t) => ({
         systemId: t.systemId,
         portfolioId: t.portfolioId,
         status: t.status,
@@ -453,7 +422,7 @@ export class TradesPage {
       })),
   );
 
-  /** Статистика по всем закрытым сделкам (не зависит от фильтра по портфелю — тот только для списка сделок) */
+  /** Статистика по закрытым сделкам выбранного среза */
   protected readonly overall = computed<TradeStats>(() => tradeStats(this.statInputs()));
 
   /** Разрез статистики: по системам или по портфелям (переключатель под KPI) */
@@ -516,7 +485,7 @@ export class TradesPage {
 
   protected readonly expandedId = signal<string | null>(null);
 
-  /** Фильтр по портфелю — только для списка сделок (не влияет на статистику) */
+  /** Фильтр по портфелю — сужает и списки сделок, и статистику (см. statInputs) */
   protected readonly portfolioFilter = signal<string | null>(null);
 
   private readonly trades = computed(() => {
