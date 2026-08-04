@@ -1,4 +1,4 @@
-import { ChangeDetectionStrategy, Component, inject, signal } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, inject, signal } from '@angular/core';
 import { RouterLink, RouterLinkActive, RouterOutlet } from '@angular/router';
 import { MatToolbarModule } from '@angular/material/toolbar';
 import { MatSidenavModule } from '@angular/material/sidenav';
@@ -6,13 +6,25 @@ import { MatListModule } from '@angular/material/list';
 import { MatIconModule } from '@angular/material/icon';
 import { MatButtonModule } from '@angular/material/button';
 import { MatProgressBarModule } from '@angular/material/progress-bar';
-import { LoadingService } from '@web-shared';
+import { MatTooltipModule } from '@angular/material/tooltip';
+import { LoadingService, ThemeService, type ThemeMode } from '@web-shared';
 
 interface NavItem {
   readonly path: string;
   readonly label: string;
   readonly icon: string;
 }
+
+/**
+ * Иконка и подпись кнопки темы. Подпись описывает и текущее состояние, и результат
+ * нажатия: у иконки-кнопки без текста иначе нет способа сообщить, что она вообще
+ * делает и в каком режиме находится.
+ */
+const THEME_UI: Record<ThemeMode, { icon: string; label: string }> = {
+  light: { icon: 'light_mode', label: 'Тема: светлая. Переключить на тёмную' },
+  dark: { icon: 'dark_mode', label: 'Тема: тёмная. Переключить на системную' },
+  system: { icon: 'brightness_auto', label: 'Тема: как в системе. Переключить на светлую' },
+};
 
 /**
  * Корневой компонент-оболочка: боковое меню + область роутов.
@@ -31,6 +43,7 @@ interface NavItem {
     MatIconModule,
     MatButtonModule,
     MatProgressBarModule,
+    MatTooltipModule,
   ],
   template: `
     <div class="toolbar-wrap">
@@ -39,6 +52,15 @@ interface NavItem {
           <mat-icon>menu</mat-icon>
         </button>
         <span>Investment Portfolio</span>
+        <span class="toolbar-spacer"></span>
+        <button
+          mat-icon-button
+          (click)="theme.cycle()"
+          [attr.aria-label]="themeLabel()"
+          [matTooltip]="themeLabel()"
+        >
+          <mat-icon>{{ themeIcon() }}</mat-icon>
+        </button>
       </mat-toolbar>
       @if (loading.isLoading()) {
         <mat-progress-bar mode="indeterminate" class="global-progress" />
@@ -73,6 +95,9 @@ interface NavItem {
       .toolbar-wrap {
         position: relative;
       }
+      .toolbar-spacer {
+        flex: 1;
+      }
       .global-progress {
         position: absolute;
         left: 0;
@@ -98,7 +123,12 @@ interface NavItem {
 })
 export class App {
   protected readonly loading = inject(LoadingService);
+  protected readonly theme = inject(ThemeService);
   protected readonly opened = signal(true);
+
+  protected readonly themeIcon = computed(() => THEME_UI[this.theme.mode()].icon);
+  /** Подпись описывает и текущее состояние, и результат нажатия — иначе кнопка «немая» */
+  protected readonly themeLabel = computed(() => THEME_UI[this.theme.mode()].label);
 
   protected readonly nav: readonly NavItem[] = [
     { path: 'dashboard', label: 'Дашборд', icon: 'dashboard' },

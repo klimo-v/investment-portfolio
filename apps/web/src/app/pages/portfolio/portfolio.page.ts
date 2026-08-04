@@ -19,7 +19,7 @@ import {
 } from '../../entities/instrument/instrument-type.tokens';
 import { ManagePortfoliosDialog } from '../../features/manage-portfolios/manage-portfolios.dialog';
 import { ManageSystemsDialog } from '../../features/manage-systems/manage-systems.dialog';
-import { formatMoney, pnlColorClass } from '@web-shared';
+import { formatMoney, pnlColorClass, ThemeService } from '@web-shared';
 
 /**
  * Страница «Портфель» (docs/03-ux-plan.md, шаг 3; roadmap Фаза 2).
@@ -298,6 +298,7 @@ export class PortfolioPage {
   protected readonly api = inject(OperationApi);
   private readonly reference = inject(ReferenceApi);
   private readonly dialog = inject(MatDialog);
+  private readonly theme = inject(ThemeService);
 
   protected readonly columns = ['ticker', 'qty', 'avg', 'current', 'value', 'pnl'];
   protected readonly refreshing = signal(false);
@@ -396,6 +397,9 @@ export class PortfolioPage {
   /** Круговая диаграмма: доля текущей стоимости (₽) по типам инструментов */
   protected readonly pieChart = computed<ChartConfiguration<'doughnut'>>(() => {
     const data = this.groups().filter((g) => g.valueRub > 0);
+    // Зависимость от темы обязательна: Chart.defaults (цвет легенды) — JS-значения,
+    // уже отрисованный график сам их не перечитает, конфиг должен пересобраться
+    const dark = this.theme.isDark();
     return {
       type: 'doughnut',
       data: {
@@ -404,7 +408,10 @@ export class PortfolioPage {
           {
             data: data.map((g) => g.valueRub),
             backgroundColor: data.map((g) => TYPE_COLOR[g.type]),
-            borderWidth: 0,
+            // Разделитель цветом поверхности: без него соседние сегменты сливаются,
+            // а на тёмном фоне белая рамка (дефолт Chart.js) выглядит как обводка
+            borderColor: dark ? '#1c2020' : '#ffffff',
+            borderWidth: 1,
           },
         ],
       },

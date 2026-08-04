@@ -22,6 +22,20 @@
     />
   </head>
   <body class="mat-typography">
+    <!--
+      Тема выставляется ДО первой отрисовки: ThemeService стартует только вместе с
+      Angular, и без этого холодная загрузка в тёмной теме успевает мигнуть белым.
+      Ключ и значения синхронны с libs/web-shared/theme/theme.service.ts.
+    -->
+    <script>
+      try {
+        var m = localStorage.getItem('app-theme');
+        document.documentElement.style.colorScheme =
+          m === 'light' || m === 'dark' ? m : 'light dark';
+      } catch (e) {
+        /* localStorage недоступен — остаётся значение из styles.scss */
+      }
+    </script>
     <app-root></app-root>
   </body>
 </html>

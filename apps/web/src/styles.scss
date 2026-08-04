@@ -1,7 +1,13 @@
 @use '@angular/material' as mat;
 
 html {
-  color-scheme: light;
+  /*
+   * 'light dark' = «решает система». ThemeService переписывает это свойство на
+   * 'light'/'dark' при явном выборе. Одно свойство переключает ВСЮ тему: и
+   * --mat-sys-*, и --app-* объявлены через light-dark(), ветку в котором выбирает
+   * сам браузер по color-scheme элемента.
+   */
+  color-scheme: light dark;
   @include mat.theme(
     (
       color: (

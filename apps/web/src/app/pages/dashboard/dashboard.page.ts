@@ -9,7 +9,7 @@ import { MatDatepickerModule } from '@angular/material/datepicker';
 import { BaseChartDirective } from 'ng2-charts';
 import type { ChartConfiguration } from 'chart.js';
 import { maxDrawdown, type Effectiveness } from '@core';
-import { chartSemantic, seriesColor } from '@web-shared';
+import { chartSemantic, seriesColor, ThemeService } from '@web-shared';
 import { OperationApi } from '../../entities/operation/operation.api';
 import { SnapshotApi } from '../../entities/snapshot/snapshot.api';
 import { BenchmarkApi } from '../../entities/benchmark/benchmark.api';
@@ -442,6 +442,7 @@ export class DashboardPage {
   protected readonly benchmark = inject(BenchmarkApi);
   protected readonly positionSeries = inject(PositionSeriesApi);
   protected readonly reference = inject(ReferenceApi);
+  private readonly theme = inject(ThemeService);
 
   protected readonly depositRatePct = (DEPOSIT_ANNUAL_RATE * 100).toFixed(0);
   protected readonly groupBy = signal<'system' | 'portfolio'>('system');
@@ -600,11 +601,11 @@ export class DashboardPage {
   }
 
   /**
-   * Смысловые цвета графиков под текущую тему (@web-shared/chart-tokens).
-   * Пока константа — на этапе «тёмная тема» станет computed от theme.isDark(),
-   * и все шесть чарт-computed() пересоберутся сами.
+   * Смысловые цвета графиков под текущую тему. Читается внутри чарт-computed()'ов,
+   * поэтому при переключении темы все они пересобираются сами — без effect'ов и
+   * ручного chart.update() (CLAUDE.md §4).
    */
-  protected readonly cc = chartSemantic(false);
+  private readonly cc = computed(() => chartSemantic(this.theme.isDark()));
 
   /**
    * «Стоимость инструментов во времени»: по линии на инструмент (RUB, null —
@@ -637,8 +638,8 @@ export class DashboardPage {
           {
             label: 'Итого',
             data: s.total,
-            borderColor: this.cc.total,
-            backgroundColor: this.cc.total,
+            borderColor: this.cc().total,
+            backgroundColor: this.cc().total,
             borderWidth: 2.5,
             pointRadius: 0,
             tension: 0.2,
@@ -646,8 +647,8 @@ export class DashboardPage {
           {
             label: 'Внесено (нетто)',
             data: s.netContributions,
-            borderColor: this.cc.neutral,
-            backgroundColor: this.cc.neutral,
+            borderColor: this.cc().neutral,
+            backgroundColor: this.cc().neutral,
             borderWidth: 2,
             borderDash: [6, 4],
             pointRadius: 0,
@@ -710,8 +711,8 @@ export class DashboardPage {
         labels: s.map((r) => r.date),
         datasets: [
           { label: 'Портфель', data: portfolio, borderColor: seriesColor(0), backgroundColor: seriesColor(0), pointRadius: 2, tension: 0.2 },
-          { label: 'IMOEX', data: imoex, borderColor: this.cc.benchmark, backgroundColor: this.cc.benchmark, pointRadius: 2, tension: 0.2 },
-          { label: 'Депозит', data: deposit, borderColor: this.cc.deposit, backgroundColor: this.cc.deposit, pointRadius: 0, borderDash: [6, 4], tension: 0 },
+          { label: 'IMOEX', data: imoex, borderColor: this.cc().benchmark, backgroundColor: this.cc().benchmark, pointRadius: 2, tension: 0.2 },
+          { label: 'Депозит', data: deposit, borderColor: this.cc().deposit, backgroundColor: this.cc().deposit, pointRadius: 0, borderDash: [6, 4], tension: 0 },
         ],
       },
       options: {
@@ -733,13 +734,13 @@ export class DashboardPage {
   /** Комбо по месяцам: столбцы Поток (серый) и Доход (зелёный/красный по знаку) */
   protected readonly timelineChart = computed<ChartConfiguration<'bar'>>(() => {
     const t = this.api.summary.value()?.timeline ?? [];
-    const incomeColors = t.map((r) => (r.income >= 0 ? this.cc.positive : this.cc.negative));
+    const incomeColors = t.map((r) => (r.income >= 0 ? this.cc().positive : this.cc().negative));
     return {
       type: 'bar',
       data: {
         labels: t.map((r) => r.period),
         datasets: [
-          { label: 'Поток', data: t.map((r) => r.flow), backgroundColor: this.cc.neutral, borderRadius: 3 },
+          { label: 'Поток', data: t.map((r) => r.flow), backgroundColor: this.cc().neutral, borderRadius: 3 },
           {
             label: 'Доход',
             data: t.map((r) => r.income),
@@ -775,7 +776,7 @@ export class DashboardPage {
           {
             label: 'P&L ₽',
             data: s.map((r) => r.pnlRub),
-            backgroundColor: s.map((r) => (r.pnlRub >= 0 ? this.cc.positive : this.cc.negative)),
+            backgroundColor: s.map((r) => (r.pnlRub >= 0 ? this.cc().positive : this.cc().negative)),
             borderRadius: 3,
           },
         ],
@@ -803,7 +804,7 @@ export class DashboardPage {
           {
             label: 'P&L ₽',
             data: b.map((r) => r.pnlRub),
-            backgroundColor: b.map((r) => (r.pnlRub >= 0 ? this.cc.positive : this.cc.negative)),
+            backgroundColor: b.map((r) => (r.pnlRub >= 0 ? this.cc().positive : this.cc().negative)),
             borderRadius: 3,
           },
         ],
