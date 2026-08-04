@@ -27,6 +27,7 @@ import { SnapshotApi } from '../../entities/snapshot/snapshot.api';
 import { BenchmarkApi } from '../../entities/benchmark/benchmark.api';
 import { PositionSeriesApi } from '../../entities/position-series/position-series.api';
 import { ReferenceApi } from '../../entities/reference/reference.api';
+import { provideAppCharts, syncChartDefaultsWithTheme } from '../../shared/chart.providers';
 
 /**
  * Дашборд (docs/03-ux-plan.md шаг 4; docs/05-review-usability.md §1).
@@ -53,6 +54,8 @@ interface EffRow extends Effectiveness {
 @Component({
   selector: 'app-dashboard-page',
   changeDetection: ChangeDetectionStrategy.OnPush,
+  // Chart.js регистрируется здесь, а не глобально — см. shared/chart.providers.ts
+  providers: [provideAppCharts()],
   imports: [
     MatCardModule,
     MatTableModule,
@@ -451,6 +454,9 @@ export class DashboardPage {
   protected readonly positionSeries = inject(PositionSeriesApi);
   protected readonly reference = inject(ReferenceApi);
   private readonly theme = inject(ThemeService);
+
+  /** Дефолты Chart.js под тему — только пока страница с графиками жива (см. chart.providers.ts) */
+  private readonly chartDefaults = syncChartDefaultsWithTheme();
 
   protected readonly depositRatePct = (DEPOSIT_ANNUAL_RATE * 100).toFixed(0);
   protected readonly groupBy = signal<'system' | 'portfolio'>('system');

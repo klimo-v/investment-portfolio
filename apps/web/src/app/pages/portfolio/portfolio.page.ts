@@ -18,6 +18,7 @@ import {
 } from '../../entities/instrument/instrument-type.tokens';
 import { ManagePortfoliosDialog } from '../../features/manage-portfolios/manage-portfolios.dialog';
 import { ManageSystemsDialog } from '../../features/manage-systems/manage-systems.dialog';
+import { provideAppCharts, syncChartDefaultsWithTheme } from '../../shared/chart.providers';
 import {
   formatMoney,
   formatRub,
@@ -54,6 +55,8 @@ interface Group {
 @Component({
   selector: 'app-portfolio-page',
   changeDetection: ChangeDetectionStrategy.OnPush,
+  // Chart.js регистрируется здесь, а не глобально — см. shared/chart.providers.ts
+  providers: [provideAppCharts()],
   imports: [
     MatCardModule,
     MatTableModule,
@@ -296,6 +299,9 @@ export class PortfolioPage {
   private readonly reference = inject(ReferenceApi);
   private readonly dialog = inject(MatDialog);
   private readonly theme = inject(ThemeService);
+
+  /** Дефолты Chart.js под тему — только пока страница с графиками жива (см. chart.providers.ts) */
+  private readonly chartDefaults = syncChartDefaultsWithTheme();
 
   protected readonly columns = ['ticker', 'qty', 'avg', 'current', 'value', 'pnl'];
   protected readonly refreshing = signal(false);

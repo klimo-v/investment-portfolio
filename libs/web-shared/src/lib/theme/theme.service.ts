@@ -1,5 +1,4 @@
 import { computed, effect, Injectable, signal } from '@angular/core';
-import { applyChartDefaults } from './chart-tokens';
 import { mediaQuery } from './media-query';
 
 /** Режим темы: явный выбор пользователя либо «как в системе» */
@@ -64,10 +63,6 @@ export class ThemeService {
         // запись недоступна — тема просто не переживёт перезагрузку
       }
     });
-
-    // Дефолты Chart.js (цвет подписей, сетка) живут в JS и на CSS-токены не реагируют:
-    // без этого в тёмной теме оси, легенда и сетка почти невидимы
-    effect(() => applyChartDefaults(this.isDark()));
   }
 
   set(mode: ThemeMode): void {

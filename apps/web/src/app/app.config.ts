@@ -12,7 +12,6 @@ import {
 } from '@angular/common/http';
 import { provideAnimationsAsync } from '@angular/platform-browser/animations/async';
 import { provideNativeDateAdapter } from '@angular/material/core';
-import { provideCharts, withDefaultRegisterables } from 'ng2-charts';
 import { loadingInterceptor, httpToastInterceptor } from '@web-shared';
 import { appRoutes } from './app.routes';
 
@@ -22,6 +21,10 @@ import { appRoutes } from './app.routes';
  * - роутинг с ленивой загрузкой фич
  * - HttpClient с fetch, XSRF-защитой и глобальными интерцепторами (индикатор
  *   загрузки + тосты успеха/ошибки для всех запросов, libs/web-shared)
+ *
+ * Chart.js здесь СОЗНАТЕЛЬНО нет: регистрация переехала в `provideAppCharts()`
+ * (shared/chart.providers.ts) и подключается в компонентах дашборда и портфеля,
+ * иначе весь Chart.js оказывается в initial-бандле ради двух ленивых страниц.
  */
 export const appConfig: ApplicationConfig = {
   providers: [
@@ -35,6 +38,5 @@ export const appConfig: ApplicationConfig = {
     ),
     provideAnimationsAsync(),
     provideNativeDateAdapter(),
-    provideCharts(withDefaultRegisterables()),
   ],
 };

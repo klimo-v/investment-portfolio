@@ -9,8 +9,13 @@
  * пришлось бы городить effect + ручной chart.update() против zoneless/OnPush-контракта
  * (CLAUDE.md §4). С обычной функцией от `dark` каждый чарт-computed() получает одну
  * зависимость theme.isDark() и пересобирается сам.
+ *
+ * Модуль намеренно НЕ импортирует `chart.js` — здесь только строки с цветами.
+ * Он реэкспортируется барелем `@web-shared`, который тянет корневой app.config.ts;
+ * один `import { Chart } from 'chart.js'` ради записи `Chart.defaults` затаскивал
+ * весь Chart.js в initial-бандл. Запись дефолтов переехала в ленивый
+ * `apps/web/src/app/shared/chart.providers.ts`, к самим страницам с графиками.
  */
-import { Chart } from 'chart.js';
 
 /**
  * Палитра линий/сегментов: столько различимых оттенков, сколько реально бывает
@@ -66,15 +71,10 @@ export function chartSemantic(dark: boolean): ChartSemantic {
     total: dark ? '#f2f2f2' : '#111111',
   };
 }
-
-/**
- * Глобальные дефолты Chart.js под текущую тему. Без этого вызова библиотека остаётся
- * на своих значениях (текст #666, сетка rgba(0,0,0,0.1)) — на тёмном фоне подписи
- * осей, легенда и сетка становятся почти невидимыми, сколько бы токенов мы ни
- * навесили на сам CSS. Вызывается из effect'а ThemeService при каждой смене темы.
- */
-export function applyChartDefaults(dark: boolean): void {
-  Chart.defaults.color = dark ? 'rgba(255, 255, 255, 0.75)' : 'rgba(0, 0, 0, 0.65)';
-  Chart.defaults.borderColor = dark ? 'rgba(255, 255, 255, 0.14)' : 'rgba(0, 0, 0, 0.1)';
-  Chart.defaults.font.family = "Roboto, 'Helvetica Neue', sans-serif";
+/** Цвет подписей/сетки Chart.js под тему — применяется в shared/chart.providers.ts */
+export function chartDefaultColors(dark: boolean): { color: string; borderColor: string } {
+  return {
+    color: dark ? 'rgba(255, 255, 255, 0.75)' : 'rgba(0, 0, 0, 0.65)',
+    borderColor: dark ? 'rgba(255, 255, 255, 0.14)' : 'rgba(0, 0, 0, 0.1)',
+  };
 }
