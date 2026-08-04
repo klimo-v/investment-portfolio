@@ -2,7 +2,6 @@ import { ChangeDetectionStrategy, Component, computed, effect, inject, signal } 
 import { MatCardModule } from '@angular/material/card';
 import { MatTableModule } from '@angular/material/table';
 import { MatButtonToggleModule } from '@angular/material/button-toggle';
-import { MatTooltipModule } from '@angular/material/tooltip';
 import { MatFormFieldModule } from '@angular/material/form-field';
 import { MatSelectModule } from '@angular/material/select';
 import { MatDatepickerModule } from '@angular/material/datepicker';
@@ -12,20 +11,22 @@ import type { ChartConfiguration } from 'chart.js';
 import { maxDrawdown, type Cash, type Effectiveness } from '@core';
 import {
   chartSemantic,
+  formatPercentOrDash,
+  formatRub,
   Hint,
   KpiCard,
+  pnlColorClass,
   seriesColor,
   sortRows,
   StateMessage,
   ThemeService,
-  type KpiTone,
+  toneOf,
 } from '@web-shared';
 import { OperationApi } from '../../entities/operation/operation.api';
 import { SnapshotApi } from '../../entities/snapshot/snapshot.api';
 import { BenchmarkApi } from '../../entities/benchmark/benchmark.api';
 import { PositionSeriesApi } from '../../entities/position-series/position-series.api';
 import { ReferenceApi } from '../../entities/reference/reference.api';
-import { formatMoney, formatPercent, pnlColorClass } from '@web-shared';
 
 /**
  * Дашборд (docs/03-ux-plan.md шаг 4; docs/05-review-usability.md §1).
@@ -56,7 +57,6 @@ interface EffRow extends Effectiveness {
     MatCardModule,
     MatTableModule,
     MatButtonToggleModule,
-    MatTooltipModule,
     MatFormFieldModule,
     MatSelectModule,
     MatDatepickerModule,
@@ -396,20 +396,6 @@ interface EffRow extends Effectiveness {
         margin-top: 4px;
         font-size: 12px;
         color: var(--app-text-muted);
-      }
-      .hint {
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        width: 14px;
-        height: 14px;
-        border-radius: 50%;
-        /* --app-text-muted, а не --app-outline: outline-variant в M3 намеренно
-           малоконтрастен (для разделителей), и бейдж «?» на нём почти пропадает */
-        border: 1px solid var(--app-text-muted);
-        color: var(--app-text-muted);
-        font-size: 10px;
-        cursor: help;
       }
       .eff {
         padding: 16px;
@@ -900,25 +886,8 @@ export class DashboardPage {
     };
   });
 
-  protected money(v: number | null): string {
-    return formatMoney((v ?? 0).toFixed(2), 'RUB');
-  }
-
-  /** Процент или «—», если метрика не определена (например, вложено = 0) */
-  protected pctOrDash(v: number | null): string {
-    return v === null ? '—' : formatPercent(v);
-  }
-
-  protected cls(v: number): string {
-    return pnlColorClass(v);
-  }
-
-  /**
-   * Знак метрики для app-kpi-card. null (метрика не определена) — нейтральный тон:
-   * прочерк не должен зеленеть или краснеть.
-   */
-  protected tone(v: number | null): KpiTone {
-    if (v === null || v === 0) return 'neutral';
-    return v > 0 ? 'positive' : 'negative';
-  }
+  protected readonly money = formatRub;
+  protected readonly pctOrDash = formatPercentOrDash;
+  protected readonly cls = pnlColorClass;
+  protected readonly tone = toneOf;
 }

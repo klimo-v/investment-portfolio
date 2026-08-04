@@ -243,11 +243,6 @@ import { ReassignOperationsDialog } from '../../features/reassign-operations/rea
         background: var(--app-table-header-bg);
       }
       /* .error — глобальный (styles.scss) */
-      .empty {
-        padding: 24px;
-        text-align: center;
-        color: var(--app-text-muted);
-      }
       mat-paginator {
         flex: 0 0 auto;
       }

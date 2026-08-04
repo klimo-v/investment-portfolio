@@ -5,7 +5,6 @@ import { MatButtonModule } from '@angular/material/button';
 import { MatIconModule } from '@angular/material/icon';
 import { MatFormFieldModule } from '@angular/material/form-field';
 import { MatSelectModule } from '@angular/material/select';
-import { MatTooltipModule } from '@angular/material/tooltip';
 import { MatDialog } from '@angular/material/dialog';
 import { BaseChartDirective } from 'ng2-charts';
 import type { ChartConfiguration } from 'chart.js';
@@ -19,7 +18,15 @@ import {
 } from '../../entities/instrument/instrument-type.tokens';
 import { ManagePortfoliosDialog } from '../../features/manage-portfolios/manage-portfolios.dialog';
 import { ManageSystemsDialog } from '../../features/manage-systems/manage-systems.dialog';
-import { formatMoney, KpiCard, type KpiTone, pnlColorClass, StateMessage, ThemeService } from '@web-shared';
+import {
+  formatMoney,
+  formatRub,
+  KpiCard,
+  pnlColorClass,
+  StateMessage,
+  ThemeService,
+  toneOf,
+} from '@web-shared';
 
 /**
  * Страница «Портфель» (docs/03-ux-plan.md, шаг 3; roadmap Фаза 2).
@@ -54,7 +61,6 @@ interface Group {
     MatIconModule,
     MatFormFieldModule,
     MatSelectModule,
-    MatTooltipModule,
     BaseChartDirective,
     KpiCard,
     StateMessage,
@@ -193,7 +199,12 @@ interface Group {
               ></canvas>
             </div>
           } @else {
-            <p class="empty">Нет текущих цен — обновите котировки, чтобы увидеть распределение.</p>
+            <app-state-message
+              kind="empty"
+              icon="donut_large"
+              title="Нет текущих цен"
+              hint="Нажмите «Обновить цены», чтобы увидеть распределение по типам."
+            />
           }
         </mat-card>
       </div>
@@ -266,20 +277,6 @@ interface Group {
       .group-total {
         color: var(--app-text-muted);
       }
-      .hint-icon {
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        width: 14px;
-        height: 14px;
-        border-radius: 50%;
-        /* --app-text-muted, а не --app-outline: outline-variant в M3 намеренно
-           малоконтрастен (для разделителей), и бейдж «?» на нём почти пропадает */
-        border: 1px solid var(--app-text-muted);
-        color: var(--app-text-muted);
-        font-size: 10px;
-        cursor: help;
-      }
       .pie {
         padding: 16px;
       }
@@ -291,11 +288,6 @@ interface Group {
         width: 100%;
       }
       /* .chart-box и .error — глобальные (styles.scss) */
-      .empty {
-        padding: 24px;
-        text-align: center;
-        color: var(--app-text-muted);
-      }
     `,
   ],
 })
@@ -441,35 +433,19 @@ export class PortfolioPage {
    */
   private readonly totals = computed(() => this.api.summary.value()?.totals);
 
-  protected readonly investedTotal = computed(() =>
-    formatMoney((this.totals()?.investedRub ?? 0).toFixed(2), 'RUB'),
-  );
+  protected readonly investedTotal = computed(() => formatRub(this.totals()?.investedRub));
 
-  protected readonly valueTotal = computed(() =>
-    formatMoney((this.totals()?.currentValueRub ?? 0).toFixed(2), 'RUB'),
-  );
+  protected readonly valueTotal = computed(() => formatRub(this.totals()?.currentValueRub));
 
   protected readonly pnlTotalRaw = computed(() => this.totals()?.pnlRub ?? 0);
 
-  protected readonly pnlTotal = computed(() => formatMoney(this.pnlTotalRaw().toFixed(2), 'RUB'));
+  protected readonly pnlTotal = computed(() => formatRub(this.pnlTotalRaw()));
 
-  protected readonly pnlTone = computed<KpiTone>(() => {
-    const v = this.pnlTotalRaw();
-    if (v === 0) return 'neutral';
-    return v > 0 ? 'positive' : 'negative';
-  });
+  protected readonly pnlTone = computed(() => toneOf(this.pnlTotalRaw()));
 
-  protected readonly dividendsTotal = computed(() =>
-    formatMoney((this.totals()?.dividendsRub ?? 0).toFixed(2), 'RUB'),
-  );
+  protected readonly dividendsTotal = computed(() => formatRub(this.totals()?.dividendsRub));
 
-  protected pnlClass(value: number): string {
-    return pnlColorClass(value);
-  }
-
-  protected money(v: number): string {
-    return formatMoney(v.toFixed(2), 'RUB');
-  }
+  protected readonly money = formatRub;
 
   protected managePortfolios(): void {
     this.dialog.open(ManagePortfoliosDialog, { autoFocus: false, width: '760px', maxWidth: '95vw' });

@@ -22,14 +22,15 @@ import { ReferenceApi } from '../../entities/reference/reference.api';
 import {
   clampPageIndex,
   formatMoney,
+  formatRub,
   KpiCard,
   pageSlice,
   pnlColorClass,
   sortRows,
   StateMessage,
   StatusChip,
+  toneOf,
   type ChipTone,
-  type KpiTone,
   type SortKey,
   type SortState,
 } from '@web-shared';
@@ -182,7 +183,12 @@ interface StatsRow extends TradeStats {
                 }
               </mat-card>
             } @else {
-              <p class="empty">Нет закрытых сделок для статистики.</p>
+              <app-state-message
+                kind="empty"
+                icon="query_stats"
+                title="Нет закрытых сделок"
+                hint="Win rate, profit factor и матожидание считаются только по зафиксированному результату — закройте хотя бы одну сделку."
+              />
             }
           </div>
         </mat-tab>
@@ -431,17 +437,7 @@ interface StatsRow extends TradeStats {
         margin: 0;
         padding-left: 20px;
       }
-      .chip {
-        padding: 2px 8px;
-        border-radius: 12px;
-        font-size: 12px;
-      }
       /* .pnl-*, .error — глобальные (styles.scss), локальных копий не держим */
-      .empty {
-        padding: 24px;
-        text-align: center;
-        color: var(--app-text-muted);
-      }
     `,
   ],
 })
@@ -518,19 +514,13 @@ export class TradesPage {
       .sort((a, b) => b.closedCount - a.closedCount);
   });
 
+  /** Profit factor или «—», когда убыточных сделок не было и делить не на что */
   protected pf(value: number | null): string {
     return value === null ? '—' : value.toFixed(2);
   }
 
-  protected money(value: number): string {
-    return formatMoney(value.toFixed(2), 'RUB');
-  }
-
-  /** Знак метрики для app-kpi-card */
-  protected tone(value: number): KpiTone {
-    if (value === 0) return 'neutral';
-    return value > 0 ? 'positive' : 'negative';
-  }
+  protected readonly money = formatRub;
+  protected readonly tone = toneOf;
 
   protected readonly columns = [
     'status',

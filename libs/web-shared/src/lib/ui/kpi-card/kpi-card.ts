@@ -6,6 +6,19 @@ import { Hint } from '../hint/hint';
 export type KpiTone = 'neutral' | 'positive' | 'negative';
 
 /**
+ * Тон по знаку метрики. Живёт рядом с типом (GRASP: Information Expert), а не в
+ * format.ts — иначе утилита форматирования знала бы про UI-кит.
+ *
+ * `null` (метрика не определена, в карточке «—») даёт нейтральный тон: прочерк не
+ * должен зеленеть или краснеть. Ноль тоже нейтрален — красить «ровно ноль» в
+ * прибыль или убыток нечестно.
+ */
+export function toneOf(value: number | null | undefined): KpiTone {
+  if (value === null || value === undefined || value === 0) return 'neutral';
+  return value > 0 ? 'positive' : 'negative';
+}
+
+/**
  * Карточка ключевого показателя. Сводит три разошедшиеся реализации одного и того же:
  * `.totals` дашборда (7 карточек), `.totals` портфеля (4) и `.kpis/.kpi` «Сделок» (7) —
  * они отличались размерами, отступами и цветом подписи без всякой причины.
