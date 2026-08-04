@@ -25,6 +25,7 @@ import { OperationApi } from '../../entities/operation/operation.api';
 import { ReferenceApi } from '../../entities/reference/reference.api';
 import { AddOperationDialog } from '../../features/add-operation/add-operation.dialog';
 import { ReassignOperationsDialog } from '../../features/reassign-operations/reassign-operations.dialog';
+import { queryParam } from '../../shared/query-param';
 
 /** Операция журнала, готовая к показу: имена справочников и строка поиска подставлены */
 interface OperationRow extends Operation {
@@ -333,10 +334,33 @@ export class OperationsPage {
     });
   });
 
-  protected readonly search = signal('');
-  protected readonly systemFilter = signal<string | null>(null);
-  protected readonly portfolioFilter = signal<string | null>(null);
-  protected readonly typeFilter = signal<OperationType | null>(null);
+  /**
+   * Фильтры журнала живут в АДРЕСНОЙ СТРОКЕ (shared/query-param.ts): отобранный
+   * срез переживает переход на другую страницу и F5, и им можно поделиться ссылкой.
+   * Сортировка и пагинация — намеренно НЕ в URL: это способ листать, а не срез
+   * данных, и в ссылке они были бы шумом.
+   */
+  private readonly searchParam = queryParam('q');
+  private readonly systemParam = queryParam('system');
+  private readonly portfolioParam = queryParam('portfolio');
+  private readonly typeParam = queryParam('type');
+
+  /**
+   * Поиск — ЛОКАЛЬНЫЙ сигнал, посеянный из адреса один раз, а не производный от него.
+   * Если бы значение поля возвращалось из URL, быстрый набор ронял бы символы:
+   * навигация по «a» успевает завершиться, когда в поле уже «ab», и связывание
+   * [value] откатило бы поле назад. В URL значение уходит односторонне (setSearch).
+   */
+  protected readonly search = signal(this.searchParam.value() ?? '');
+  protected readonly systemFilter = this.systemParam.value;
+  protected readonly portfolioFilter = this.portfolioParam.value;
+  protected readonly typeFilter = computed<OperationType | null>(() => {
+    const raw = this.typeParam.value();
+    return (OperationType.options as readonly string[]).includes(raw ?? '')
+      ? (raw as OperationType)
+      : null;
+  });
+
   protected readonly sortState = signal<SortState>({ active: 'date', direction: 'desc' });
   protected readonly pageIndex = signal(0);
   protected readonly pageSize = signal(25);
@@ -423,29 +447,31 @@ export class OperationsPage {
 
   protected setSearch(value: string): void {
     this.search.set(value);
+    this.searchParam.set(value);
     this.pageIndex.set(0);
   }
 
   protected setSystemFilter(value: string | null): void {
-    this.systemFilter.set(value);
+    this.systemParam.set(value);
     this.pageIndex.set(0);
   }
 
   protected setPortfolioFilter(value: string | null): void {
-    this.portfolioFilter.set(value);
+    this.portfolioParam.set(value);
     this.pageIndex.set(0);
   }
 
   protected setTypeFilter(value: OperationType | null): void {
-    this.typeFilter.set(value);
+    this.typeParam.set(value);
     this.pageIndex.set(0);
   }
 
   protected resetFilters(): void {
     this.search.set('');
-    this.systemFilter.set(null);
-    this.portfolioFilter.set(null);
-    this.typeFilter.set(null);
+    this.searchParam.set(null);
+    this.systemParam.set(null);
+    this.portfolioParam.set(null);
+    this.typeParam.set(null);
     this.pageIndex.set(0);
   }
 

@@ -29,6 +29,7 @@ import { PositionSeriesApi } from '../../entities/position-series/position-serie
 import { ReferenceApi } from '../../entities/reference/reference.api';
 import { provideAppCharts, syncChartDefaultsWithTheme } from '../../shared/chart.providers';
 import { DataRevision } from '../../shared/data-revision';
+import { parseEnum, queryParam } from '../../shared/query-param';
 
 /**
  * Дашборд (docs/03-ux-plan.md шаг 4; docs/05-review-usability.md §1).
@@ -45,7 +46,33 @@ import { DataRevision } from '../../shared/data-revision';
  */
 const DEPOSIT_ANNUAL_RATE = 0.16;
 
-type Period = 'all' | 'ytd' | '1y' | 'custom';
+const PERIODS = ['all', 'ytd', '1y', 'custom'] as const;
+type Period = (typeof PERIODS)[number];
+
+/**
+ * Дата пикера → YYYY-MM-DD по ЛОКАЛЬНЫМ компонентам, не через toISOString():
+ * тот конвертирует через UTC и на выбранной пользователем календарной дате
+ * (локальная полночь) может откатить/подвинуть день в зависимости от часового
+ * пояса браузера — пользователь выбрал 1 июля, а фильтр получил бы 30 июня.
+ */
+function toIsoDate(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+/**
+ * YYYY-MM-DD из адресной строки → Date в ЛОКАЛЬНОЙ полуночи (симметрично
+ * toIsoDate). `new Date('2026-07-01')` дал бы UTC-полночь, то есть на минусовых
+ * смещениях — 30 июня в пикере. Мусор в параметре (ручная правка адреса) даёт null.
+ */
+function parseIsoDate(raw: string | null): Date | null {
+  if (!raw || !/^\d{4}-\d{2}-\d{2}$/.test(raw)) return null;
+  const [y, m, d] = raw.split('-').map(Number);
+  const date = new Date(y, m - 1, d);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
 
 interface EffRow extends Effectiveness {
   id: string;
@@ -81,7 +108,7 @@ interface EffRow extends Effectiveness {
       <div class="filters">
         <mat-form-field appearance="outline" subscriptSizing="dynamic">
           <mat-label>Система</mat-label>
-          <mat-select [value]="systemFilter()" (selectionChange)="systemFilter.set($event.value)">
+          <mat-select [value]="systemFilter()" (selectionChange)="setSystemFilter($event.value)">
             <mat-option [value]="null">Все</mat-option>
             @for (s of reference.systems.value(); track s.id) {
               <mat-option [value]="s.id">{{ s.name }}</mat-option>
@@ -90,7 +117,7 @@ interface EffRow extends Effectiveness {
         </mat-form-field>
         <mat-form-field appearance="outline" subscriptSizing="dynamic">
           <mat-label>Портфель</mat-label>
-          <mat-select [value]="portfolioFilter()" (selectionChange)="portfolioFilter.set($event.value)">
+          <mat-select [value]="portfolioFilter()" (selectionChange)="setPortfolioFilter($event.value)">
             <mat-option [value]="null">Все</mat-option>
             @for (p of reference.portfolios.value(); track p.id) {
               <mat-option [value]="p.id">{{ p.name }}</mat-option>
@@ -99,7 +126,7 @@ interface EffRow extends Effectiveness {
         </mat-form-field>
         <mat-button-toggle-group
           [value]="period()"
-          (change)="period.set($event.value)"
+          (change)="setPeriod($event.value)"
           hideSingleSelectionIndicator
           aria-label="Период"
         >
@@ -120,13 +147,13 @@ interface EffRow extends Effectiveness {
                 matStartDate
                 placeholder="От"
                 [value]="customFrom()"
-                (dateChange)="customFrom.set($event.value)"
+                (dateChange)="setCustomFrom($event.value)"
               />
               <input
                 matEndDate
                 placeholder="До"
                 [value]="customTill()"
-                (dateChange)="customTill.set($event.value)"
+                (dateChange)="setCustomTill($event.value)"
               />
             </mat-date-range-input>
             <mat-datepicker-toggle matIconSuffix [for]="customPicker"></mat-datepicker-toggle>
@@ -508,13 +535,52 @@ export class DashboardPage {
     'остатка, от периода не зависит. «Вложено − Стоимость − Дивиденды» даст другое ' +
     'число — оно молча теряет уже зафиксированную реализованную прибыль/убыток.';
 
-  /** Глобальный фильтр дашборда (docs/05-review-usability.md §2) */
-  protected readonly systemFilter = signal<string | null>(null);
-  protected readonly portfolioFilter = signal<string | null>(null);
-  protected readonly period = signal<Period>('all');
+  /**
+   * Глобальный фильтр дашборда (docs/05-review-usability.md §2) — состояние живёт в
+   * АДРЕСНОЙ СТРОКЕ (shared/query-param.ts): раньше приватные сигналы страницы
+   * сбрасывались при любом уходе и при F5, а ссылкой на срез поделиться было нельзя.
+   */
+  private readonly systemParam = queryParam('system');
+  private readonly portfolioParam = queryParam('portfolio');
+  private readonly periodParam = queryParam('period');
+  private readonly fromParam = queryParam('from');
+  private readonly tillParam = queryParam('till');
+
+  protected readonly systemFilter = this.systemParam.value;
+  protected readonly portfolioFilter = this.portfolioParam.value;
+  protected readonly period = computed<Period>(() =>
+    parseEnum(this.periodParam.value(), PERIODS, 'all'),
+  );
+
   /** Границы произвольного диапазона (период 'custom') */
-  protected readonly customFrom = signal<Date | null>(null);
-  protected readonly customTill = signal<Date | null>(null);
+  protected readonly customFrom = computed(() => parseIsoDate(this.fromParam.value()));
+  protected readonly customTill = computed(() => parseIsoDate(this.tillParam.value()));
+
+  protected setSystemFilter(id: string | null): void {
+    this.systemParam.set(id);
+  }
+
+  protected setPortfolioFilter(id: string | null): void {
+    this.portfolioParam.set(id);
+  }
+
+  protected setPeriod(period: Period): void {
+    this.periodParam.set(period === 'all' ? null : period);
+    // Границы имеют смысл только у 'custom' — иначе в адресе остаётся мусор,
+    // который при следующем переключении на «Произвольный» молча всплывёт обратно
+    if (period !== 'custom') {
+      this.fromParam.set(null);
+      this.tillParam.set(null);
+    }
+  }
+
+  protected setCustomFrom(date: Date | null): void {
+    this.fromParam.set(date ? toIsoDate(date) : null);
+  }
+
+  protected setCustomTill(date: Date | null): void {
+    this.tillParam.set(date ? toIsoDate(date) : null);
+  }
 
   /** true, когда выбран конкретный система/портфель — снимки стоимости их не различают */
   protected readonly segmentFilterActive = computed(
@@ -533,7 +599,7 @@ export class DashboardPage {
       const from = this.customFrom();
       const till = this.customTill();
       if (!from || !till) return {};
-      return { from: this.toIsoDate(from), till: this.toIsoDate(till) };
+      return { from: toIsoDate(from), till: toIsoDate(till) };
     }
     const till = new Date().toISOString().slice(0, 10);
     const from = new Date();
@@ -541,19 +607,6 @@ export class DashboardPage {
     else from.setFullYear(from.getFullYear() - 1);
     return { from: from.toISOString().slice(0, 10), till };
   });
-
-  /**
-   * Дата пикера → YYYY-MM-DD по ЛОКАЛЬНЫМ компонентам, не через toISOString():
-   * тот конвертирует через UTC и на выбранной пользователем календарной дате
-   * (локальная полночь) может откатить/подвинуть день в зависимости от часового
-   * пояса браузера — пользователь выбрал 1 июля, а фильтр получил бы 30 июня.
-   */
-  private toIsoDate(d: Date): string {
-    const y = d.getFullYear();
-    const m = String(d.getMonth() + 1).padStart(2, '0');
-    const day = String(d.getDate()).padStart(2, '0');
-    return `${y}-${m}-${day}`;
-  }
 
   /**
    * Видимая подпись выбранного периода (напр. «01.01.2026 – 29.07.2026»), чтобы
