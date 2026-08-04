@@ -1,4 +1,11 @@
-import { ChangeDetectionStrategy, Component, computed, inject, signal } from '@angular/core';
+import {
+  ChangeDetectionStrategy,
+  Component,
+  computed,
+  effect,
+  inject,
+  signal,
+} from '@angular/core';
 import { RouterLink, RouterLinkActive, RouterOutlet } from '@angular/router';
 import { MatToolbarModule } from '@angular/material/toolbar';
 import { MatSidenavModule } from '@angular/material/sidenav';
@@ -7,7 +14,7 @@ import { MatIconModule } from '@angular/material/icon';
 import { MatButtonModule } from '@angular/material/button';
 import { MatProgressBarModule } from '@angular/material/progress-bar';
 import { MatTooltipModule } from '@angular/material/tooltip';
-import { LoadingService, ThemeService, type ThemeMode } from '@web-shared';
+import { LoadingService, mediaQuery, ThemeService, type ThemeMode } from '@web-shared';
 
 interface NavItem {
   readonly path: string;
@@ -45,6 +52,7 @@ const THEME_UI: Record<ThemeMode, { icon: string; label: string }> = {
     MatProgressBarModule,
     MatTooltipModule,
   ],
+  host: { class: 'app-shell-host' },
   template: `
     <div class="toolbar-wrap">
       <mat-toolbar color="primary">
@@ -68,7 +76,7 @@ const THEME_UI: Record<ThemeMode, { icon: string; label: string }> = {
     </div>
 
     <mat-sidenav-container class="shell">
-      <mat-sidenav mode="side" [opened]="opened()">
+      <mat-sidenav [mode]="sidenavMode()" [opened]="opened()" (closedStart)="opened.set(false)">
         <mat-nav-list>
           @for (item of nav; track item.path) {
             <a
@@ -77,6 +85,7 @@ const THEME_UI: Record<ThemeMode, { icon: string; label: string }> = {
               routerLinkActive
               #rla="routerLinkActive"
               [activated]="rla.isActive"
+              (click)="closeIfOverlay()"
             >
               <mat-icon matListItemIcon>{{ item.icon }}</mat-icon>
               <span matListItemTitle>{{ item.label }}</span>
@@ -92,8 +101,21 @@ const THEME_UI: Record<ThemeMode, { icon: string; label: string }> = {
   `,
   styles: [
     `
+      /*
+       * Оболочка — flex-колонка на всю видимую высоту. Раньше было
+       * .shell { height: calc(100vh - 64px) }: 64px — захардкоженная высота тулбара,
+       * которая ниже 600px становится 56px (оболочка вылезала за экран), а 100vh на
+       * мобильном Safari больше видимой области на высоту адресной строки.
+       * 100dvh + flex снимают обе проблемы и не знают про высоту тулбара вовсе.
+       */
+      :host {
+        display: flex;
+        flex-direction: column;
+        height: 100dvh;
+      }
       .toolbar-wrap {
         position: relative;
+        flex: 0 0 auto;
       }
       .toolbar-spacer {
         flex: 1;
@@ -105,7 +127,8 @@ const THEME_UI: Record<ThemeMode, { icon: string; label: string }> = {
         bottom: 0;
       }
       .shell {
-        height: calc(100vh - 64px);
+        flex: 1;
+        min-height: 0;
       }
       mat-sidenav {
         border-right: 1px solid var(--app-outline);
@@ -124,11 +147,38 @@ const THEME_UI: Record<ThemeMode, { icon: string; label: string }> = {
 export class App {
   protected readonly loading = inject(LoadingService);
   protected readonly theme = inject(ThemeService);
-  protected readonly opened = signal(true);
+
+  /**
+   * Узкий экран: сайднав становится оверлеем. Единственное место всего рефактора,
+   * где нужен JS — `MatDrawer.mode` это TS-вход, в CSS его не переключить.
+   * 959px — граница планшета, ниже неё постоянная шторка съедала бы ~256px ширины.
+   */
+  private readonly isHandset = mediaQuery('(max-width: 959px)');
+  protected readonly sidenavMode = computed<'over' | 'side'>(() =>
+    this.isHandset() ? 'over' : 'side',
+  );
+
+  protected readonly opened = signal(!this.isHandset());
 
   protected readonly themeIcon = computed(() => THEME_UI[this.theme.mode()].icon);
-  /** Подпись описывает и текущее состояние, и результат нажатия — иначе кнопка «немая» */
   protected readonly themeLabel = computed(() => THEME_UI[this.theme.mode()].label);
+
+  constructor() {
+    // Ширина изменилась — приводим шторку к состоянию по умолчанию для нового режима.
+    // Без этого ручной тумблер дерётся с computed-режимом: свёрнутая на узком экране
+    // шторка осталась бы свёрнутой и после разворота окна.
+    effect(() => {
+      this.opened.set(!this.isHandset());
+    });
+  }
+
+  /**
+   * В режиме оверлея шторка накрывает контент и после перехода остаётся висеть —
+   * закрываем её сами. В режиме `side` закрывать нечего, навигация идёт «под» меню.
+   */
+  protected closeIfOverlay(): void {
+    if (this.sidenavMode() === 'over') this.opened.set(false);
+  }
 
   protected readonly nav: readonly NavItem[] = [
     { path: 'dashboard', label: 'Дашборд', icon: 'dashboard' },

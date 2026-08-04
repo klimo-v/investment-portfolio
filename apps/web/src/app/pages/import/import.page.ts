@@ -172,16 +172,20 @@ import { ReferenceApi } from '../../entities/reference/reference.api';
       .summary,
       .done {
         display: flex;
+        flex-wrap: wrap;
         align-items: center;
         gap: 12px;
       }
       .batch {
         display: flex;
+        flex-wrap: wrap;
         gap: 16px;
         margin-top: 12px;
       }
+      /* flex-basis вместо min-width: жёсткие 220px не давали ряду сжаться на телефоне */
       .batch mat-form-field {
-        min-width: 220px;
+        flex: 1 1 220px;
+        min-width: 0;
       }
       .rules {
         padding: 16px;
@@ -202,7 +206,8 @@ import { ReferenceApi } from '../../entities/reference/reference.api';
         line-height: 56px;
       }
       .rule-row mat-form-field {
-        min-width: 200px;
+        flex: 1 1 200px;
+        min-width: 0;
       }
       .file {
         margin: 8px 0 0;

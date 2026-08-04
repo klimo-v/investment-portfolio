@@ -19,7 +19,7 @@ import {
 } from '../../entities/instrument/instrument-type.tokens';
 import { ManagePortfoliosDialog } from '../../features/manage-portfolios/manage-portfolios.dialog';
 import { ManageSystemsDialog } from '../../features/manage-systems/manage-systems.dialog';
-import { formatMoney, pnlColorClass, ThemeService } from '@web-shared';
+import { formatMoney, KpiCard, pnlColorClass, ThemeService, type KpiTone } from '@web-shared';
 
 /**
  * Страница «Портфель» (docs/03-ux-plan.md, шаг 3; roadmap Фаза 2).
@@ -56,6 +56,7 @@ interface Group {
     MatSelectModule,
     MatTooltipModule,
     BaseChartDirective,
+    KpiCard,
   ],
   template: `
     <div class="header">
@@ -97,28 +98,20 @@ interface Group {
       </mat-form-field>
     </div>
 
-    <div class="totals">
-      <mat-card>
-        <mat-card-subtitle>Вложено (₽)</mat-card-subtitle>
-        <mat-card-title>{{ investedTotal() }}</mat-card-title>
-      </mat-card>
-      <mat-card>
-        <mat-card-subtitle>Текущая стоимость (₽)</mat-card-subtitle>
-        <mat-card-title>{{ valueTotal() }}</mat-card-title>
-      </mat-card>
-      <mat-card>
-        <mat-card-subtitle
-          >Получено дивидендов/купонов (₽)
-          <span class="hint-icon" [matTooltip]="dividendsHint">?</span>
-        </mat-card-subtitle>
-        <mat-card-title>{{ dividendsTotal() }}</mat-card-title>
-      </mat-card>
-      <mat-card>
-        <mat-card-subtitle
-          >P&L (₽) <span class="hint-icon" [matTooltip]="pnlHint">?</span></mat-card-subtitle
-        >
-        <mat-card-title [class]="pnlClass(pnlTotalRaw())">{{ pnlTotal() }}</mat-card-title>
-      </mat-card>
+    <div class="kpi-grid">
+      <app-kpi-card label="Вложено (₽)" [value]="investedTotal()" />
+      <app-kpi-card label="Текущая стоимость (₽)" [value]="valueTotal()" />
+      <app-kpi-card
+        label="Получено дивидендов/купонов (₽)"
+        [value]="dividendsTotal()"
+        [hint]="dividendsHint"
+      />
+      <app-kpi-card
+        label="P&L (₽)"
+        [value]="pnlTotal()"
+        [tone]="pnlTone()"
+        [hint]="pnlHint"
+      />
     </div>
 
     @if (api.positions.isLoading()) {
@@ -212,33 +205,33 @@ interface Group {
         display: flex;
         gap: 8px;
       }
+      /* .filters — глобальный (styles.scss) */
       .filters {
         flex: 0 0 auto;
-        display: flex;
-        gap: 16px;
         margin: 8px 0 0;
       }
-      .filters mat-form-field {
-        min-width: 200px;
-      }
-      .totals {
+      /* .kpi-grid — глобальный (styles.scss); здесь только «не растягиваться» */
+      .kpi-grid {
         flex: 0 0 auto;
-        display: flex;
-        gap: 16px;
-        margin-bottom: 16px;
       }
-      .totals mat-card {
-        padding: 16px;
-        min-width: 180px;
-      }
+      /*
+       * Mobile-first: на узком экране таблицы и диаграмма идут друг под другом.
+       * Единственный настоящий медиазапрос во всём приложении — соотношение 2fr/1fr
+       * надо СОХРАНИТЬ на широких экранах, а auto-fit этого выразить не может.
+       */
       .content {
         display: grid;
-        grid-template-columns: 2fr 1fr;
+        grid-template-columns: 1fr;
         gap: 16px;
         align-items: start;
         flex: 1;
         min-height: 0;
         overflow: auto;
+      }
+      @media (min-width: 960px) {
+        .content {
+          grid-template-columns: 2fr 1fr;
+        }
       }
       .tables {
         display: flex;
@@ -447,6 +440,12 @@ export class PortfolioPage {
   protected readonly pnlTotalRaw = computed(() => this.totals()?.pnlRub ?? 0);
 
   protected readonly pnlTotal = computed(() => formatMoney(this.pnlTotalRaw().toFixed(2), 'RUB'));
+
+  protected readonly pnlTone = computed<KpiTone>(() => {
+    const v = this.pnlTotalRaw();
+    if (v === 0) return 'neutral';
+    return v > 0 ? 'positive' : 'negative';
+  });
 
   protected readonly dividendsTotal = computed(() =>
     formatMoney((this.totals()?.dividendsRub ?? 0).toFixed(2), 'RUB'),

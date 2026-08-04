@@ -9,7 +9,7 @@ import { MatDatepickerModule } from '@angular/material/datepicker';
 import { BaseChartDirective } from 'ng2-charts';
 import type { ChartConfiguration } from 'chart.js';
 import { maxDrawdown, type Effectiveness } from '@core';
-import { chartSemantic, seriesColor, ThemeService } from '@web-shared';
+import { chartSemantic, KpiCard, seriesColor, ThemeService, type KpiTone } from '@web-shared';
 import { OperationApi } from '../../entities/operation/operation.api';
 import { SnapshotApi } from '../../entities/snapshot/snapshot.api';
 import { BenchmarkApi } from '../../entities/benchmark/benchmark.api';
@@ -51,6 +51,7 @@ interface EffRow extends Effectiveness {
     MatSelectModule,
     MatDatepickerModule,
     BaseChartDirective,
+    KpiCard,
   ],
   template: `
     <div class="page-header">
@@ -119,18 +120,20 @@ interface EffRow extends Effectiveness {
     } @else if (api.summary.error()) {
       <p class="error">Не удалось загрузить сводку. Запущен ли API?</p>
     } @else {
-      <div class="totals">
-        <mat-card>
-          <mat-card-subtitle
-            >Вложено <span class="hint" matTooltip="Себестоимость держимого остатка — сходится с колонкой «Вложено» на странице «Сделки»">?</span></mat-card-subtitle
-          >
-          <mat-card-title>{{ money(totals().investedRub) }}</mat-card-title>
-        </mat-card>
-        <mat-card>
-          <mat-card-subtitle>Текущая стоимость</mat-card-subtitle>
-          <mat-card-title>{{ money(totals().currentValueRub) }}</mat-card-title>
-        </mat-card>
-        <mat-card>
+      <div class="kpi-grid">
+        <app-kpi-card
+          label="Вложено"
+          [value]="money(totals().investedRub)"
+          hint="Себестоимость держимого остатка — сходится с колонкой «Вложено» на странице «Сделки»"
+        />
+        <app-kpi-card label="Текущая стоимость" [value]="money(totals().currentValueRub)" />
+
+        <!--
+          Единственная карточка с ручной разметкой: подстрока несёт ДВА значения со
+          своими знаками (реализ./нереализ.), а строковый вход sub покрасить их не
+          может. Ради одного случая усложнять app-kpi-card проекцией контента не стали.
+        -->
+        <mat-card class="kpi-manual">
           <mat-card-subtitle
             >P&L <span class="hint" [matTooltip]="pnlHint">?</span></mat-card-subtitle
           >
@@ -140,33 +143,30 @@ interface EffRow extends Effectiveness {
             · нереализ. <span [class]="cls(totals().unrealizedPnlRub)">{{ money(totals().unrealizedPnlRub) }}</span>
           </div>
         </mat-card>
-        <mat-card>
-          <mat-card-subtitle
-            >ROI <span class="hint" matTooltip="P&L относительно вложенного (себестоимости держимого остатка)">?</span></mat-card-subtitle
-          >
-          <mat-card-title [class]="cls(totals().roiPct ?? 0)">{{ pctOrDash(totals().roiPct) }}</mat-card-title>
-        </mat-card>
-        <mat-card>
-          <mat-card-subtitle
-            >Доходность годовых (XIRR)
-            <span class="hint" matTooltip="Денежно-взвешенная годовая доходность с учётом дат вложений">?</span></mat-card-subtitle
-          >
-          <mat-card-title [class]="cls(totals().xirrPct ?? 0)">{{ pctOrDash(totals().xirrPct) }}</mat-card-title>
-        </mat-card>
-        <mat-card>
-          <mat-card-subtitle>Дивиденды + купоны</mat-card-subtitle>
-          <mat-card-title>{{ money(totals().dividendsRub) }}</mat-card-title>
-          <div class="sub">доходность {{ pctOrDash(totals().dividendYieldPct) }}</div>
-        </mat-card>
-        <mat-card>
-          <mat-card-subtitle
-            >Макс. просадка
-            <span class="hint" matTooltip="Наибольшее падение стоимости портфеля от пика к дну по снимкам">?</span></mat-card-subtitle
-          >
-          <mat-card-title [class]="cls(maxDrawdownPct())">
-            {{ hasDrawdown() ? pctOrDash(maxDrawdownPct()) : '—' }}
-          </mat-card-title>
-        </mat-card>
+
+        <app-kpi-card
+          label="ROI"
+          [value]="pctOrDash(totals().roiPct)"
+          [tone]="tone(totals().roiPct)"
+          hint="P&L относительно вложенного (себестоимости держимого остатка)"
+        />
+        <app-kpi-card
+          label="Доходность годовых (XIRR)"
+          [value]="pctOrDash(totals().xirrPct)"
+          [tone]="tone(totals().xirrPct)"
+          hint="Денежно-взвешенная годовая доходность с учётом дат вложений"
+        />
+        <app-kpi-card
+          label="Дивиденды + купоны"
+          [value]="money(totals().dividendsRub)"
+          [sub]="'доходность ' + pctOrDash(totals().dividendYieldPct)"
+        />
+        <app-kpi-card
+          label="Макс. просадка"
+          [value]="hasDrawdown() ? pctOrDash(maxDrawdownPct()) : '—'"
+          [tone]="hasDrawdown() ? tone(maxDrawdownPct()) : 'neutral'"
+          hint="Наибольшее падение стоимости портфеля от пика к дну по снимкам"
+        />
       </div>
 
       <mat-card class="eff">
@@ -345,18 +345,7 @@ interface EffRow extends Effectiveness {
   `,
   styles: [
     `
-      .filters {
-        display: flex;
-        align-items: center;
-        gap: 12px;
-        flex-wrap: wrap;
-      }
-      .filters mat-form-field {
-        width: 160px;
-      }
-      .filters mat-form-field.range-field {
-        width: 220px;
-      }
+      /* .filters — глобальный (styles.scss): переносится, поля тянутся */
       .period-range {
         font-size: 14px;
         font-weight: 400;
@@ -364,16 +353,11 @@ interface EffRow extends Effectiveness {
         white-space: nowrap;
         margin-left: 8px;
       }
-      .totals {
-        display: flex;
-        gap: 16px;
-        flex-wrap: wrap;
-        margin-bottom: 16px;
-      }
-      .totals mat-card {
+      /* Ручная карточка внутри .kpi-grid — повторяет геометрию app-kpi-card */
+      .kpi-manual {
         padding: 16px;
-        min-width: 170px;
-        flex: 1;
+        height: 100%;
+        box-sizing: border-box;
       }
       .sub {
         margin-top: 4px;
@@ -412,9 +396,14 @@ interface EffRow extends Effectiveness {
       .eff table {
         width: 100%;
       }
+      /*
+       * auto-fit + minmax вместо жёстких двух колонок: на узком экране график
+       * шириной в пол-контейнера превращался в нечитаемую полоску, а медиазапрос по
+       * вьюпорту не учёл бы, что сайднав тоже съедает ширину.
+       */
       .charts {
         display: grid;
-        grid-template-columns: 1fr 1fr;
+        grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
         gap: 16px;
       }
       .charts mat-card {
@@ -833,5 +822,14 @@ export class DashboardPage {
 
   protected cls(v: number): string {
     return pnlColorClass(v);
+  }
+
+  /**
+   * Знак метрики для app-kpi-card. null (метрика не определена) — нейтральный тон:
+   * прочерк не должен зеленеть или краснеть.
+   */
+  protected tone(v: number | null): KpiTone {
+    if (v === null || v === 0) return 'neutral';
+    return v > 0 ? 'positive' : 'negative';
   }
 }

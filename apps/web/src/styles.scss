@@ -119,6 +119,34 @@ td.pnl-zero,
   flex-wrap: wrap;
 }
 
+/*
+ * Ряд KPI-карточек. auto-fit + minmax вместо фиксированных min-width и медиазапросов:
+ * сайднав меняет доступную ширину независимо от ширины окна, и @media по вьюпорту
+ * это ловит неверно, а intrinsic sizing — верно.
+ */
+.kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+/*
+ * Ряд фильтров: переносится, поля тянутся вместо фиксированной ширины. До этого
+ * ширины были прибиты (160-220px) и на узком экране ряд уезжал за край.
+ */
+.filters {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.filters mat-form-field {
+  flex: 1 1 180px;
+  min-width: 0;
+  max-width: 280px;
+}
+
 /* Контейнер canvas'а Chart.js — высота обязана быть фиксированной (responsive: true) */
 .chart-box {
   position: relative;

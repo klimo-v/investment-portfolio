@@ -145,11 +145,17 @@ const OPERATION_TYPES = [
   `,
   styles: [
     `
+      /*
+       * auto-fit вместо жёстких двух колонок и min-width: 480px: прежний вариант не
+       * влезал ни в один телефон (диалог уезжал за экран горизонтально). Теперь на
+       * узком экране поля идут в одну колонку. Вторая половина починки — maxWidth
+       * на месте вызова (operations.page.ts), иначе MatDialog всё равно упрётся.
+       */
       .op-form {
         display: grid;
-        grid-template-columns: 1fr 1fr;
+        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
         gap: 12px 16px;
-        min-width: 480px;
+        min-width: min(480px, 78vw);
         padding-top: 8px;
       }
       .op-form mat-form-field {

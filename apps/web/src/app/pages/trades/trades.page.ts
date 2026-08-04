@@ -9,7 +9,7 @@ import { MatSelectModule } from '@angular/material/select';
 import { MatButtonToggleModule } from '@angular/material/button-toggle';
 import { OperationApi } from '../../entities/operation/operation.api';
 import { ReferenceApi } from '../../entities/reference/reference.api';
-import { formatMoney, pnlColorClass } from '@web-shared';
+import { formatMoney, KpiCard, pnlColorClass, type KpiTone } from '@web-shared';
 import { tradeStats, type Trade, type TradeStats, type TradeStatInput } from '@core';
 
 interface StatsRow extends TradeStats {
@@ -37,6 +37,7 @@ interface StatsRow extends TradeStats {
     MatSelectModule,
     MatButtonToggleModule,
     NgTemplateOutlet,
+    KpiCard,
   ],
   template: `
     <h1 class="page-title">Сделки</h1>
@@ -83,35 +84,29 @@ interface StatsRow extends TradeStats {
                   <h3>Статистика закрытых сделок</h3>
                   <span class="muted">только зафиксированный результат</span>
                 </div>
-                <div class="kpis">
-                  <div class="kpi">
-                    <span class="kpi-label">Сделок</span>
-                    <span class="kpi-value">{{ overall().closedCount }}</span>
-                  </div>
-                  <div class="kpi">
-                    <span class="kpi-label">Win rate</span>
-                    <span class="kpi-value">{{ overall().winRatePct.toFixed(0) }}%</span>
-                  </div>
-                  <div class="kpi">
-                    <span class="kpi-label">Profit factor</span>
-                    <span class="kpi-value">{{ pf(overall().profitFactor) }}</span>
-                  </div>
-                  <div class="kpi">
-                    <span class="kpi-label">Ср. выигрыш</span>
-                    <span class="kpi-value pnl-positive">{{ money(overall().avgWinRub) }}</span>
-                  </div>
-                  <div class="kpi">
-                    <span class="kpi-label">Ср. убыток</span>
-                    <span class="kpi-value pnl-negative">{{ money(overall().avgLossRub) }}</span>
-                  </div>
-                  <div class="kpi">
-                    <span class="kpi-label">Матожидание</span>
-                    <span class="kpi-value" [class]="pnlColorClass(overall().expectancyRub)">{{ money(overall().expectancyRub) }}</span>
-                  </div>
-                  <div class="kpi">
-                    <span class="kpi-label">Ср. срок</span>
-                    <span class="kpi-value">{{ overall().avgHoldingDays.toFixed(0) }} дн.</span>
-                  </div>
+                <div class="kpi-grid">
+                  <app-kpi-card label="Сделок" [value]="overall().closedCount.toString()" />
+                  <app-kpi-card label="Win rate" [value]="overall().winRatePct.toFixed(0) + '%'" />
+                  <app-kpi-card label="Profit factor" [value]="pf(overall().profitFactor)" />
+                  <app-kpi-card
+                    label="Ср. выигрыш"
+                    [value]="money(overall().avgWinRub)"
+                    tone="positive"
+                  />
+                  <app-kpi-card
+                    label="Ср. убыток"
+                    [value]="money(overall().avgLossRub)"
+                    tone="negative"
+                  />
+                  <app-kpi-card
+                    label="Матожидание"
+                    [value]="money(overall().expectancyRub)"
+                    [tone]="tone(overall().expectancyRub)"
+                  />
+                  <app-kpi-card
+                    label="Ср. срок"
+                    [value]="overall().avgHoldingDays.toFixed(0) + ' дн.'"
+                  />
                 </div>
 
                 <mat-button-toggle-group
@@ -302,16 +297,10 @@ interface StatsRow extends TradeStats {
         overflow: auto;
         padding-top: 12px;
       }
+      /* .filters — глобальный (styles.scss); горизонтальный отступ даёт контейнер */
       .filters {
         flex: 0 0 auto;
-        display: flex;
-        gap: 8px;
-        /* горизонтальный отступ теперь на .trades-tab-content — свой добавлять
-           нельзя, иначе фильтр съезжает вправо относительно таблицы под ним */
         padding-bottom: 12px;
-      }
-      .filters mat-form-field {
-        width: 220px;
       }
       .stats-group-toggle {
         margin-top: 12px;
@@ -341,24 +330,7 @@ interface StatsRow extends TradeStats {
         font-size: 12px;
         color: var(--app-text-muted);
       }
-      .kpis {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 24px;
-      }
-      .kpi {
-        display: flex;
-        flex-direction: column;
-        gap: 2px;
-      }
-      .kpi-label {
-        font-size: 12px;
-        color: var(--app-text-muted);
-      }
-      .kpi-value {
-        font-size: 18px;
-        font-weight: 500;
-      }
+      /* .kpi-grid — глобальный (styles.scss) */
       .stats-table {
         width: 100%;
         margin-top: 16px;
@@ -508,6 +480,12 @@ export class TradesPage {
 
   protected money(value: number): string {
     return formatMoney(value.toFixed(2), 'RUB');
+  }
+
+  /** Знак метрики для app-kpi-card */
+  protected tone(value: number): KpiTone {
+    if (value === 0) return 'neutral';
+    return value > 0 ? 'positive' : 'negative';
   }
 
   protected readonly columns = [

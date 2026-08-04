@@ -2,6 +2,7 @@
 export * from './lib/theme/chart-tokens';
 export * from './lib/theme/media-query';
 export * from './lib/theme/theme.service';
+export * from './lib/ui/kpi-card/kpi-card';
 export * from './lib/format';
 export * from './lib/extract-error-message';
 export * from './lib/toast.service';

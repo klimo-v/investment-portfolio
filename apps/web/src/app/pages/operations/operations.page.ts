@@ -208,16 +208,11 @@ import { ReassignOperationsDialog } from '../../features/reassign-operations/rea
         min-height: 0;
         overflow: hidden;
       }
+      /* .filters — глобальный (styles.scss): четыре поля по 180px в один ряд
+         требовали ≥768px, теперь ряд переносится */
       .filters {
         flex: 0 0 auto;
-        display: flex;
-        flex-wrap: wrap;
-        align-items: center;
-        gap: 8px;
         padding: 12px 12px 0;
-      }
-      .filters mat-form-field {
-        width: 180px;
       }
       .table-scroll {
         flex: 1;
@@ -423,7 +418,9 @@ export class OperationsPage {
   }
 
   protected openAdd(): void {
-    this.dialog.open(AddOperationDialog, { autoFocus: false });
+    // maxWidth обязателен: дефолтные 80vw MatDialog'а на телефоне уже дают
+    // горизонтальный скролл (вторая половина починки — сетка внутри диалога)
+    this.dialog.open(AddOperationDialog, { autoFocus: false, maxWidth: '95vw' });
     // httpResource перезагрузится сам после add() внутри диалога (reloadTrigger)
   }
 
