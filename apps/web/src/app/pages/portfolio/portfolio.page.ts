@@ -6,8 +6,6 @@ import { MatIconModule } from '@angular/material/icon';
 import { MatFormFieldModule } from '@angular/material/form-field';
 import { MatSelectModule } from '@angular/material/select';
 import { MatDialog } from '@angular/material/dialog';
-import { BaseChartDirective } from 'ng2-charts';
-import type { ChartConfiguration } from 'chart.js';
 import type { InstrumentType } from '@core';
 import { OperationApi } from '../../entities/operation/operation.api';
 import { PositionApi } from '../../entities/position/position.api';
@@ -20,14 +18,13 @@ import {
 } from '../../entities/instrument/instrument-type.tokens';
 import { ManagePortfoliosDialog } from '../../features/manage-portfolios/manage-portfolios.dialog';
 import { ManageSystemsDialog } from '../../features/manage-systems/manage-systems.dialog';
-import { provideAppCharts, syncChartDefaultsWithTheme } from '../../shared/chart.providers';
+import { AllocationChart } from '../../widgets/allocation-chart/allocation-chart';
 import {
   formatMoney,
   formatRub,
   KpiCard,
   pnlColorClass,
   StateMessage,
-  ThemeService,
   toneOf,
 } from '@web-shared';
 
@@ -57,8 +54,6 @@ interface Group {
 @Component({
   selector: 'app-portfolio-page',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  // Chart.js регистрируется здесь, а не глобально — см. shared/chart.providers.ts
-  providers: [provideAppCharts()],
   imports: [
     MatCardModule,
     MatTableModule,
@@ -66,9 +61,9 @@ interface Group {
     MatIconModule,
     MatFormFieldModule,
     MatSelectModule,
-    BaseChartDirective,
     KpiCard,
     StateMessage,
+    AllocationChart,
   ],
   template: `
     <div class="header">
@@ -194,32 +189,13 @@ interface Group {
           }
         </div>
 
-        <mat-card class="pie">
-          <h3>Распределение по типам</h3>
-          @if (pieHasData()) {
-            <!-- @defer: диаграмма живёт в правой колонке и на узком экране уезжает
-                 под таблицы — строить Chart.js до того, как до неё долистают, незачем -->
-            @defer (on viewport) {
-              <div class="chart-box">
-                <canvas
-                  baseChart
-                  [type]="pieChart().type"
-                  [data]="pieChart().data"
-                  [options]="pieChart().options"
-                ></canvas>
-              </div>
-            } @placeholder {
-              <div class="chart-box"></div>
-            }
-          } @else {
-            <app-state-message
-              kind="empty"
-              icon="donut_large"
-              title="Нет текущих цен"
-              hint="Нажмите «Обновить цены», чтобы увидеть распределение по типам."
-            />
-          }
-        </mat-card>
+        <!-- @defer: диаграмма живёт в правой колонке и на узком экране уезжает под
+             таблицы — грузить chart.js до того, как до неё долистают, незачем -->
+        @defer (on viewport) {
+          <app-allocation-chart title="Распределение по типам" [slices]="allocation()" />
+        } @placeholder {
+          <div class="chart-box"></div>
+        }
       </div>
     }
   `,
@@ -290,13 +266,6 @@ interface Group {
       .group-total {
         color: var(--app-text-muted);
       }
-      .pie {
-        padding: 16px;
-      }
-      .pie h3 {
-        margin: 0 0 8px;
-        font-weight: 500;
-      }
       table {
         width: 100%;
       }
@@ -309,10 +278,6 @@ export class PortfolioPage {
   protected readonly positionApi = inject(PositionApi);
   private readonly reference = inject(ReferenceApi);
   private readonly dialog = inject(MatDialog);
-  private readonly theme = inject(ThemeService);
-
-  /** Дефолты Chart.js под тему — только пока страница с графиками жива (см. chart.providers.ts) */
-  private readonly chartDefaults = syncChartDefaultsWithTheme();
 
   protected readonly columns = ['ticker', 'qty', 'avg', 'current', 'value', 'pnl'];
   protected readonly refreshing = signal(false);
@@ -411,39 +376,10 @@ export class PortfolioPage {
     }));
   });
 
-  protected readonly pieHasData = computed(() => this.groups().some((g) => g.valueRub > 0));
-
-  /** Круговая диаграмма: доля текущей стоимости (₽) по типам инструментов */
-  protected readonly pieChart = computed<ChartConfiguration<'doughnut'>>(() => {
-    const data = this.groups().filter((g) => g.valueRub > 0);
-    // Зависимость от темы обязательна: Chart.defaults (цвет легенды) — JS-значения,
-    // уже отрисованный график сам их не перечитает, конфиг должен пересобраться
-    const dark = this.theme.isDark();
-    return {
-      type: 'doughnut',
-      data: {
-        labels: data.map((g) => g.label),
-        datasets: [
-          {
-            data: data.map((g) => g.valueRub),
-            backgroundColor: data.map((g) => TYPE_COLOR[g.type]),
-            // Разделитель цветом поверхности: без него соседние сегменты сливаются,
-            // а на тёмном фоне белая рамка (дефолт Chart.js) выглядит как обводка
-            borderColor: dark ? '#1c2020' : '#ffffff',
-            borderWidth: 1,
-          },
-        ],
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        plugins: {
-          legend: { position: 'bottom' },
-          tooltip: { callbacks: { label: (c) => `${c.label}: ${this.money(Number(c.parsed))}` } },
-        },
-      },
-    };
-  });
+  /** Доли распределения для круговой диаграммы — цвет закреплён за типом инструмента */
+  protected readonly allocation = computed(() =>
+    this.groups().map((g) => ({ label: g.label, valueRub: g.valueRub, color: TYPE_COLOR[g.type] })),
+  );
 
   /**
    * Итоговые карточки берём из summary().totals (та же формула и тот же фильтр,

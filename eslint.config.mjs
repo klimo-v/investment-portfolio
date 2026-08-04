@@ -32,4 +32,30 @@ export default [
       ],
     },
   },
+  /*
+   * FSD-слои ВНУТРИ apps/web. @nx/enforce-module-boundaries выше работает по тегам
+   * ПРОЕКТОВ и границу между каталогами одного проекта не видит — а именно она
+   * описана в CLAUDE.md §2: pages → widgets → features → entities → shared,
+   * зависимости только вниз. Без этих правил слой оставался бы декларацией:
+   * нарушение ловилось бы на ревью, а не линтером.
+   */
+  ...[
+    { layer: 'shared', forbidden: ['entities', 'features', 'widgets', 'pages'] },
+    { layer: 'entities', forbidden: ['features', 'widgets', 'pages'] },
+    { layer: 'features', forbidden: ['widgets', 'pages'] },
+    { layer: 'widgets', forbidden: ['pages'] },
+  ].map(({ layer, forbidden }) => ({
+    files: [`apps/web/src/app/${layer}/**/*.ts`],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: forbidden.map((upper) => ({
+            group: [`**/${upper}/**`],
+            message: `FSD: слой «${layer}» не может зависеть от «${upper}» — зависимости только вниз (CLAUDE.md §2). Поднимите общий код в нижележащий слой или передайте данные входом компонента.`,
+          })),
+        },
+      ],
+    },
+  })),
 ];
