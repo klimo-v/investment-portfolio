@@ -49,6 +49,45 @@ export interface OperationsPage {
   nextCursor?: string;
 }
 
+/**
+ * Коды ошибок проверки сертификата. Сертификат `*.tbank.ru` выпущен корневым
+ * центром Минцифры («Russian Trusted Root CA»), которого нет во встроенном
+ * списке корней Node (там список Mozilla). Браузер на той же машине сайт
+ * открывает — он берёт корни из системного хранилища, а Node в него не смотрит.
+ */
+const TLS_TRUST_ERRORS = new Set([
+  'SELF_SIGNED_CERT_IN_CHAIN',
+  'UNABLE_TO_VERIFY_LEAF_SIGNATURE',
+  'UNABLE_TO_GET_ISSUER_CERT',
+  'UNABLE_TO_GET_ISSUER_CERT_LOCALLY',
+  'CERT_UNTRUSTED',
+]);
+
+/**
+ * Человекочитаемая причина сбоя транспорта. Нативный fetch на любую сетевую
+ * проблему бросает `TypeError: fetch failed`, пряча настоящую ошибку в `cause`
+ * — без её разворачивания «сертификату не доверяют» и «нет интернета»
+ * выглядят в UI одинаково, и понять, что чинить, невозможно.
+ */
+function describeTransportError(error: unknown): string {
+  const cause = error instanceof Error ? (error.cause as NodeJS.ErrnoException | undefined) : undefined;
+  const code = cause?.code;
+
+  if (code && TLS_TRUST_ERRORS.has(code)) {
+    return (
+      'сертификат T-Bank не проходит проверку. Он выпущен корневым центром Минцифры, ' +
+      'которого нет в списке доверенных корней Node. Скачайте корневой сертификат и ' +
+      'запустите бэкенд с NODE_EXTRA_CA_CERTS=<путь к сертификату> (см. README)'
+    );
+  }
+  if (code === 'ENOTFOUND' || code === 'EAI_AGAIN') return 'адрес API не разрешается (DNS)';
+  if (code === 'ECONNREFUSED') return 'соединение отклонено';
+  if (code === 'ETIMEDOUT' || code === 'UND_ERR_CONNECT_TIMEOUT') return 'таймаут соединения';
+
+  const detail = cause?.message ?? (error instanceof Error ? error.message : '');
+  return detail || 'сеть недоступна';
+}
+
 /** Сколько раз повторяем запрос, упёршийся в лимит частоты (429) */
 const MAX_RATE_LIMIT_RETRIES = 3;
 /** Потолок ожидания между повторами, чтобы запрос пользователя не висел бесконечно */
@@ -124,7 +163,7 @@ export class TbankApiClient {
       });
     } catch (cause) {
       throw new BadGatewayException(
-        `Не удалось связаться с T-Invest API: ${cause instanceof Error ? cause.message : 'сеть недоступна'}`,
+        `Не удалось связаться с T-Invest API: ${describeTransportError(cause)}`,
       );
     }
 
