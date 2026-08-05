@@ -6,7 +6,7 @@
   "packageManager": "pnpm@9.15.9",
   "scripts": {
     "start": "nx serve web",
-    "start:api": "nx serve api",
+    "start:api": "NODE_EXTRA_CA_CERTS=certs/russian_trusted_root_ca.pem nx serve api",
     "build": "nx run-many -t build",
     "test": "nx run-many -t test",
     "lint": "nx run-many -t lint",
