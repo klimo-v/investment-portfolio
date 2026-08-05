@@ -1,18 +1,53 @@
-import { ChangeDetectionStrategy, Component, computed, inject, signal } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, inject, linkedSignal, signal } from '@angular/core';
 import { MatCardModule } from '@angular/material/card';
 import { MatButtonModule } from '@angular/material/button';
+import { MatButtonToggleModule } from '@angular/material/button-toggle';
 import { MatIconModule } from '@angular/material/icon';
 import { MatTableModule } from '@angular/material/table';
 import { MatFormFieldModule } from '@angular/material/form-field';
 import { MatSelectModule } from '@angular/material/select';
+import { MatDatepickerModule } from '@angular/material/datepicker';
 import { ImportApi, type PreviewResult, type ImportFormat } from '../../entities/import/import.api';
 import { ReferenceApi } from '../../entities/reference/reference.api';
-import { StatusChip, type ChipTone } from '@web-shared';
+import { parseIsoDate, toIsoDate } from '../../shared/iso-date';
+import { StatusChip, extractErrorMessage, type ChipTone } from '@web-shared';
+
+/** Источник строк импорта: файл-отчёт или прямая синхронизация с брокером */
+export type ImportSource = 'file' | 'tbank';
+
+/**
+ * Период синхронизации по умолчанию. Начало — СЛЕДУЮЩИЙ день после последней
+ * операции в журнале: у выплат (дивиденды, купоны) номер операции в API и в
+ * xlsx-отчёте разный, поэтому пересечение периодов дедупликация по `brokerRef`
+ * не поймает — его проще не создавать. Пустой журнал → последние 90 дней.
+ *
+ * Чистая функция: «сегодня» приходит аргументом, а не берётся из new Date()
+ * внутри — иначе её нельзя протестировать, не подменяя часы (тот же приём, что
+ * в periodToRange, widgets/dashboard-filters/dashboard-filter.state.ts).
+ */
+export function defaultSyncRange(
+  lastOperationDate: string | null,
+  today: Date,
+): { from: Date; to: Date } {
+  const last = parseIsoDate(lastOperationDate);
+  const from = new Date(today);
+  if (last) {
+    from.setTime(last.getTime());
+    from.setDate(from.getDate() + 1);
+  } else {
+    from.setDate(from.getDate() - 90);
+  }
+  // журнал уже содержит операции «из будущего» относительно часов машины —
+  // не отдаём брокеру перевёрнутый период
+  return { from: from > today ? new Date(today) : from, to: new Date(today) };
+}
 
 /**
  * Страница «Импорт» (docs/03-ux-plan.md, шаг 5).
- * CSV, HTML- или xlsx-отчёт брокера → предпросмотр с подсветкой → импорт → откат.
- * Для HTML/xlsx портфель и система задаются на весь батч (в отчёте их нет).
+ * CSV, HTML- или xlsx-отчёт брокера либо прямая выгрузка из T-Invest API →
+ * предпросмотр с подсветкой → импорт → откат. Оба источника дают одни и те же
+ * строки на бэке, поэтому вся разметка и весь предпросмотр ниже — общие.
+ * Портфель и система задаются на весь батч (в данных брокера их нет).
  * xlsx — бинарный формат, читается как base64 (в отличие от CSV/HTML — текст).
  */
 @Component({
@@ -21,45 +56,99 @@ import { StatusChip, type ChipTone } from '@web-shared';
   imports: [
     MatCardModule,
     MatButtonModule,
+    MatButtonToggleModule,
     MatIconModule,
     MatTableModule,
     MatFormFieldModule,
     MatSelectModule,
+    MatDatepickerModule,
     StatusChip,
   ],
   template: `
     <h1 class="page-title">Импорт</h1>
 
     <mat-card class="upload">
-      <p>
-        Загрузите <b>CSV</b>, <b>HTML-отчёт брокера</b> или <b>xlsx-отчёт Т-Банка</b>.
-        Для CSV колонки: Дата, Система, Тикер, Валюта, Брокер, Тип сделки, Между
-        портфелями, Количество, Цена, Комиссия, Курс к RUB, Примечание. Формат
-        HTML/xlsx-отчёта распознаётся автоматически.
-      </p>
-      <!--
-        Голый <input type="file"> не имел ни подписи, ни aria-label: скринридер
-        объявлял его просто «кнопка выбора файла», а прозаическое описание выше
-        программно с ним связано не было. Прячем нативный контрол и вешаем на него
-        <label>, оформленный как кнопка Material — доступное имя приходит от label,
-        клавиатурная активация работает штатно.
-      -->
-      <input
-        id="import-file"
-        class="file-input"
-        type="file"
-        accept=".csv,.html,.htm,.xlsx,text/csv,text/html,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        (change)="onFile($event)"
-      />
-      <label class="file-picker" for="import-file">
-        <mat-icon>attach_file</mat-icon>
-        <span>Выбрать файл</span>
-      </label>
+      @if (tbankAvailable()) {
+        <mat-button-toggle-group
+          class="source"
+          aria-label="Источник данных"
+          [value]="source()"
+          (valueChange)="setSource($event)"
+        >
+          <mat-button-toggle value="file">Файл-отчёт</mat-button-toggle>
+          <mat-button-toggle value="tbank">T-Bank API</mat-button-toggle>
+        </mat-button-toggle-group>
+      }
 
-      @if (fileName()) {
-        <p class="file">
-          Файл: <b>{{ fileName() }}</b> · формат: <b>{{ format().toUpperCase() }}</b>
+      @if (source() === 'file') {
+        <p>
+          Загрузите <b>CSV</b>, <b>HTML-отчёт брокера</b> или <b>xlsx-отчёт Т-Банка</b>.
+          Для CSV колонки: Дата, Система, Тикер, Валюта, Брокер, Тип сделки, Между
+          портфелями, Количество, Цена, Комиссия, Курс к RUB, Примечание. Формат
+          HTML/xlsx-отчёта распознаётся автоматически.
         </p>
+        <!--
+          Голый <input type="file"> не имел ни подписи, ни aria-label: скринридер
+          объявлял его просто «кнопка выбора файла», а прозаическое описание выше
+          программно с ним связано не было. Прячем нативный контрол и вешаем на него
+          <label>, оформленный как кнопка Material — доступное имя приходит от label,
+          клавиатурная активация работает штатно.
+        -->
+        <input
+          id="import-file"
+          class="file-input"
+          type="file"
+          accept=".csv,.html,.htm,.xlsx,text/csv,text/html,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+          (change)="onFile($event)"
+        />
+        <label class="file-picker" for="import-file">
+          <mat-icon>attach_file</mat-icon>
+          <span>Выбрать файл</span>
+        </label>
+
+        @if (fileName()) {
+          <p class="file">
+            Файл: <b>{{ fileName() }}</b> · формат: <b>{{ format().toUpperCase() }}</b>
+          </p>
+        }
+      } @else {
+        <p>
+          Операции берутся напрямую из T-Invest API по токену <b>только для чтения</b>:
+          приложение читает историю счёта и не может выставлять заявки. Сделки, уже
+          загруженные из xlsx-отчёта, распознаются как дубли по номеру сделки.
+        </p>
+
+        <div class="batch">
+          <mat-form-field appearance="outline">
+            <mat-label>Счёт у брокера</mat-label>
+            <mat-select [value]="accountId()" (valueChange)="accountId.set($event)">
+              @for (a of accounts(); track a.id) {
+                <mat-option [value]="a.id">{{ a.name || a.id }}</mat-option>
+              }
+            </mat-select>
+          </mat-form-field>
+          <mat-form-field appearance="outline">
+            <mat-label>Период</mat-label>
+            <mat-date-range-input [rangePicker]="rangePicker">
+              <input matStartDate placeholder="От" [value]="from()" (dateChange)="from.set($event.value)" />
+              <input matEndDate placeholder="До" [value]="to()" (dateChange)="to.set($event.value)" />
+            </mat-date-range-input>
+            <mat-datepicker-toggle matIconSuffix [for]="rangePicker"></mat-datepicker-toggle>
+            <mat-date-range-picker #rangePicker></mat-date-range-picker>
+          </mat-form-field>
+        </div>
+
+        <button
+          mat-flat-button
+          color="primary"
+          [disabled]="fetching() || !accountId() || !from() || !to()"
+          (click)="fetchFromTbank()"
+        >
+          {{ fetching() ? 'Загрузка…' : 'Загрузить операции' }}
+        </button>
+        @if (accounts().length === 0 && !accountsLoading()) {
+          <p class="warn-note">Брокер не вернул ни одного счёта — проверьте токен.</p>
+        }
       }
 
       <div class="batch">
@@ -81,8 +170,11 @@ import { StatusChip, type ChipTone } from '@web-shared';
         </mat-form-field>
       </div>
 
-      @if (format() !== 'csv' && !batchReady()) {
-        <p class="warn-note">Для этого формата выберите портфель и систему — они применятся ко всем операциям файла.</p>
+      @if (!batchReady()) {
+        <p class="warn-note">
+          Выберите портфель и систему — они применятся ко всем операциям
+          {{ source() === 'file' ? 'файла' : 'выгрузки' }}.
+        </p>
       }
     </mat-card>
 
@@ -226,6 +318,9 @@ import { StatusChip, type ChipTone } from '@web-shared';
         outline: 2px solid var(--mat-sys-primary);
         outline-offset: 2px;
       }
+      .source {
+        margin-bottom: 12px;
+      }
       .batch {
         display: flex;
         flex-wrap: wrap;
@@ -296,9 +391,38 @@ export class ImportPage {
   protected readonly portfolios = computed(() => this.reference.portfolios.value() ?? []);
   protected readonly systems = computed(() => this.reference.systems.value() ?? []);
 
-  /** Для HTML-отчёта нужны портфель и система (в файле их нет); для CSV — опционально */
+  /** Источник строк: файл-отчёт или прямая выгрузка из T-Invest API */
+  protected readonly source = signal<ImportSource>('file');
+  protected readonly fetching = signal(false);
+  protected readonly accountId = signal<string | undefined>(undefined);
+
+  /** Вкладку синхронизации показываем, только если на бэке настроен токен */
+  protected readonly tbankAvailable = computed(
+    () => this.api.tbankStatus.value()?.configured ?? false,
+  );
+  protected readonly accounts = computed(() => this.api.tbankAccounts.value() ?? []);
+  protected readonly accountsLoading = computed(() => this.api.tbankAccounts.isLoading());
+
+  /**
+   * Границы периода синхронизации. `linkedSignal`, а не `effect`, пишущий в
+   * сигнал: значение по умолчанию вычисляется из даты последней операции, но
+   * остаётся правимым пользователем и пересчитывается, когда статус подгрузился.
+   */
+  protected readonly from = linkedSignal<Date | null>(
+    () => defaultSyncRange(this.api.tbankStatus.value()?.lastOperationDate ?? null, new Date()).from,
+  );
+  protected readonly to = linkedSignal<Date | null>(
+    () => defaultSyncRange(this.api.tbankStatus.value()?.lastOperationDate ?? null, new Date()).to,
+  );
+
+  /**
+   * Портфель и система задаются на весь батч: в данных брокера их нет ни в
+   * файле-отчёте, ни в API. Исключение — CSV, где колонки есть в самом файле.
+   */
   protected readonly batchReady = computed(
-    () => this.format() === 'csv' || (!!this.portfolioId() && !!this.systemId()),
+    () =>
+      (this.source() === 'file' && this.format() === 'csv') ||
+      (!!this.portfolioId() && !!this.systemId()),
   );
 
   /** Сколько строк реально импортируется (ok + warn) */
@@ -329,12 +453,60 @@ export class ImportPage {
    */
   private uploadId: string | undefined;
 
-  protected onFile(event: Event): void {
+  /** Смена источника обнуляет всё, что относилось к предыдущему */
+  protected setSource(source: ImportSource): void {
+    if (source === this.source()) return;
+    this.source.set(source);
+    this.resetInput();
+    this.fileName.set('');
+    this.fileContent = '';
+    this.format.set('csv');
+  }
+
+  /**
+   * Выгрузка операций из T-Invest API. Кнопка заблокирована на время запроса —
+   * повторный клик не должен запускать вторую синхронизацию (CLAUDE.md §5,
+   * семантика exhaustMap). В базу здесь ничего не пишется: получаем uploadId и
+   * дальше идём обычным путём предпросмотра.
+   */
+  protected async fetchFromTbank(): Promise<void> {
+    const accountId = this.accountId();
+    const from = this.from();
+    const to = this.to();
+    if (!accountId || !from || !to || this.fetching()) return;
+
+    this.fetching.set(true);
+    this.resetInput();
+    try {
+      const result = await this.api.tbankFetch({
+        accountId,
+        from: toIsoDate(from),
+        to: toIsoDate(to),
+      });
+      this.uploadId = result.uploadId;
+      if (result.rows === 0) {
+        this.errorMessage.set('За выбранный период у брокера нет операций.');
+        return;
+      }
+      await this.tryPreview();
+    } catch (e: unknown) {
+      this.errorMessage.set(extractErrorMessage(e, 'Не удалось получить операции у брокера.'));
+    } finally {
+      this.fetching.set(false);
+    }
+  }
+
+  /** Сброс состояния предыдущей загрузки (общий для обоих источников) */
+  private resetInput(): void {
     this.errorMessage.set('');
     this.lastBatch.set(null);
     this.preview.set(null);
     this.tickerSystemChoices.set({});
     this.uploadId = undefined;
+  }
+
+  protected onFile(event: Event): void {
+    this.resetInput();
     const input = event.target as HTMLInputElement;
     const file = input.files?.[0];
     if (!file) return;
@@ -385,7 +557,7 @@ export class ImportPage {
     this.tryPreview();
   }
 
-  /** Предпросмотр запускается автоматически, когда есть файл и достаточно разметки */
+  /** Предпросмотр запускается автоматически, когда есть данные и достаточно разметки */
   private async tryPreview(): Promise<void> {
     if ((!this.fileContent && !this.uploadId) || !this.batchReady()) return;
     this.errorMessage.set('');
@@ -393,8 +565,15 @@ export class ImportPage {
       const result = await this.api.preview(this.request());
       this.uploadId = result.uploadId;
       this.preview.set(result);
-    } catch {
-      this.errorMessage.set('Не удалось разобрать файл. Проверьте формат.');
+    } catch (e: unknown) {
+      this.errorMessage.set(
+        extractErrorMessage(
+          e,
+          this.source() === 'file'
+            ? 'Не удалось разобрать файл. Проверьте формат.'
+            : 'Не удалось разобрать выгрузку. Загрузите операции заново.',
+        ),
+      );
     }
   }
 
@@ -425,12 +604,17 @@ export class ImportPage {
     }
   }
 
-  /** Content шлём только пока нет uploadId — дальше бэк переиспользует уже распарсенные строки */
+  /**
+   * Content шлём только пока нет uploadId — дальше бэк переиспользует уже
+   * распарсенные строки. У выгрузки из API содержимого нет вовсе: там всегда
+   * uploadId, а формат файла не имеет смысла и не передаётся.
+   */
   private request() {
+    const fromApi = this.source() === 'tbank';
     return {
-      content: this.uploadId ? undefined : this.fileContent,
+      content: fromApi || this.uploadId ? undefined : this.fileContent,
       uploadId: this.uploadId,
-      format: this.format(),
+      format: fromApi ? undefined : this.format(),
       systemId: this.systemId(),
       portfolioId: this.portfolioId(),
       tickerSystemOverrides: this.tickerSystemChoices(),

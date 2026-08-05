@@ -1,11 +1,12 @@
 import { Injectable, inject } from '@angular/core';
-import { HttpClient } from '@angular/common/http';
+import { HttpClient, httpResource } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
+import { z } from 'zod';
 import type { Operation } from '@core';
 import { withToastSuccess } from '@web-shared';
 
 /**
- * API-клиент импорта (FSD: entities). Только мутации → HttpClient.
+ * API-клиент импорта (FSD: entities). Мутации → HttpClient, чтения → httpResource.
  */
 
 export interface PreviewRow {
@@ -37,7 +38,8 @@ export type ImportFormat = 'csv' | 'html' | 'xlsx';
  * только в текущей сессии страницы и сбрасывается при загрузке нового файла.
  */
 export interface ImportOptions {
-  format: ImportFormat;
+  /** Формат исходного файла. Для строк, пришедших из API брокера, его нет */
+  format?: ImportFormat;
   systemId?: string;
   portfolioId?: string;
   tickerSystemOverrides?: Record<string, string>;
@@ -52,9 +54,56 @@ export interface ImportOptions {
  */
 export type ImportRequest = { content?: string; uploadId?: string } & ImportOptions;
 
+/**
+ * Состояние синхронизации с T-Invest API. `configured` — настроен ли токен на
+ * бэке (сам токен наружу не выходит никогда, CLAUDE.md §8). `lastOperationDate` —
+ * дата последней операции в журнале: с неё по умолчанию начинается период
+ * синхронизации, чтобы не тянуть повторно уже импортированное из файла.
+ */
+const TbankStatusSchema = z.object({
+  configured: z.boolean(),
+  lastOperationDate: z.string().nullable(),
+});
+export type TbankStatus = z.infer<typeof TbankStatusSchema>;
+
+const TbankAccountSchema = z.object({
+  id: z.string(),
+  name: z.string().optional(),
+  type: z.string().optional(),
+});
+export type TbankAccount = z.infer<typeof TbankAccountSchema>;
+
 @Injectable({ providedIn: 'root' })
 export class ImportApi {
   private readonly http = inject(HttpClient);
+
+  /** Доступна ли синхронизация с брокером (и с какой даты её начинать) */
+  readonly tbankStatus = httpResource(() => '/api/import/tbank/status', {
+    parse: TbankStatusSchema.parse,
+  });
+
+  /**
+   * Счета клиента у брокера. Запрашиваются только когда токен настроен —
+   * иначе запрос заведомо вернул бы 503 и зря показал бы пользователю ошибку.
+   */
+  readonly tbankAccounts = httpResource(
+    () => (this.tbankStatus.value()?.configured ? '/api/import/tbank/accounts' : undefined),
+    { parse: z.array(TbankAccountSchema).parse },
+  );
+
+  /**
+   * Тянет операции у брокера за период. В базу ничего не пишет: возвращает
+   * `uploadId`, с которым дальше вызываются обычные preview()/commit() — то есть
+   * данные из API проходят ровно тот же путь проверки, что и файл.
+   */
+  tbankFetch(req: { accountId: string; from: string; to: string }): Promise<{
+    uploadId: string;
+    rows: number;
+  }> {
+    return firstValueFrom(
+      this.http.post<{ uploadId: string; rows: number }>('/api/import/tbank/fetch', req),
+    );
+  }
 
   preview(req: ImportRequest): Promise<PreviewResult> {
     return firstValueFrom(this.http.post<PreviewResult>('/api/import/preview', req));

@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { BadRequestException, Inject, Injectable } from '@nestjs/common';
-import { eq } from 'drizzle-orm';
+import { desc, eq } from 'drizzle-orm';
 import ExcelJS from 'exceljs';
 import { normalizeRow, makeDedupeKey, parseBrokerHtmlReport, type RawRow, type Operation } from '@core';
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
@@ -112,13 +112,40 @@ export class ImportService {
       }
     }
     const rows = await this.parseFile(input.content ?? '', input.format);
-    const uploadId = input.uploadId ?? randomUUID();
+    return { rows, uploadId: this.stashRawRows(rows, input.uploadId) };
+  }
+
+  /**
+   * Кладёт готовые строки в кэш загрузок и возвращает `uploadId`.
+   *
+   * Публичный, потому что источником строк может быть не файл: синхронизация с
+   * T-Invest API (`tbank/tbank-sync.service.ts`) складывает сюда свой `RawRow[]`,
+   * после чего фронт вызывает те же самые preview()/commit() с этим uploadId —
+   * весь конвейер ниже парсера остаётся общим для файлов и API (CLAUDE.md §7, DRY).
+   */
+  stashRawRows(rows: RawRow[], reuseId?: string): string {
+    const uploadId = reuseId ?? randomUUID();
     this.uploads.set(uploadId, rows);
     if (this.uploads.size > ImportService.MAX_UPLOADS) {
       const oldest = this.uploads.keys().next().value;
       if (oldest) this.uploads.delete(oldest);
     }
-    return { rows, uploadId };
+    return uploadId;
+  }
+
+  /**
+   * Дата последней операции в базе (`YYYY-MM-DD`) либо null, если журнал пуст.
+   * Нужна синхронизации с API как значение по умолчанию для начала периода:
+   * так пользователь не перетягивает заново то, что уже импортировано из файла.
+   */
+  lastOperationDate(): string | null {
+    const [row] = this.db
+      .select({ date: operations.date })
+      .from(operations)
+      .orderBy(desc(operations.date))
+      .limit(1)
+      .all();
+    return row?.date ?? null;
   }
 
   /**

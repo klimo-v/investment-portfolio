@@ -6,3 +6,4 @@ export * from './lib/cash';
 export * from './lib/metrics';
 export * from './lib/import';
 export * from './lib/parsers/broker-html-report';
+export * from './lib/parsers/tbank-invest-api';

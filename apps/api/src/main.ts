@@ -1,4 +1,6 @@
 import 'reflect-metadata';
+// Первым — до графа модулей: db/client.ts открывает БД по DB_PATH на верхнем уровне модуля
+import './load-env';
 import { NestFactory } from '@nestjs/core';
 import { FastifyAdapter, NestFastifyApplication } from '@nestjs/platform-fastify';
 import { AppModule } from './app/app.module';

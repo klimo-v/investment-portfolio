@@ -1,5 +1,8 @@
-import { Body, Controller, Post } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Get, Post } from '@nestjs/common';
+import { z } from 'zod';
 import { ImportService, type ImportFormat, type PreviewResult } from './import.service';
+import { TbankConfig } from './tbank/tbank.config';
+import { TbankSyncService } from './tbank/tbank-sync.service';
 
 /**
  * Тело запроса импорта: содержимое файла как строка (`content`, для обратной
@@ -21,9 +24,24 @@ interface ImportBody {
   tickerSystemOverrides?: Record<string, string>;
 }
 
+/**
+ * Запрос синхронизации с T-Invest API. Валидируется Zod прямо в контроллере —
+ * глобального ValidationPipe в проекте нет, схемы Zod и есть единый способ
+ * проверки входных данных (CLAUDE.md §8: данным клиента не доверяем).
+ */
+const TbankFetchSchema = z.object({
+  accountId: z.string().min(1, 'Не выбран счёт'),
+  from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Дата начала: ожидается YYYY-MM-DD'),
+  to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Дата конца: ожидается YYYY-MM-DD'),
+});
+
 @Controller('import')
 export class ImportController {
-  constructor(private readonly service: ImportService) {}
+  constructor(
+    private readonly service: ImportService,
+    private readonly tbankConfig: TbankConfig,
+    private readonly tbankSync: TbankSyncService,
+  ) {}
 
   /** Предпросмотр: распознать строки без записи */
   @Post('preview')
@@ -55,5 +73,43 @@ export class ImportController {
   @Post('rollback')
   rollback(@Body() body: { batchId: string }): { deleted: number } {
     return this.service.rollback(body.batchId);
+  }
+
+  /**
+   * Доступна ли синхронизация с T-Invest API. Отдаём только флаг — сам токен
+   * наружу не выходит никогда (CLAUDE.md §8). `lastOperationDate` фронт берёт
+   * как начало периода по умолчанию, чтобы не тянуть повторно то, что уже
+   * импортировано из файла.
+   */
+  @Get('tbank/status')
+  tbankStatus(): { configured: boolean; lastOperationDate: string | null } {
+    return {
+      configured: this.tbankConfig.isConfigured(),
+      lastOperationDate: this.service.lastOperationDate(),
+    };
+  }
+
+  /** Счета клиента у брокера — для выбора, какой синхронизировать */
+  @Get('tbank/accounts')
+  tbankAccounts() {
+    return this.tbankSync.accounts();
+  }
+
+  /**
+   * Тянет историю операций за период и кладёт её в кэш загрузок. Ничего не
+   * пишет в базу: дальше фронт вызывает обычные preview()/commit() с этим
+   * `uploadId`, то есть API-источник проходит ровно тот же путь, что и файл.
+   */
+  @Post('tbank/fetch')
+  async tbankFetch(@Body() body: unknown): Promise<{ uploadId: string; rows: number }> {
+    const parsed = TbankFetchSchema.safeParse(body);
+    if (!parsed.success) {
+      throw new BadRequestException(parsed.error.issues.map((i) => i.message).join('; '));
+    }
+    const { accountId, from, to } = parsed.data;
+    if (from > to) throw new BadRequestException('Начало периода позже его конца');
+
+    const rows = await this.tbankSync.fetchRawRows(accountId, from, to);
+    return { uploadId: this.service.stashRawRows(rows), rows: rows.length };
   }
 }
