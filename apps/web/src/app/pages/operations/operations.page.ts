@@ -32,7 +32,7 @@ import { OperationApi } from '../../entities/operation/operation.api';
 import { ReferenceApi } from '../../entities/reference/reference.api';
 import { AddOperationDialog } from '../../features/add-operation/add-operation.dialog';
 import { ReassignOperationsDialog } from '../../features/reassign-operations/reassign-operations.dialog';
-import { queryParam } from '../../shared/query-param';
+import { queryParams } from '../../shared/query-param';
 
 /** Операция журнала, готовая к показу: имена справочников и строка поиска подставлены */
 export interface OperationRow extends Operation {
@@ -377,10 +377,7 @@ export class OperationsPage {
    * Сортировка и пагинация — намеренно НЕ в URL: это способ листать, а не срез
    * данных, и в ссылке они были бы шумом.
    */
-  private readonly searchParam = queryParam('q');
-  private readonly systemParam = queryParam('system');
-  private readonly portfolioParam = queryParam('portfolio');
-  private readonly typeParam = queryParam('type');
+  private readonly params = queryParams();
 
   /**
    * Поиск — ЛОКАЛЬНЫЙ сигнал, посеянный из адреса один раз, а не производный от него.
@@ -388,11 +385,14 @@ export class OperationsPage {
    * навигация по «a» успевает завершиться, когда в поле уже «ab», и связывание
    * [value] откатило бы поле назад. В URL значение уходит односторонне (setSearch).
    */
-  protected readonly search = signal(this.searchParam.value() ?? '');
-  protected readonly systemFilter = this.systemParam.value;
-  protected readonly portfolioFilter = this.portfolioParam.value;
+  protected readonly search = signal(this.params.read('q')() ?? '');
+  protected readonly systemFilter = this.params.read('system');
+  protected readonly portfolioFilter = this.params.read('portfolio');
+
+  private readonly rawType = this.params.read('type');
+  /** Неизвестный тип в адресе (правка руками, старая ссылка) — как будто фильтра нет */
   protected readonly typeFilter = computed<OperationType | null>(() => {
-    const raw = this.typeParam.value();
+    const raw = this.rawType();
     return (OperationType.options as readonly string[]).includes(raw ?? '')
       ? (raw as OperationType)
       : null;
@@ -477,31 +477,30 @@ export class OperationsPage {
 
   protected setSearch(value: string): void {
     this.search.set(value);
-    this.searchParam.set(value);
+    this.params.patch({ q: value });
     this.pageIndex.set(0);
   }
 
   protected setSystemFilter(value: string | null): void {
-    this.systemParam.set(value);
+    this.params.patch({ system: value });
     this.pageIndex.set(0);
   }
 
   protected setPortfolioFilter(value: string | null): void {
-    this.portfolioParam.set(value);
+    this.params.patch({ portfolio: value });
     this.pageIndex.set(0);
   }
 
   protected setTypeFilter(value: OperationType | null): void {
-    this.typeParam.set(value);
+    this.params.patch({ type: value });
     this.pageIndex.set(0);
   }
 
   protected resetFilters(): void {
     this.search.set('');
-    this.searchParam.set(null);
-    this.systemParam.set(null);
-    this.portfolioParam.set(null);
-    this.typeParam.set(null);
+    // Все четыре параметра ОДНОЙ навигацией: по одному вызову на параметр роутер
+    // гасит предыдущую навигацию, и из адреса вычищался только последний
+    this.params.patch({ q: null, system: null, portfolio: null, type: null });
     this.pageIndex.set(0);
   }
 

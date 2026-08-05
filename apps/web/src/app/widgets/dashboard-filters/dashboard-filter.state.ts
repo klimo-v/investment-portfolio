@@ -1,5 +1,5 @@
 import { computed, type Signal } from '@angular/core';
-import { parseEnum, queryParam } from '../../shared/query-param';
+import { parseEnum, queryParams } from '../../shared/query-param';
 
 export const PERIODS = ['all', 'ytd', '1y', 'custom'] as const;
 export type Period = (typeof PERIODS)[number];
@@ -94,40 +94,41 @@ export interface DashboardFilter {
  * двусторонний биндинг с родителем, а срез переживает F5 и уходит в ссылку.
  */
 export function dashboardFilter(): DashboardFilter {
-  const systemParam = queryParam('system');
-  const portfolioParam = queryParam('portfolio');
-  const periodParam = queryParam('period');
-  const fromParam = queryParam('from');
-  const tillParam = queryParam('till');
+  const params = queryParams();
 
-  const period = computed<Period>(() => parseEnum(periodParam.value(), PERIODS, 'all'));
-  const customFrom = computed(() => parseIsoDate(fromParam.value()));
-  const customTill = computed(() => parseIsoDate(tillParam.value()));
-  const range = computed(() =>
-    periodToRange(period(), new Date(), customFrom(), customTill()),
-  );
+  const system = params.read('system');
+  const portfolio = params.read('portfolio');
+  const rawPeriod = params.read('period');
+  const rawFrom = params.read('from');
+  const rawTill = params.read('till');
+
+  const period = computed<Period>(() => parseEnum(rawPeriod(), PERIODS, 'all'));
+  const customFrom = computed(() => parseIsoDate(rawFrom()));
+  const customTill = computed(() => parseIsoDate(rawTill()));
+  const range = computed(() => periodToRange(period(), new Date(), customFrom(), customTill()));
 
   return {
-    system: systemParam.value,
-    portfolio: portfolioParam.value,
+    system,
+    portfolio,
     period,
     customFrom,
     customTill,
     range,
     label: computed(() => formatRangeLabel(range())),
-    segmented: computed(() => systemParam.value() !== null || portfolioParam.value() !== null),
-    setSystem: (id) => systemParam.set(id),
-    setPortfolio: (id) => portfolioParam.set(id),
-    setPeriod: (next) => {
-      periodParam.set(next === 'all' ? null : next);
+    segmented: computed(() => system() !== null || portfolio() !== null),
+    setSystem: (id) => params.patch({ system: id }),
+    setPortfolio: (id) => params.patch({ portfolio: id }),
+    setPeriod: (next) =>
+      // Одной навигацией: период и обнуление границ разными вызовами гасили друг
+      // друга, и период в адрес не попадал вовсе (см. shared/query-param.ts).
       // Границы имеют смысл только у 'custom' — иначе в адресе остаётся мусор,
-      // который при следующем переключении на «Произвольный» молча всплывёт обратно
-      if (next !== 'custom') {
-        fromParam.set(null);
-        tillParam.set(null);
-      }
-    },
-    setCustomFrom: (date) => fromParam.set(date ? toIsoDate(date) : null),
-    setCustomTill: (date) => tillParam.set(date ? toIsoDate(date) : null),
+      // который при следующем переключении на «Произвольный» молча всплывёт обратно.
+      params.patch(
+        next === 'custom'
+          ? { period: next }
+          : { period: next === 'all' ? null : next, from: null, till: null },
+      ),
+    setCustomFrom: (date) => params.patch({ from: date ? toIsoDate(date) : null }),
+    setCustomTill: (date) => params.patch({ till: date ? toIsoDate(date) : null }),
   };
 }
