@@ -26,6 +26,8 @@ export interface PositionResult {
   investedRub: Decimal;
   /** реализованный P&L в валюте инструмента */
   realizedPnlCcy: Decimal;
+  /** реализованный P&L в рублях, по курсу на дату каждой продажи */
+  realizedPnlRub: Decimal;
   /** накопленные дивиденды в рублях */
   dividendsRub: Decimal;
   /** накопленные купоны в рублях */
@@ -68,6 +70,7 @@ export function calculatePositions(operations: Operation[]): PositionResult[] {
         investedCcy: new Decimal(0),
         investedRub: new Decimal(0),
         realizedPnlCcy: new Decimal(0),
+        realizedPnlRub: new Decimal(0),
         dividendsRub: new Decimal(0),
         couponsRub: new Decimal(0),
       };
@@ -96,6 +99,7 @@ export function calculatePositions(operations: Operation[]): PositionResult[] {
         const costOfSold = pos.avgBuyPrice.mul(qty);
         const proceeds = qty.mul(price).minus(fee);
         pos.realizedPnlCcy = pos.realizedPnlCcy.plus(proceeds.minus(costOfSold));
+        pos.realizedPnlRub = pos.realizedPnlRub.plus(proceeds.minus(costOfSold).mul(fxRate));
         pos.quantity = pos.quantity.minus(qty);
         // вложено уменьшается на себестоимость проданного (нетто-остаток)
         pos.investedCcy = pos.investedCcy.minus(costOfSold);

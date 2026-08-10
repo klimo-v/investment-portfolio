@@ -66,6 +66,32 @@ describe('calculatePositions — средневзвешенная цена', () 
     expect(pos.investedCcy.toString()).toBe('0');
   });
 
+  it('закрытие валютной позиции: realizedPnlRub — по курсу продажи, отдельно от realizedPnlCcy', () => {
+    const [pos] = calculatePositions([
+      op({
+        instrumentId: 'BOND',
+        operationType: 'Buy',
+        quantity: '28',
+        price: '100',
+        fxRate: '90',
+        currency: 'USD',
+      }),
+      op({
+        instrumentId: 'BOND',
+        operationType: 'Sell',
+        quantity: '28',
+        price: '110',
+        fxRate: '95',
+        currency: 'USD',
+      }),
+    ]);
+    // P&L в валюте = 28*110 - 28*100 = 280; в рублях — по курсу продажи: 280*95 = 26600
+    // (этого поля не было в PositionResult — без него positions() показывал P&L
+    // закрытой позиции без учёта реализованного результата, см. operations.service.ts)
+    expect(pos.realizedPnlCcy.toString()).toBe('280');
+    expect(pos.realizedPnlRub.toString()).toBe('26600');
+  });
+
   it('частичная продажа: средняя цена остатка сохраняется', () => {
     const [pos] = calculatePositions([
       op({ instrumentId: 'X', operationType: 'Buy', quantity: '100', price: '10', fee: '0' }),

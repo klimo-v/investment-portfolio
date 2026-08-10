@@ -142,11 +142,20 @@ export class OperationsService {
         const fx = await this.quotesService.getFxRate(currency);
         const qty = Number(p.quantity);
         const valueCcy = qty * Number(quote.price);
-        const valueRub = valueCcy * fx;
-        currentValueRub = valueRub.toFixed(2);
-        // P&L в рублях = текущая стоимость − вложено (в RUB) + дивиденды/купоны
+        currentValueRub = (valueCcy * fx).toFixed(2);
+      }
+      // P&L считаем, если знаем рыночную стоимость остатка (котировка есть), либо
+      // остатка нет вовсе (позиция закрыта, qty=0) — тогда нереализованная часть
+      // тривиально нулевая и цена для неё не нужна. Если позиция ОТКРЫТА и котировки
+      // нет — итог посчитать нельзя (не с чем сравнить вложенное), оставляем «—»,
+      // а не молча показываем ноль вместо «неизвестно».
+      if (quote || p.quantity.isZero()) {
+        // реализ. (по проданным частям) + нереализ. (по остатку) + дивиденды/купоны —
+        // тот же состав, что и в trades() ниже; раньше здесь не было реализованного
+        // P&L, из-за чего закрытая позиция с прибылью только от продажи показывала 0
+        const unrealizedRub = currentValueRub ? Number(currentValueRub) - Number(p.investedRub) : 0;
         const pnl =
-          valueRub - Number(p.investedRub) + Number(p.dividendsRub) + Number(p.couponsRub);
+          Number(p.realizedPnlRub) + unrealizedRub + Number(p.dividendsRub) + Number(p.couponsRub);
         pnlRub = pnl.toFixed(2);
       }
 
@@ -161,6 +170,7 @@ export class OperationsService {
         avgBuyPrice: p.avgBuyPrice.toFixed(2),
         investedCcy: p.investedCcy.toFixed(2),
         investedRub: p.investedRub.toFixed(2),
+        realizedPnlRub: p.realizedPnlRub.toFixed(2),
         dividendsRub: p.dividendsRub.toFixed(2),
         couponsRub: p.couponsRub.toFixed(2),
         currentPrice,

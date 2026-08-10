@@ -119,11 +119,12 @@ export const PositionSchema = z.object({
   avgBuyPrice: decimalString,
   investedCcy: decimalString,
   investedRub: decimalString,
+  realizedPnlRub: decimalString,
   dividendsRub: decimalString,
   couponsRub: decimalString,
   currentPrice: decimalString.nullable(),
   currentValueRub: decimalString.nullable(),
-  pnlRub: decimalString.nullable(),
+  pnlRub: decimalString.nullable(), // реализованный + нереализованный + дивиденды/купоны
 });
 export type Position = z.infer<typeof PositionSchema>;
 
