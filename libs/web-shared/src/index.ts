@@ -9,6 +9,7 @@ export * from './lib/ui/kpi-card/kpi-card';
 export * from './lib/ui/state-message/state-message';
 export * from './lib/ui/status-chip/status-chip';
 export * from './lib/format';
+export * from './lib/csv';
 export * from './lib/paging';
 export * from './lib/sorting';
 export * from './lib/extract-error-message';
