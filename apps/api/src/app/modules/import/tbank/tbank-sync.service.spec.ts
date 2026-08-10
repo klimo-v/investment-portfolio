@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import type { TbankOperationItem } from '@core';
+import type { TbankInstrumentRef, TbankOperationItem } from '@core';
 import { TbankSyncService } from './tbank-sync.service';
 import type { OperationsPage, TbankApiClient } from './tbank-api.client';
 
@@ -19,13 +19,19 @@ function item(id: string): TbankOperationItem {
 }
 
 /** Клиент-заглушка, отдающий заранее заданные страницы курсора */
-function clientWithPages(pages: OperationsPage[]) {
+function clientWithPages(
+  pages: OperationsPage[],
+  byUid: (uid: string) => TbankInstrumentRef | null = () => null,
+  byFigi: (figi: string) => TbankInstrumentRef | null = () => null,
+) {
   const getOperationsPage = vi.fn(async () => pages.shift() as OperationsPage);
-  const getInstrumentByUid = vi.fn(async () => null);
+  const getInstrumentByUid = vi.fn(async (uid: string) => byUid(uid));
+  const getInstrumentByFigi = vi.fn(async (figi: string) => byFigi(figi));
   return {
-    client: { getOperationsPage, getInstrumentByUid } as unknown as TbankApiClient,
+    client: { getOperationsPage, getInstrumentByUid, getInstrumentByFigi } as unknown as TbankApiClient,
     getOperationsPage,
     getInstrumentByUid,
+    getInstrumentByFigi,
   };
 }
 
@@ -79,5 +85,38 @@ describe('TbankSyncService — пагинация по курсору', () => {
     await new TbankSyncService(client).fetchRawRows('acc-1', '2026-01-01', '2026-12-31');
 
     expect(getInstrumentByUid).toHaveBeenCalledTimes(2);
+  });
+
+  it('если uid не резолвится, повторяет запрос по figi той же операции', async () => {
+    const op = { ...item('a'), instrumentUid: 'uid-1', figi: 'TCS00A10B4K3' };
+    const bond: TbankInstrumentRef = {
+      ticker: 'RU000A10B4K3',
+      isin: 'RU000A10B4K3',
+      name: 'ГМК Норникель БО-001Р-08',
+    };
+    const { client, getInstrumentByUid, getInstrumentByFigi } = clientWithPages(
+      [{ items: [op], hasNext: false }],
+      () => null,
+      (figi) => (figi === 'TCS00A10B4K3' ? bond : null),
+    );
+
+    const rows = await new TbankSyncService(client).fetchRawRows('acc-1', '2026-01-01', '2026-12-31');
+
+    expect(getInstrumentByUid).toHaveBeenCalledWith('uid-1');
+    expect(getInstrumentByFigi).toHaveBeenCalledWith('TCS00A10B4K3');
+    expect(rows[0].ticker).toBe('RU000A10B4K3');
+    expect(rows[0].name).toBe('ГМК Норникель БО-001Р-08');
+  });
+
+  it('не запрашивает figi, если uid резолвится сразу', async () => {
+    const op = { ...item('a'), instrumentUid: 'uid-1', figi: 'TCS00A10B4K3' };
+    const { client, getInstrumentByFigi } = clientWithPages(
+      [{ items: [op], hasNext: false }],
+      () => ({ ticker: 'SBER' }),
+    );
+
+    await new TbankSyncService(client).fetchRawRows('acc-1', '2026-01-01', '2026-12-31');
+
+    expect(getInstrumentByFigi).not.toHaveBeenCalled();
   });
 });

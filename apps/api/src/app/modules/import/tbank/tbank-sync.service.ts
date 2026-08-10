@@ -72,17 +72,32 @@ export class TbankSyncService {
    * а импорту нужны тикер, ISIN и название. Запрашиваем по одному разу на
    * уникальный uid — у одного счёта это десятки инструментов, не тысячи.
    *
-   * Инструмент, который брокер не отдал, не ошибка: маппер подставит figi, а
-   * резолвер импорта попробует найти бумагу по нему или по имени.
+   * Уид, который брокер не резолвит по `GetInstrumentBy(UID)`, — реальный
+   * случай для облигаций закрытого размещения: сделка покупки несёт uid,
+   * который каталог не знает, а купонные/погасительные операции по той же
+   * бумаге несут другой uid, который резолвится нормально. Без повторного
+   * запроса по figi покупка осталась бы безымянной строкой и завела бы в БД
+   * дубль-инструмент рядом с уже существующим (найдено на бумаге
+   * TCS00A10B4K3/RU000A10B4K3 — ГМК Норникель БО-001Р-08, где figi покупки
+   * оказался тем самым идентификатором, по которому находится ТА ЖЕ карточка,
+   * что и у купонов).
    */
   private async loadInstruments(
     items: TbankOperationItem[],
   ): Promise<Map<string, TbankInstrumentRef>> {
-    const uids = new Set(items.map((i) => i.instrumentUid).filter((uid): uid is string => !!uid));
-    const result = new Map<string, TbankInstrumentRef>();
+    const uidToFigi = new Map<string, string>();
+    for (const item of items) {
+      if (item.instrumentUid && item.figi && !uidToFigi.has(item.instrumentUid)) {
+        uidToFigi.set(item.instrumentUid, item.figi);
+      }
+    }
 
+    const result = new Map<string, TbankInstrumentRef>();
+    const uids = new Set(items.map((i) => i.instrumentUid).filter((uid): uid is string => !!uid));
     for (const uid of uids) {
-      const instrument = await this.api.getInstrumentByUid(uid);
+      const instrument =
+        (await this.api.getInstrumentByUid(uid)) ??
+        (uidToFigi.has(uid) ? await this.api.getInstrumentByFigi(uidToFigi.get(uid) as string) : null);
       if (instrument) result.set(uid, instrument);
     }
 

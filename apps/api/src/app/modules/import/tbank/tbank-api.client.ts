@@ -131,20 +131,51 @@ export class TbankApiClient {
     };
   }
 
-  /** Справочные поля инструмента по его uid; null, если брокер его не отдал */
+  /**
+   * Справочные поля инструмента по его uid; null, если брокер его не отдал —
+   * в том числе когда сам метод ответил 404 «Instrument not found». На практике
+   * это бывает для облигаций закрытого размещения: uid сделки покупки не
+   * резолвится, а uid, которым брокер помечает выплаты купона по той же бумаге,
+   * резолвится нормально — вызывающий код (`tbank-sync.service.ts`) в этом
+   * случае повторяет запрос по figi операции (`getInstrumentByFigi`).
+   */
   async getInstrumentByUid(uid: string): Promise<TbankInstrumentRef | null> {
-    const res = await this.call<{ instrument?: TbankInstrumentRef }>(
+    return this.getInstrumentBy('INSTRUMENT_ID_TYPE_UID', uid);
+  }
+
+  /**
+   * Справочные поля инструмента по его figi — запасной путь, когда `getInstrumentByUid`
+   * не резолвит бумагу (см. комментарий там же). Figi для одной и той же бумаги
+   * оказывается устойчивее uid: у бумаг закрытого размещения именно по figi
+   * находится карточка инструмента, которую не отдаёт поиск по uid.
+   */
+  async getInstrumentByFigi(figi: string): Promise<TbankInstrumentRef | null> {
+    return this.getInstrumentBy('INSTRUMENT_ID_TYPE_FIGI', figi);
+  }
+
+  private async getInstrumentBy(
+    idType: 'INSTRUMENT_ID_TYPE_UID' | 'INSTRUMENT_ID_TYPE_FIGI',
+    id: string,
+  ): Promise<TbankInstrumentRef | null> {
+    const res = await this.call<{ instrument?: TbankInstrumentRef } | null>(
       `${SERVICE}.InstrumentsService/GetInstrumentBy`,
-      { idType: 'INSTRUMENT_ID_TYPE_UID', id: uid },
+      { idType, id },
+      0,
+      { notFoundIsNull: true },
     );
-    return res.instrument ?? null;
+    return res?.instrument ?? null;
   }
 
   /**
    * Единственная точка выхода наружу. `method` ограничен типом `ReadMethod` —
    * см. комментарий к границе «только чтение» в шапке файла.
    */
-  private async call<T>(method: ReadMethod, body: unknown, attempt = 0): Promise<T> {
+  private async call<T>(
+    method: ReadMethod,
+    body: unknown,
+    attempt = 0,
+    opts?: { notFoundIsNull?: boolean },
+  ): Promise<T> {
     // токен получаем ДО try: ненастроенный токен — это 503 «настройте .env»,
     // а не «сеть недоступна», и заворачивать его в ошибку транспорта нельзя
     const token = this.config.token();
@@ -183,7 +214,11 @@ export class TbankApiClient {
         MAX_RETRY_DELAY_MS,
       );
       await new Promise((resolve) => setTimeout(resolve, delayMs));
-      return this.call<T>(method, body, attempt + 1);
+      return this.call<T>(method, body, attempt + 1, opts);
+    }
+
+    if (response.status === 404 && opts?.notFoundIsNull) {
+      return null as T;
     }
 
     throw new BadGatewayException(
