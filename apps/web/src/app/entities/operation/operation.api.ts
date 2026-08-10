@@ -95,6 +95,22 @@ export class OperationApi {
     await this.snapshotApi.capture();
     return result;
   }
+
+  /**
+   * Установить цену вручную (marketSource='manual' — своего провайдера нет и не
+   * будет, см. QuotesService.refreshAll). Бэк отклонит вызов для инструмента с
+   * автоматическим источником — интерцептор сам покажет тост с причиной отказа.
+   */
+  async setManualPrice(instrumentId: string, price: string): Promise<void> {
+    await firstValueFrom(
+      this.http.post(
+        `/api/quotes/${instrumentId}/manual`,
+        { price },
+        withToastSuccess('Цена установлена'),
+      ),
+    );
+    this.revision.bump();
+  }
 }
 
 export type { Operation };

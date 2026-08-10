@@ -4,6 +4,7 @@ import { firstValueFrom } from 'rxjs';
 import { z } from 'zod';
 import { InstrumentSchema, PortfolioSchema, SystemSchema, type Portfolio, type System } from '@core';
 import { withToastSuccess } from '@web-shared';
+import { DataRevision } from '../../shared/data-revision';
 
 /**
  * API-клиент справочников (FSD: entities): системы, портфели, инструменты.
@@ -20,6 +21,7 @@ export type { Portfolio, System };
 @Injectable({ providedIn: 'root' })
 export class ReferenceApi {
   private readonly http = inject(HttpClient);
+  private readonly revision = inject(DataRevision);
 
   /** триггер перезагрузки: меняем значение → httpResource перезапрашивает */
   private readonly reloadTrigger = signal(0);
@@ -76,5 +78,25 @@ export class ReferenceApi {
       this.http.delete<{ deleted: true }>(`/api/systems/${id}`, withToastSuccess('Система удалена')),
     );
     this.reloadTrigger.update((n) => n + 1);
+  }
+
+  /**
+   * Найти цену через подключённые провайдеры (MOEX/Binance) для инструмента без
+   * автоисточника (marketSource='manual') — файловый импорт заводит так любой
+   * новый тикер из осторожности, даже если бумага реально торгуется на бирже
+   * под тем же кодом (см. GOLD). Успех переключает marketSource у инструмента —
+   * поэтому перечитываем и справочник, и позиции.
+   */
+  async resolvePrice(instrumentId: string): Promise<{ price: string; source: string }> {
+    const result = await firstValueFrom(
+      this.http.post<{ price: string; source: string }>(
+        `/api/quotes/${instrumentId}/resolve`,
+        {},
+        withToastSuccess('Цена найдена'),
+      ),
+    );
+    this.reloadTrigger.update((n) => n + 1);
+    this.revision.bump();
+    return result;
   }
 }

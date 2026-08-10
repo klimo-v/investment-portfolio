@@ -1,5 +1,7 @@
-import { Inject, Injectable } from '@nestjs/common';
+import { BadRequestException, Inject, Injectable, NotFoundException } from '@nestjs/common';
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
+import { eq } from 'drizzle-orm';
+import { ManualPriceSchema } from '@core';
 import { quotes, instruments, type QuoteRow } from '../../../db/schema';
 import { DB } from '../../db/drizzle.module';
 import { MoexProvider } from './moex.provider';
@@ -83,5 +85,86 @@ export class QuotesService {
     }
 
     return { updated, total: instrumentRows.length };
+  }
+
+  /**
+   * Установить цену вручную — единственный способ показать «Тек. цену» для
+   * инструмента с marketSource='manual' (напр. фонд с тикером, которого нет ни
+   * на MOEX, ни на Binance): для него навсегда нет провайдера, refreshAll() его
+   * просто пропускает (см. выше), а без этого метода цена так и оставалась бы
+   * пустой бесконечно. Разрешаем только для marketSource='manual' — иначе
+   * следующий клик «Обновить цены» молча перезапишет введённое пользователем
+   * значение реальной котировкой, и правка выглядела бы как «пропала сама собой».
+   */
+  setManualPrice(instrumentId: string, raw: unknown): QuoteRow {
+    const { price } = ManualPriceSchema.parse(raw);
+    const [inst] = this.db.select().from(instruments).where(eq(instruments.id, instrumentId)).all();
+    if (!inst) throw new NotFoundException(`Инструмент не найден: ${instrumentId}`);
+    if (inst.marketSource !== 'manual') {
+      throw new BadRequestException(
+        `У инструмента «${inst.ticker}» уже есть автоматический источник цены (${inst.marketSource}) — ` +
+          'ручная цена будет перезаписана следующим «Обновить цены».',
+      );
+    }
+
+    const asOf = new Date().toISOString();
+    this.db
+      .insert(quotes)
+      .values({ instrumentId, price, currency: inst.currency, source: 'manual', asOf })
+      .onConflictDoUpdate({
+        target: quotes.instrumentId,
+        set: { price, currency: inst.currency, source: 'manual', asOf },
+      })
+      .run();
+
+    const [row] = this.db.select().from(quotes).where(eq(quotes.instrumentId, instrumentId)).all();
+    return row;
+  }
+
+  /**
+   * Найти цену через подключённые провайдеры (MOEX/Binance) для инструмента без
+   * автоматического источника (marketSource='manual'). Файловый импорт заводит
+   * ЛЮБОЙ новый тикер как manual из осторожности (см. ensureInstruments() в
+   * import.service.ts — «автоматически считать любой новый код торгуемым на MOEX
+   * небезопасно»), даже когда бумага на самом деле торгуется на бирже под тем же
+   * кодом (напр. БПИФ «GOLD» есть и в отчёте брокера, и на MOEX). Здесь пользователь
+   * явно просит проверить — если провайдер отвечает, фиксируем marketSource на
+   * найденный источник, и дальше «Обновить цены» подхватывает инструмент сама же.
+   */
+  async resolveViaApi(instrumentId: string): Promise<{ price: string; source: string }> {
+    const [inst] = this.db.select().from(instruments).where(eq(instruments.id, instrumentId)).all();
+    if (!inst) throw new NotFoundException(`Инструмент не найден: ${instrumentId}`);
+    if (inst.marketSource !== 'manual') {
+      throw new BadRequestException(
+        `У инструмента «${inst.ticker}» уже есть автоматический источник цены (${inst.marketSource}).`,
+      );
+    }
+
+    for (const provider of this.providers) {
+      const quote = await provider.getQuote(inst.ticker);
+      if (!quote) continue;
+
+      this.db.update(instruments).set({ marketSource: quote.source }).where(eq(instruments.id, instrumentId)).run();
+      this.db
+        .insert(quotes)
+        .values({
+          instrumentId,
+          price: quote.price,
+          currency: inst.currency,
+          source: quote.source,
+          asOf: quote.asOf,
+        })
+        .onConflictDoUpdate({
+          target: quotes.instrumentId,
+          set: { price: quote.price, currency: inst.currency, source: quote.source, asOf: quote.asOf },
+        })
+        .run();
+
+      return { price: quote.price, source: quote.source };
+    }
+
+    throw new NotFoundException(
+      `Не нашлось котировки для «${inst.ticker}» ни на одной из подключённых площадок (MOEX, Binance).`,
+    );
   }
 }

@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Query } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post, Query } from '@nestjs/common';
 import type { BenchmarkPoint } from '@core';
 import type { QuoteRow } from '../../../db/schema';
 import { QuotesService } from './quotes.service';
@@ -17,6 +17,18 @@ export class QuotesController {
   @Post('refresh')
   refresh(): Promise<{ updated: number; total: number }> {
     return this.service.refreshAll();
+  }
+
+  /** Установить цену вручную для инструмента без автоматического источника */
+  @Post(':instrumentId/manual')
+  setManualPrice(@Param('instrumentId') instrumentId: string, @Body() body: unknown): QuoteRow {
+    return this.service.setManualPrice(instrumentId, body);
+  }
+
+  /** Найти цену через провайдеры (MOEX/Binance) для инструмента без источника */
+  @Post(':instrumentId/resolve')
+  resolveViaApi(@Param('instrumentId') instrumentId: string): Promise<{ price: string; source: string }> {
+    return this.service.resolveViaApi(instrumentId);
   }
 
   /**

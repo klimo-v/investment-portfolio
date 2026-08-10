@@ -86,6 +86,16 @@ export const InstrumentSchema = z.object({
 });
 export type Instrument = z.infer<typeof InstrumentSchema>;
 
+/**
+ * Тело запроса на ручную установку цены — для инструментов с marketSource='manual'
+ * (нет автоматического провайдера котировок, см. QuotesService), цену вводит
+ * пользователь сам вместо того, чтобы бумага молча оставалась без «Тек. цены».
+ */
+export const ManualPriceSchema = z.object({
+  price: decimalString,
+});
+export type ManualPrice = z.infer<typeof ManualPriceSchema>;
+
 /** Торговая система / стратегия (справочник, docs/02-data-model.md §2.2) */
 export const SystemSchema = z.object({
   id: z.string().min(1).optional(),
