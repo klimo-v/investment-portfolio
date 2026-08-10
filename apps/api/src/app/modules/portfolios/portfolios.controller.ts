@@ -42,4 +42,12 @@ export class PortfoliosController {
   instruments(): InstrumentRow[] {
     return this.service.listInstruments();
   }
+
+  @Post('instruments/:sourceId/merge-into/:targetId')
+  mergeInstruments(
+    @Param('sourceId') sourceId: string,
+    @Param('targetId') targetId: string,
+  ): { merged: true; movedOperations: number } {
+    return this.service.mergeInstruments(sourceId, targetId);
+  }
 }

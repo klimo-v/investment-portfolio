@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { BadRequestException, Inject, Injectable } from '@nestjs/common';
+import { BadRequestException, Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { eq, sql } from 'drizzle-orm';
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
 import { PortfolioSchema, SystemSchema } from '@core';
@@ -8,11 +8,13 @@ import {
   portfolios,
   instruments,
   operations,
+  quotes,
   type SystemRow,
   type PortfolioRow,
   type InstrumentRow,
 } from '../../../db/schema';
 import { DB } from '../../db/drizzle.module';
+import { invalidateSnapshots } from '../../../db/invalidate-snapshots';
 
 /**
  * Справочники: системы, портфели, инструменты (docs/02-data-model.md §2.2–2.4).
@@ -110,5 +112,44 @@ export class PortfoliosService {
     }
 
     this.db.delete(portfolios).where(eq(portfolios.id, id)).run();
+  }
+
+  /**
+   * Слить дубль-инструмент в другой: перевесить его операции на targetId и удалить
+   * саму запись source. Нужен, когда брокерский импорт заводит два справочных
+   * инструмента на один и тот же реальный актив под разными кодами (напр. T-Invest
+   * API отдаёт отдельную запись «TMON@» для автосвипа в фонд денежного рынка рядом
+   * с биржевым «TMON») — тикер/ISIN/имя при этом могут не совпадать вовсе, поэтому
+   * такое слияние делает пользователь вручную, а не эвристика при импорте.
+   *
+   * Котировка source (если есть) удаляется вместе с ним — она обычно для другой
+   * валюты/цены и была бы неверной под чужим instrumentId. История снимков стирается
+   * тем же приёмом, что и при правке журнала задним числом (см. invalidateSnapshots).
+   */
+  mergeInstruments(sourceId: string, targetId: string): { merged: true; movedOperations: number } {
+    if (sourceId === targetId) {
+      throw new BadRequestException('Нельзя слить инструмент сам с собой.');
+    }
+    const [source] = this.db.select().from(instruments).where(eq(instruments.id, sourceId)).all();
+    const [target] = this.db.select().from(instruments).where(eq(instruments.id, targetId)).all();
+    if (!source) throw new NotFoundException(`Инструмент не найден: ${sourceId}`);
+    if (!target) throw new NotFoundException(`Инструмент не найден: ${targetId}`);
+    if (source.type !== target.type) {
+      throw new BadRequestException(
+        `Нельзя слить инструменты разных типов: ${source.type} → ${target.type}.`,
+      );
+    }
+
+    const { changes: movedOperations } = this.db
+      .update(operations)
+      .set({ instrumentId: targetId })
+      .where(eq(operations.instrumentId, sourceId))
+      .run();
+
+    this.db.delete(quotes).where(eq(quotes.instrumentId, sourceId)).run();
+    this.db.delete(instruments).where(eq(instruments.id, sourceId)).run();
+    invalidateSnapshots(this.db);
+
+    return { merged: true, movedOperations };
   }
 }

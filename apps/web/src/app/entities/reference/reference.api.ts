@@ -81,6 +81,29 @@ export class ReferenceApi {
   }
 
   /**
+   * Слить дубль-инструмент (sourceId) в другой (targetId): его операции переходят
+   * на targetId, сам он удаляется из справочника. Нужен для случаев вроде
+   * TMON@/TMON — брокерский импорт заводит два инструмента на один реальный актив
+   * под разными кодами, а автоматически распознать дубль нельзя (см. диалог).
+   * Затрагивает и позиции/сделки (DataRevision), и сам справочник (reloadTrigger).
+   */
+  async mergeInstruments(
+    sourceId: string,
+    targetId: string,
+  ): Promise<{ merged: true; movedOperations: number }> {
+    const result = await firstValueFrom(
+      this.http.post<{ merged: true; movedOperations: number }>(
+        `/api/instruments/${sourceId}/merge-into/${targetId}`,
+        {},
+        withToastSuccess('Инструменты объединены'),
+      ),
+    );
+    this.reloadTrigger.update((n) => n + 1);
+    this.revision.bump();
+    return result;
+  }
+
+  /**
    * Найти цену через подключённые провайдеры (MOEX/Binance) для инструмента без
    * автоисточника (marketSource='manual') — файловый импорт заводит так любой
    * новый тикер из осторожности, даже если бумага реально торгуется на бирже
