@@ -5,8 +5,10 @@ import { MatButtonModule } from '@angular/material/button';
 import { MatIconModule } from '@angular/material/icon';
 import { MatFormFieldModule } from '@angular/material/form-field';
 import { MatSelectModule } from '@angular/material/select';
+import { MatTooltipModule } from '@angular/material/tooltip';
 import { MatDialog } from '@angular/material/dialog';
-import type { InstrumentType } from '@core';
+import type { InstrumentType, Position } from '@core';
+import { firstValueFrom } from 'rxjs';
 import { OperationApi } from '../../entities/operation/operation.api';
 import { PositionApi } from '../../entities/position/position.api';
 import { summaryResource, type SummaryFilter } from '../../entities/summary/summary.api';
@@ -18,15 +20,23 @@ import {
 } from '../../entities/instrument/instrument-type.tokens';
 import { ManagePortfoliosDialog } from '../../features/manage-portfolios/manage-portfolios.dialog';
 import { ManageSystemsDialog } from '../../features/manage-systems/manage-systems.dialog';
+import { MergeInstrumentDialog } from '../../features/merge-instrument/merge-instrument.dialog';
+import { SetManualPriceDialog } from '../../features/set-manual-price/set-manual-price.dialog';
 import { AllocationChart } from '../../widgets/allocation-chart/allocation-chart';
 import {
+  buildCsv,
+  downloadCsv,
   formatMoney,
   formatRub,
   KpiCard,
   pnlColorClass,
+  slugForFilename,
   StateMessage,
+  ToastService,
   toneOf,
+  type CsvColumn,
 } from '@web-shared';
+import { toIsoDate } from '../../shared/iso-date';
 
 /**
  * Страница «Портфель» (docs/03-ux-plan.md, шаг 3; roadmap Фаза 2).
@@ -36,14 +46,43 @@ import {
  */
 
 interface Row {
+  instrumentId: string;
   ticker: string;
+  type: InstrumentType;
+  currency: string;
   qty: string;
   avg: string;
+  /** Средняя цена покупки без форматирования — стартовое значение для ручной цены */
+  avgRaw: string;
   current: string;
   value: string;
   pnl: string;
   pnlClass: string;
+  /**
+   * Открытый остаток (qty ≠ 0), для которого не нашлось текущей цены — единственный
+   * точно вычислимый признак «похоже на дубль-инструмент из импорта» (см.
+   * TMON@/TMON, TCS00A10B4K3/RU000A10B4K3): угадывать дубль по совпадению
+   * тикера/названия ненадёжно — у обоих реальных случаев они не совпадали вовсе,
+   * а вот «держим остаток, но цены для него в принципе нет» — ровно то, что
+   * ломает P&L и что видит пользователь. Кнопку слияния показываем только тут,
+   * а не на каждой строке — иначе она не говорит ничего о том, что стоит трогать.
+   */
+  suspicious: boolean;
 }
+/**
+ * decimal-строка бэка → число для ячейки CSV. Именно число, а не строка: числовая
+ * ячейка складывается и фильтруется в Excel, текстовая — нет. Точность не режем —
+ * количество бывает дробным на восемь знаков (криптовалюта).
+ */
+const csvNumber = (value: string | null): number | null => (value === null ? null : Number(value));
+
+/**
+ * То же для денег, но с округлением до копеек: без `toFixed` в ячейку уезжает
+ * хвост двоичной дроби (12,340000000000001).
+ */
+const csvMoney = (value: string | null): number | null =>
+  value === null ? null : Number(Number(value).toFixed(2));
+
 interface Group {
   type: InstrumentType;
   label: string;
@@ -61,6 +100,7 @@ interface Group {
     MatIconModule,
     MatFormFieldModule,
     MatSelectModule,
+    MatTooltipModule,
     KpiCard,
     StateMessage,
     AllocationChart,
@@ -80,6 +120,15 @@ interface Group {
         <button mat-stroked-button (click)="refresh()" [disabled]="refreshing()">
           <mat-icon>refresh</mat-icon>
           {{ refreshing() ? 'Обновление…' : 'Обновить цены' }}
+        </button>
+        <button
+          mat-stroked-button
+          (click)="exportCsv()"
+          [disabled]="positions().length === 0"
+          matTooltip="Выгрузить позиции в CSV — ровно те строки, что показаны сейчас, с учётом фильтров системы и портфеля."
+        >
+          <mat-icon>download</mat-icon>
+          Экспорт CSV
         </button>
       </div>
     </div>
@@ -182,6 +231,37 @@ interface Group {
                   <th mat-header-cell *matHeaderCellDef>P&L (₽)</th>
                   <td mat-cell *matCellDef="let r" [class]="r.pnlClass">{{ r.pnl }}</td>
                 </ng-container>
+                <ng-container matColumnDef="actions">
+                  <th mat-header-cell *matHeaderCellDef></th>
+                  <td mat-cell *matCellDef="let r">
+                    @if (r.suspicious) {
+                      <button
+                        mat-icon-button
+                        (click)="resolvePrice(r)"
+                        aria-label="Найти цену на бирже"
+                        matTooltip="Проверить, не торгуется ли этот инструмент на MOEX/Binance под тем же тикером — импорт из отчёта заводит новые бумаги без автоисточника цены, даже когда биржа их знает."
+                      >
+                        <mat-icon>travel_explore</mat-icon>
+                      </button>
+                      <button
+                        mat-icon-button
+                        (click)="setManualPrice(r)"
+                        aria-label="Указать цену вручную"
+                        matTooltip="Если на бирже её не найти (внебиржевой актив) — введите цену сами."
+                      >
+                        <mat-icon>edit</mat-icon>
+                      </button>
+                      <button
+                        mat-icon-button
+                        (click)="mergeInstrument(r)"
+                        aria-label="Объединить с другим инструментом"
+                        matTooltip="Если это дубль другого инструмента из вашего портфеля (брокерский импорт иногда заводит одну бумагу дважды под разными кодами) — объедините их."
+                      >
+                        <mat-icon>call_merge</mat-icon>
+                      </button>
+                    }
+                  </td>
+                </ng-container>
                 <tr mat-header-row *matHeaderRowDef="columns"></tr>
                 <tr mat-row *matRowDef="let row; columns: columns"></tr>
               </table>
@@ -278,9 +358,21 @@ export class PortfolioPage {
   protected readonly positionApi = inject(PositionApi);
   private readonly reference = inject(ReferenceApi);
   private readonly dialog = inject(MatDialog);
+  private readonly toast = inject(ToastService);
 
-  protected readonly columns = ['ticker', 'qty', 'avg', 'current', 'value', 'pnl'];
+  protected readonly columns = ['ticker', 'qty', 'avg', 'current', 'value', 'pnl', 'actions'];
   protected readonly refreshing = signal(false);
+
+  /**
+   * «Тек. цена» раньше показывала значение с последнего клика «Обновить цены» —
+   * могло быть старым, если давно не нажимали. При каждом открытии страницы тихо
+   * освежаем котировки сами; если провайдер недоступен для инструмента (см.
+   * QuotesService.refreshAll — молча пропускает null), в quotes остаётся прежняя
+   * цена — тот самый безопасный fallback «нет свежей — берём ту, что уже есть».
+   */
+  constructor() {
+    void this.refresh();
+  }
 
   /**
    * Дивиденды/купоны — это уже полученный кэш, не переоценка позиции, поэтому
@@ -335,15 +427,27 @@ export class PortfolioPage {
     );
   });
 
+  /**
+   * Справочники «id → название». Нужны и опциям фильтров, и выгрузке в CSV
+   * (в файле система с портфелем читаются человеком, id там бесполезен).
+   */
+  private readonly systemNames = computed(
+    () => new Map((this.reference.systems.value() ?? []).map((s) => [s.id, s.name])),
+  );
+
+  private readonly portfolioNames = computed(
+    () => new Map((this.reference.portfolios.value() ?? []).map((p) => [p.id, p.name])),
+  );
+
   /** Опции фильтров — только системы/портфели, которые реально встречаются в позициях */
   protected readonly systemOptions = computed(() => {
-    const names = new Map((this.reference.systems.value() ?? []).map((s) => [s.id, s.name]));
+    const names = this.systemNames();
     const ids = [...new Set(this.allPositions().map((p) => p.systemId))];
     return ids.map((id) => ({ id, name: names.get(id) ?? id }));
   });
 
   protected readonly portfolioOptions = computed(() => {
-    const names = new Map((this.reference.portfolios.value() ?? []).map((p) => [p.id, p.name]));
+    const names = this.portfolioNames();
     const ids = [...new Set(this.allPositions().map((p) => p.portfolioId))];
     return ids.map((id) => ({ id, name: names.get(id) ?? id }));
   });
@@ -356,13 +460,18 @@ export class PortfolioPage {
     for (const p of this.positions()) {
       const rows = byType.get(p.type) ?? [];
       rows.push({
+        instrumentId: p.instrumentId,
         ticker: p.ticker,
+        type: p.type,
+        currency: p.currency,
         qty: p.quantity,
         avg: formatMoney(p.avgBuyPrice, p.currency),
+        avgRaw: p.avgBuyPrice,
         current: p.currentPrice ? formatMoney(p.currentPrice, p.currency) : '—',
         value: p.currentValueRub ? formatMoney(p.currentValueRub, 'RUB') : '—',
         pnl: p.pnlRub ? formatMoney(p.pnlRub, 'RUB') : '—',
         pnlClass: p.pnlRub ? pnlColorClass(p.pnlRub) : 'pnl-zero',
+        suspicious: p.currentPrice === null && Number(p.quantity) !== 0,
       });
       byType.set(p.type, rows);
       valueByType.set(p.type, (valueByType.get(p.type) ?? 0) + Number(p.currentValueRub ?? 0));
@@ -405,12 +514,115 @@ export class PortfolioPage {
 
   protected readonly money = formatRub;
 
+  /**
+   * Позиции для выгрузки в том же порядке, в каком они на экране: сортировка по
+   * TYPE_ORDER повторяет порядок групп, а внутри группы `sort` стабилен и
+   * сохраняет исходный порядок строк.
+   */
+  private readonly exportRows = computed(() => {
+    const order = new Map(TYPE_ORDER.map((t, i) => [t, i]));
+    return [...this.positions()].sort(
+      (a, b) => (order.get(a.type) ?? TYPE_ORDER.length) - (order.get(b.type) ?? TYPE_ORDER.length),
+    );
+  });
+
+  /**
+   * Выгрузка текущего состояния портфеля в CSV — те же строки, что на экране,
+   * с учётом фильтров системы и портфеля (`positions()`, а не `allPositions()`).
+   *
+   * Колонок больше, чем в таблице: в файл идут и составляющие P&L (реализованный,
+   * дивиденды, купоны), ради которых выгрузку и открывают в Excel. Итоговой
+   * строки СОЗНАТЕЛЬНО нет: карточки наверху считают P&L по всей истории, включая
+   * уже закрытые позиции, а сумма столбца — только по открытым остаткам, и «итог»
+   * в файле расходился бы с «итогом» на экране (см. комментарий к totals()).
+   */
+  protected exportCsv(): void {
+    const rows = this.exportRows();
+    const systems = this.systemNames();
+    const portfolios = this.portfolioNames();
+
+    const columns: CsvColumn<Position>[] = [
+      { header: 'Тип', value: (p) => TYPE_LABEL[p.type] },
+      { header: 'Тикер', value: (p) => p.ticker },
+      { header: 'Валюта', value: (p) => p.currency },
+      { header: 'Система', value: (p) => systems.get(p.systemId) ?? p.systemId },
+      { header: 'Портфель', value: (p) => portfolios.get(p.portfolioId) ?? p.portfolioId },
+      { header: 'Количество', value: (p) => csvNumber(p.quantity) },
+      { header: 'Средняя цена', value: (p) => csvNumber(p.avgBuyPrice) },
+      { header: 'Текущая цена', value: (p) => csvNumber(p.currentPrice) },
+      { header: 'Вложено (₽)', value: (p) => csvMoney(p.investedRub) },
+      { header: 'Стоимость (₽)', value: (p) => csvMoney(p.currentValueRub) },
+      { header: 'Реализованный P&L (₽)', value: (p) => csvMoney(p.realizedPnlRub) },
+      { header: 'Дивиденды (₽)', value: (p) => csvMoney(p.dividendsRub) },
+      { header: 'Купоны (₽)', value: (p) => csvMoney(p.couponsRub) },
+      { header: 'P&L (₽)', value: (p) => csvMoney(p.pnlRub) },
+    ];
+
+    downloadCsv(this.exportFilename(), buildCsv(rows, columns));
+    this.toast.success(`Выгружено позиций: ${rows.length}`);
+  }
+
+  /**
+   * Имя файла говорит, что именно внутри: активные фильтры попадают в него, иначе
+   * несколько выгрузок за день различались бы только порядком скачивания.
+   */
+  private exportFilename(): string {
+    const parts = ['portfolio'];
+    const system = this.systemFilter();
+    if (system) parts.push(slugForFilename(this.systemNames().get(system) ?? system));
+    const portfolio = this.portfolioFilter();
+    if (portfolio) parts.push(slugForFilename(this.portfolioNames().get(portfolio) ?? portfolio));
+    parts.push(toIsoDate(new Date()));
+    return `${parts.join('-')}.csv`;
+  }
+
   protected managePortfolios(): void {
     this.dialog.open(ManagePortfoliosDialog, { autoFocus: false, width: '760px', maxWidth: '95vw' });
   }
 
   protected manageSystems(): void {
     this.dialog.open(ManageSystemsDialog, { autoFocus: false, width: '760px', maxWidth: '95vw' });
+  }
+
+  /**
+   * Найти цену через MOEX/Binance (docs: GOLD — БПИФ, который файловый импорт
+   * завёл как marketSource='manual' из осторожности, хотя биржа его прекрасно
+   * знает под тем же тикером). Основное действие для «подозрительной» строки —
+   * дешевле и надёжнее ручного ввода, когда бумага просто не была замечена как
+   * биржевая при импорте.
+   */
+  protected async resolvePrice(row: Row): Promise<void> {
+    await this.reference.resolvePrice(row.instrumentId);
+  }
+
+  /**
+   * Слить дубль-инструмент (docs: TMON@/TMON) — брокерский импорт иногда заводит
+   * два инструмента на один реальный актив под разными кодами; распознать и
+   * подтвердить может только пользователь (см. MergeInstrumentDialog).
+   */
+  protected async mergeInstrument(row: Row): Promise<void> {
+    const ref = this.dialog.open(MergeInstrumentDialog, {
+      autoFocus: false,
+      data: { sourceId: row.instrumentId, sourceTicker: row.ticker, type: row.type },
+    });
+    const result = await firstValueFrom(ref.afterClosed());
+    if (!result) return;
+    await this.reference.mergeInstruments(row.instrumentId, result.targetId);
+  }
+
+  /**
+   * Указать цену вручную — фоллбэк, когда resolvePrice() не находит инструмент ни
+   * на одной подключённой площадке (реально внебиржевой актив, а не просто
+   * не распознанный при импорте тикер).
+   */
+  protected async setManualPrice(row: Row): Promise<void> {
+    const ref = this.dialog.open(SetManualPriceDialog, {
+      autoFocus: false,
+      data: { ticker: row.ticker, currency: row.currency, avgBuyPrice: row.avgRaw },
+    });
+    const result = await firstValueFrom(ref.afterClosed());
+    if (!result) return;
+    await this.api.setManualPrice(row.instrumentId, result.price);
   }
 
   protected async refresh(): Promise<void> {
