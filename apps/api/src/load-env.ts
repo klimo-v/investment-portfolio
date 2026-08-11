@@ -10,8 +10,12 @@
  * Отсутствие файла — не ошибка: все переменные опциональны, а секреты вроде
  * TBANK_TOKEN проверяются точечно там, где нужны (tbank/tbank.config.ts).
  */
+import { fromAppRoot } from './app-paths';
+
 try {
-  process.loadEnvFile('.env');
+  // Путь абсолютный (app-paths.ts): относительный '.env' нашёлся бы только при
+  // запуске из корня workspace.
+  process.loadEnvFile(fromAppRoot('.env'));
 } catch {
   // .env нет — работаем на значениях по умолчанию
 }
