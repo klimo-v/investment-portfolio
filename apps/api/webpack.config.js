@@ -38,7 +38,15 @@ module.exports = {
       compiler: 'tsc',
       main: './src/main.ts',
       tsConfig: './tsconfig.app.json',
-      assets: [],
+      // Миграции — не код, в бандл они не попадают, но нужны в рантайме:
+      // API применяет их при старте (src/db/run-migrations.ts).
+      assets: [
+        {
+          input: './src/db/migrations',
+          glob: '**/*',
+          output: 'migrations',
+        },
+      ],
       optimization: false,
       outputHashing: 'none',
       // generatePackageJson требует pnpm-lock.yaml и нужен только для деплоя;

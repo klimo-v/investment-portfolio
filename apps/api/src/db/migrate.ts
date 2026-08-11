@@ -1,18 +1,16 @@
-import Database from 'better-sqlite3';
-import { drizzle } from 'drizzle-orm/better-sqlite3';
-import { migrate } from 'drizzle-orm/better-sqlite3/migrator';
+import '../load-env';
+import { sqlite } from './client';
 import { resolveDbPath } from './db-path';
+import { runMigrations } from './run-migrations';
 
 /**
- * Запуск миграций: pnpm db:generate (сгенерировать SQL из schema.ts),
- * затем pnpm db:migrate (применить к файлу БД).
+ * Ручной прогон миграций: `pnpm db:migrate`.
+ *
+ * API применяет миграции сам при старте (см. run-migrations.ts), поэтому скрипт
+ * нужен для случаев без запуска сервера — например сразу после `pnpm db:generate`
+ * или чтобы обновить копию БД.
  */
-const dbPath = resolveDbPath();
-const sqlite = new Database(dbPath);
-const db = drizzle(sqlite);
+runMigrations();
 
-migrate(db, { migrationsFolder: './apps/api/src/db/migrations' });
-
-// eslint-disable-next-line no-console
-console.log(`Миграции применены к ${dbPath}`);
+console.log(`Миграции применены к ${resolveDbPath()}`);
 sqlite.close();

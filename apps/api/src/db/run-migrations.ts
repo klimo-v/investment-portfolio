@@ -1,0 +1,35 @@
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import { migrate } from 'drizzle-orm/better-sqlite3/migrator';
+import { sqlite } from './client';
+import { drizzle } from 'drizzle-orm/better-sqlite3';
+
+/**
+ * Папка с миграциями лежит рядом с этим модулем в обоих режимах: в исходниках
+ * это `apps/api/src/db/migrations`, в собранном бандле — `dist/apps/api/migrations`
+ * (копируется через `assets` в webpack.config.js). Поэтому путь один и тот же
+ * относительно `__dirname`, а не относительно рабочего каталога.
+ */
+const MIGRATIONS_FOLDER = join(__dirname, 'migrations');
+
+/**
+ * Применяет невыполненные миграции к текущей БД.
+ *
+ * Вызывается при старте API: после `git pull` не нужно помнить про отдельный
+ * `pnpm db:migrate`, а установка на чистом месте поднимается сама. Drizzle
+ * ведёт учёт применённого в служебной таблице, так что на актуальной БД вызов
+ * ничего не делает.
+ *
+ * Работает на отдельном drizzle-обработчике без схемы: миграции — это сырой
+ * SQL, типизированный клиент здесь не нужен, зато соединение то же самое
+ * (client.ts), то есть PRAGMA и файл гарантированно совпадают.
+ */
+export function runMigrations(): void {
+  if (!existsSync(MIGRATIONS_FOLDER)) {
+    throw new Error(
+      `Папка миграций не найдена: ${MIGRATIONS_FOLDER}. ` +
+        'Для собранного бандла её копирует assets в apps/api/webpack.config.js.',
+    );
+  }
+  migrate(drizzle(sqlite), { migrationsFolder: MIGRATIONS_FOLDER });
+}
