@@ -5,7 +5,6 @@ import { z } from 'zod';
 import { OperationSchema, type Operation } from '@core';
 import { ToastService, withToastSuccess } from '@web-shared';
 import { DataRevision } from '../../shared/data-revision';
-import { SnapshotApi } from '../snapshot/snapshot.api';
 
 /**
  * Журнал операций и мутации над ним (FSD: entities).
@@ -21,7 +20,6 @@ import { SnapshotApi } from '../snapshot/snapshot.api';
 @Injectable({ providedIn: 'root' })
 export class OperationApi {
   private readonly http = inject(HttpClient);
-  private readonly snapshotApi = inject(SnapshotApi);
   private readonly toast = inject(ToastService);
   private readonly revision = inject(DataRevision);
 
@@ -79,9 +77,13 @@ export class OperationApi {
   }
 
   /**
-   * Обновить котировки с рынка (MOEX/ЦБ), пересчитать позиции и снять снимок
-   * стоимости портфеля на сегодня (docs/04-roadmap.md Фаза 5) — снимок должен
-   * отражать свежую, а не старую цену, поэтому снимается сразу после обновления.
+   * Обновить котировки с рынка (MOEX/ЦБ) и пересчитать позиции.
+   *
+   * Снимок стоимости здесь БОЛЬШЕ НЕ СНИМАЕТСЯ: раньше история копилась побочным
+   * эффектом этой кнопки, то есть на странице «Портфель», хотя смотрят на график
+   * на дашборде — и момент фиксации выбирал не пользователь. Теперь это отдельное
+   * осознанное действие: кнопка «Сделать снимок» у графика «Стоимость инструментов
+   * во времени» (SnapshotApi.capture).
    */
   async refreshQuotes(): Promise<{ updated: number; total: number }> {
     const result = await firstValueFrom(
@@ -92,7 +94,6 @@ export class OperationApi {
       ),
     );
     this.revision.bump();
-    await this.snapshotApi.capture();
     return result;
   }
 

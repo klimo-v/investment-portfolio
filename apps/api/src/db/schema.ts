@@ -100,9 +100,9 @@ export const quotes = sqliteTable('quotes', {
 
 /**
  * Снимки стоимости портфеля во времени (docs/04-roadmap.md, Фаза 5) — один
- * снимок в день (date — первичный ключ, upsert), пишется при обновлении
- * котировок. Даёт линию динамики стоимости, которой нет при разовом взгляде
- * на текущие Вложено/Текущая стоимость/P&L.
+ * снимок в день (date — первичный ключ, upsert), пишется по кнопке «Сделать
+ * снимок» на дашборде. Даёт линию динамики стоимости, которой нет при разовом
+ * взгляде на текущие Вложено/Текущая стоимость/P&L.
  */
 export const portfolioSnapshots = sqliteTable('portfolio_snapshots', {
   date: text('date').primaryKey(), // YYYY-MM-DD
@@ -115,8 +115,9 @@ export const portfolioSnapshots = sqliteTable('portfolio_snapshots', {
 /**
  * Снимок стоимости отдельного инструмента на дату — разбивка агрегатного снимка
  * по инструментам для графика «Стоимость инструментов во времени» на дашборде.
- * Историю восстанавливает SnapshotsService.rebuildPositions() из журнала операций
- * и дневных закрытий MOEX; текущий день дописывает capture() вместе с агрегатом.
+ * Пишется вместе с агрегатом в SnapshotsService.capture() — по кнопке «Сделать
+ * снимок» на дашборде. Историю задним числом не реконструируем: дневных цен по
+ * каждой бумаге у нас нет, есть только текущая котировка.
  * Составной ключ (date, instrument_id) — один снимок инструмента в день, upsert.
  */
 export const snapshotPositions = sqliteTable(
@@ -132,6 +133,39 @@ export const snapshotPositions = sqliteTable(
   (t) => [primaryKey({ columns: [t.date, t.instrumentId] })],
 );
 
+/**
+ * Журнал ретро-изменений журнала операций, которые портят УЖЕ снятые снимки.
+ *
+ * Снимок кумулятивен: на дату захвата S он суммирует весь журнал операций, какой бы
+ * датой операции ни были помечены. Значит правка/удаление операции с датой D делает
+ * недостоверным каждый снимок с date >= D — а пересчитать его не из чего, дневных цен
+ * по каждой бумаге в системе нет. Раньше такую историю просто стирали целиком; теперь
+ * она сохраняется, а сюда пишется строка «что именно изменилось» — её показывает
+ * иконка-предупреждение рядом с графиком на дашборде.
+ *
+ * acknowledged_at — «пользователь это видел»: предупреждение гаснет, история остаётся.
+ */
+export const snapshotInvalidations = sqliteTable('snapshot_invalidations', {
+  id: text('id').primaryKey(),
+  /** когда произошло изменение журнала (datetime SQLite, UTC) */
+  at: text('at')
+    .notNull()
+    .default(sql`(datetime('now'))`),
+  kind: text('kind', {
+    enum: ['add', 'delete', 'reassign', 'merge', 'import-commit', 'import-rollback'],
+  }).notNull(),
+  /** дата затронутой операции (YYYY-MM-DD) — снимки с этой даты под вопросом */
+  operationDate: text('operation_date').notNull(),
+  /** человекочитаемое описание для таблицы в модалке: «Sell 10 SBER» */
+  description: text('description').notNull(),
+  /** тикер, если изменение про один инструмент; null у батчей (импорт, откат) */
+  ticker: text('ticker'),
+  /** сколько операций затронуто — у батчевых изменений больше одной */
+  affectedCount: integer('affected_count').notNull().default(1),
+  /** null — предупреждение ещё не просмотрено */
+  acknowledgedAt: text('acknowledged_at'),
+});
+
 export type SystemRow = typeof systems.$inferSelect;
 export type PortfolioRow = typeof portfolios.$inferSelect;
 export type InstrumentRow = typeof instruments.$inferSelect;
@@ -140,3 +174,4 @@ export type NewOperationRow = typeof operations.$inferInsert;
 export type QuoteRow = typeof quotes.$inferSelect;
 export type SnapshotRow = typeof portfolioSnapshots.$inferSelect;
 export type SnapshotPositionRow = typeof snapshotPositions.$inferSelect;
+export type SnapshotInvalidationRow = typeof snapshotInvalidations.$inferSelect;

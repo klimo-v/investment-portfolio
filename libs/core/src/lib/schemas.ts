@@ -300,3 +300,50 @@ export const SnapshotSchema = z.object({
   dividendsRub: z.number(),
 });
 export type Snapshot = z.infer<typeof SnapshotSchema>;
+
+/** Вид ретро-изменения журнала операций, портящего уже снятые снимки */
+export const SnapshotInvalidationKind = z.enum([
+  'add',
+  'delete',
+  'reassign',
+  'merge',
+  'import-commit',
+  'import-rollback',
+]);
+export type SnapshotInvalidationKind = z.infer<typeof SnapshotInvalidationKind>;
+
+/**
+ * Запись журнала «что изменилось после того, как снимки были сняты». Снимок
+ * кумулятивен (весь журнал операций на дату захвата), поэтому правка операции задним
+ * числом делает недостоверными все снимки с date >= operationDate, а пересчитать их
+ * не из чего — дневных цен по каждой бумаге нет. Вместо стирания истории показываем
+ * пользователю, что именно изменилось.
+ */
+export const SnapshotInvalidationSchema = z.object({
+  id: z.string(),
+  /** когда произошло изменение журнала (datetime, UTC) */
+  at: z.string(),
+  kind: SnapshotInvalidationKind,
+  /** дата затронутой операции — с неё снимки под вопросом */
+  operationDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Дата в формате YYYY-MM-DD'),
+  description: z.string(),
+  /** тикер, если изменение про один инструмент; null у батчей (импорт, откат) */
+  ticker: z.string().nullable(),
+  affectedCount: z.number(),
+  /** пользователь уже видел это предупреждение */
+  acknowledged: z.boolean(),
+});
+export type SnapshotInvalidation = z.infer<typeof SnapshotInvalidationSchema>;
+
+/**
+ * Достоверность накопленной истории снимков для дашборда. `stale` выводится из
+ * наличия НЕпросмотренных записей журнала, `staleSince` — дата первого реально
+ * испорченного снимка («снимкам с этой даты доверять нельзя»).
+ */
+export const SnapshotStalenessSchema = z.object({
+  stale: z.boolean(),
+  staleSince: z.string().nullable(), // YYYY-MM-DD
+  /** все записи журнала, свежие сверху */
+  entries: z.array(SnapshotInvalidationSchema),
+});
+export type SnapshotStaleness = z.infer<typeof SnapshotStalenessSchema>;

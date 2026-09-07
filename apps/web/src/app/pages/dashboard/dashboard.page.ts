@@ -1,8 +1,10 @@
 import { ChangeDetectionStrategy, Component, computed, inject, signal } from '@angular/core';
+import { MatDialog } from '@angular/material/dialog';
+import { firstValueFrom } from 'rxjs';
 import { maxDrawdown, type Cash, type Effectiveness } from '@core';
-import { StateMessage } from '@web-shared';
+import { ConfirmService, StateMessage } from '@web-shared';
 import { summaryResource, type SummaryFilter } from '../../entities/summary/summary.api';
-import { SnapshotApi } from '../../entities/snapshot/snapshot.api';
+import { SnapshotApi, type SnapshotStaleness } from '../../entities/snapshot/snapshot.api';
 import { benchmarkResource, type BenchmarkRange } from '../../entities/benchmark/benchmark.api';
 import { PositionSeriesApi } from '../../entities/position-series/position-series.api';
 import { DataRevision } from '../../shared/data-revision';
@@ -18,6 +20,10 @@ import { BenchmarkChart } from '../../widgets/benchmark-chart/benchmark-chart';
 import { PositionsSeriesChart } from '../../widgets/positions-series-chart/positions-series-chart';
 import { CashflowChart } from '../../widgets/cashflow-chart/cashflow-chart';
 import { PnlBarChart } from '../../widgets/pnl-bar-chart/pnl-bar-chart';
+import {
+  SnapshotChangesDialog,
+  type SnapshotChangesResult,
+} from '../../features/snapshot-changes/snapshot-changes.dialog';
 
 /**
  * Дашборд (docs/03-ux-plan.md шаг 4; docs/05-review-usability.md §1).
@@ -108,6 +114,10 @@ import { PnlBarChart } from '../../widgets/pnl-bar-chart/pnl-bar-chart';
             <app-positions-series-chart
               [series]="positionSeries.series.value()"
               [segmented]="filter.segmented()"
+              [staleness]="snapshots.staleness.value() ?? null"
+              [capturing]="capturing()"
+              (capture)="capture()"
+              (showChanges)="openChanges()"
             />
           } @placeholder {
             <div class="chart-box tall"></div>
@@ -176,8 +186,13 @@ import { PnlBarChart } from '../../widgets/pnl-bar-chart/pnl-bar-chart';
 })
 export class DashboardPage {
   private readonly revision = inject(DataRevision);
+  private readonly dialog = inject(MatDialog);
+  private readonly confirm = inject(ConfirmService);
   protected readonly snapshots = inject(SnapshotApi);
   protected readonly positionSeries = inject(PositionSeriesApi);
+
+  /** Снимок сохраняется прямо сейчас — кнопка в виджете блокируется */
+  protected readonly capturing = signal(false);
 
   /** Фильтр читается из адресной строки — тем же способом, что и в виджете фильтров */
   protected readonly filter = dashboardFilter();
@@ -213,6 +228,52 @@ export class DashboardPage {
   /** Перезапросить всё после ошибки — кнопка «Повторить» */
   protected reload(): void {
     this.revision.bump();
+  }
+
+  /**
+   * Зафиксировать текущую стоимость инструментов — кнопка «Сделать снимок».
+   * Раньше снимок был побочным эффектом «Обновить цены» на другой странице; теперь
+   * момент фиксации выбирает пользователь, там же, где смотрит на график.
+   */
+  protected async capture(): Promise<void> {
+    this.capturing.set(true);
+    try {
+      await this.snapshots.capture();
+    } finally {
+      this.capturing.set(false);
+    }
+  }
+
+  /**
+   * Модалка «что изменилось после снимков». Очистка истории необратима, поэтому
+   * идёт через подтверждение (ConfirmService) — раньше ровно это делалось молча
+   * при каждой правке журнала задним числом.
+   */
+  protected async openChanges(): Promise<void> {
+    const staleness = this.snapshots.staleness.value();
+    if (!staleness) return;
+
+    const ref = this.dialog.open<SnapshotChangesDialog, SnapshotStaleness, SnapshotChangesResult>(
+      SnapshotChangesDialog,
+      { data: staleness, autoFocus: false, maxWidth: '95vw' },
+    );
+    const result = await firstValueFrom(ref.afterClosed());
+    if (!result) return;
+
+    if (result === 'acknowledge') {
+      await this.snapshots.acknowledge();
+      return;
+    }
+
+    const confirmed = await this.confirm.ask({
+      title: 'Очистить историю снимков?',
+      message:
+        'Все накопленные снимки стоимости будут удалены безвозвратно: график динамики ' +
+        'и просадка обнулятся и начнут копиться заново со следующего снимка.',
+      confirmLabel: 'Очистить',
+      danger: true,
+    });
+    if (confirmed) await this.snapshots.clearHistory();
   }
 
   private static readonly EMPTY: Effectiveness = {

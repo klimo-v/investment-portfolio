@@ -1,7 +1,15 @@
 import { Inject, Injectable } from '@nestjs/common';
+import { desc, isNull, sql } from 'drizzle-orm';
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
-import type { PositionSeries, Snapshot } from '@core';
-import { instruments, portfolioSnapshots, snapshotPositions } from '../../../db/schema';
+import type { PositionSeries, Snapshot, SnapshotInvalidation, SnapshotStaleness } from '@core';
+import {
+  instruments,
+  portfolioSnapshots,
+  snapshotInvalidations,
+  snapshotPositions,
+  type SnapshotInvalidationRow,
+} from '../../../db/schema';
+import { clearSnapshotHistory } from '../../../db/snapshot-invalidations';
 import { DB } from '../../db/drizzle.module';
 import { OperationsService } from '../operations/operations.service';
 
@@ -9,9 +17,13 @@ import { OperationsService } from '../operations/operations.service';
  * Снимки стоимости портфеля во времени (docs/04-roadmap.md, Фаза 5).
  * Кроме агрегатного снимка (portfolio_snapshots) ведёт разбивку по инструментам
  * (snapshot_positions) для графика «Стоимость инструментов во времени». Оба снимка
- * пишет capture() на текущую дату (по нажатию «Обновить цены»); история копится
- * день за днём. Исторических цен не реконструируем — снимок фиксирует стоимость
- * всех оценённых инструментов «как есть» на дату, ровно как её видит дашборд.
+ * пишет capture() на текущую дату — по кнопке «Сделать снимок» на дашборде.
+ * Исторических цен не реконструируем — снимок фиксирует стоимость всех оценённых
+ * инструментов «как есть» на дату, ровно как её видит дашборд.
+ *
+ * Правка журнала операций задним числом историю снимков не стирает (так было раньше),
+ * а пишет строку в snapshot_invalidations — staleness() собирает из них предупреждение
+ * «снимкам с такой-то даты доверять нельзя» и таблицу изменений для модалки.
  */
 @Injectable()
 export class SnapshotsService {
@@ -30,7 +42,7 @@ export class SnapshotsService {
       .map(rowToSnapshot);
   }
 
-  /** Снять снимок на сегодня (вызывается вместе с обновлением котировок) */
+  /** Снять снимок на сегодня (кнопка «Сделать снимок» на дашборде) */
   async capture(): Promise<Snapshot> {
     const { totals } = await this.operations.summary();
     const date = new Date().toISOString().slice(0, 10);
@@ -94,6 +106,63 @@ export class SnapshotsService {
   }
 
   /**
+   * Достоверность накопленной истории снимков для дашборда.
+   *
+   * `stale` — есть непросмотренные записи журнала изменений. `staleSince` — дата
+   * ПЕРВОГО реально испорченного снимка: самый ранний снимок, снятый не раньше самой
+   * ранней затронутой операции (снимок кумулятивен, поэтому снимок с date >= D видел
+   * операцию с датой D и посчитан по данным, которых больше нет).
+   */
+  staleness(): SnapshotStaleness {
+    const rows = this.db
+      .select()
+      .from(snapshotInvalidations)
+      .orderBy(desc(snapshotInvalidations.at))
+      .all();
+
+    const entries = rows.map(rowToInvalidation);
+    const unacknowledged = rows.filter((r) => r.acknowledgedAt === null);
+
+    if (unacknowledged.length === 0) {
+      return { stale: false, staleSince: null, entries };
+    }
+
+    const earliestOperationDate = unacknowledged.reduce(
+      (min, r) => (r.operationDate < min ? r.operationDate : min),
+      unacknowledged[0].operationDate,
+    );
+    const [first] = this.db
+      .select({ date: sql<string | null>`min(${portfolioSnapshots.date})` })
+      .from(portfolioSnapshots)
+      .where(sql`${portfolioSnapshots.date} >= ${earliestOperationDate}`)
+      .all();
+
+    return { stale: true, staleSince: first?.date ?? null, entries };
+  }
+
+  /**
+   * «Понятно, скрыть»: пользователь увидел, что изменилось. Гасит предупреждение,
+   * историю снимков и сам журнал не трогает — новое ретро-изменение зажжёт снова.
+   */
+  acknowledge(): { acknowledged: number } {
+    const { changes } = this.db
+      .update(snapshotInvalidations)
+      .set({ acknowledgedAt: sql`(datetime('now'))` })
+      .where(isNull(snapshotInvalidations.acknowledgedAt))
+      .run();
+    return { acknowledged: changes };
+  }
+
+  /**
+   * «Очистить историю снимков» — единственное место, где история стирается, и только
+   * по явной команде пользователя (раньше это делалось молча при каждой правке журнала).
+   */
+  clearHistory(): { deleted: true } {
+    clearSnapshotHistory(this.db);
+    return { deleted: true };
+  }
+
+  /**
    * Ряд «стоимость инструментов во времени» из snapshot_positions: общая ось дат,
    * по линии на инструмент (null там, где инструмент в эту дату не удерживался),
    * итог как сумма стоимостей и накопленный чистый ввод средств (депозиты − выводы)
@@ -149,6 +218,19 @@ export class SnapshotsService {
 
     return { dates, instruments: instrumentsOut, total, netContributions };
   }
+}
+
+function rowToInvalidation(row: SnapshotInvalidationRow): SnapshotInvalidation {
+  return {
+    id: row.id,
+    at: row.at,
+    kind: row.kind,
+    operationDate: row.operationDate,
+    description: row.description,
+    ticker: row.ticker,
+    affectedCount: row.affectedCount,
+    acknowledged: row.acknowledgedAt !== null,
+  };
 }
 
 /** Последнее ненулевое значение ряда (для сортировки инструментов по величине) */

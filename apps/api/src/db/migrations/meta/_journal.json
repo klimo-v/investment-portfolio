@@ -50,6 +50,27 @@
       "when": 1784999028535,
       "tag": "0006_drop_portfolio_broker",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "6",
+      "when": 1786614762579,
+      "tag": "0007_known_nuke",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1787827429244,
+      "tag": "0008_colorful_jocasta",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "6",
+      "when": 1788814141005,
+      "tag": "0009_lovely_silver_sable",
+      "breakpoints": true
     }
   ]
 }

@@ -6,7 +6,7 @@ import { normalizeRow, makeDedupeKey, parseBrokerHtmlReport, type RawRow, type O
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
 import { operations, systems, portfolios, instruments, type InstrumentRow } from '../../../db/schema';
 import { DB } from '../../db/drizzle.module';
-import { invalidateSnapshots } from '../../../db/invalidate-snapshots';
+import { recordSnapshotInvalidation } from '../../../db/snapshot-invalidations';
 import { parseCsv } from './csv-parser';
 import { parseTbankXlsx } from './tbank-xlsx-report';
 
@@ -457,6 +457,7 @@ export class ImportService {
     const preview = await this.preview(input);
     const batchId = randomUUID();
     let imported = 0;
+    let earliestDate: string | null = null;
     const learnedRefs = new Set<string>();
 
     for (const row of preview.rows) {
@@ -483,6 +484,9 @@ export class ImportService {
         })
         .run();
       imported++;
+      if (earliestDate === null || row.operation.date < earliestDate) {
+        earliestDate = row.operation.date;
+      }
 
       if (row.accountRef && !learnedRefs.has(row.accountRef)) {
         learnedRefs.add(row.accountRef);
@@ -491,13 +495,26 @@ export class ImportService {
     }
 
     this.uploads.delete(preview.uploadId);
+
+    // Импорт задним числом меняет то, что должно было быть посчитано на прошлые даты
+    // захвата, ровно как правка одной операции — помечаем снимки недостоверными.
+    // recordSnapshotInvalidation сам промолчит, если импортированы только свежие даты.
+    if (earliestDate !== null) {
+      recordSnapshotInvalidation(this.db, {
+        kind: 'import-commit',
+        operationDate: earliestDate,
+        description: `Импорт ${imported} ${pluralOperations(imported)}`,
+        affectedCount: imported,
+      });
+    }
+
     return { batchId, imported };
   }
 
   /**
    * Откат импорта: удаляет все операции указанной загрузки. Это массовое удаление
-   * задним числом (как и OperationsService.delete()) — стирает историю снимков,
-   * см. invalidateSnapshots.
+   * задним числом (как и OperationsService.delete()) — помечает историю снимков
+   * недостоверной, см. recordSnapshotInvalidation.
    */
   rollback(batchId: string): { deleted: number } {
     const toDelete = this.db
@@ -506,7 +523,39 @@ export class ImportService {
       .where(eq(operations.importBatchId, batchId))
       .all();
     this.db.delete(operations).where(eq(operations.importBatchId, batchId)).run();
-    if (toDelete.length > 0) invalidateSnapshots(this.db);
+
+    const earliestDate = toDelete.reduce<string | null>(
+      (min, r) => (min === null || r.date < min ? r.date : min),
+      null,
+    );
+    if (earliestDate !== null) {
+      recordSnapshotInvalidation(this.db, {
+        kind: 'import-rollback',
+        operationDate: earliestDate,
+        description: `Откат импорта: ${toDelete.length} ${pluralOperations(toDelete.length)}`,
+        affectedCount: toDelete.length,
+      });
+    }
+
     return { deleted: toDelete.length };
+  }
+}
+
+/**
+ * Склонение «операция» для описания батча в таблице изменений на дашборде:
+ * 1 операция / 2 операции / 5 операций.
+ */
+function pluralOperations(count: number): string {
+  const mod100 = count % 100;
+  if (mod100 >= 11 && mod100 <= 14) return 'операций';
+  switch (count % 10) {
+    case 1:
+      return 'операция';
+    case 2:
+    case 3:
+    case 4:
+      return 'операции';
+    default:
+      return 'операций';
   }
 }
