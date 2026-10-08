@@ -5,8 +5,11 @@
   "private": true,
   "packageManager": "pnpm@9.15.9",
   "scripts": {
+    "app": "pnpm build && pnpm start:app",
+    "start:app": "node scripts/run-with-certs.mjs node dist/apps/api/main.js",
+    "dev": "node scripts/run-with-certs.mjs nx run-many -t serve -p web api --parallel=2",
     "start": "nx serve web",
-    "start:api": "NODE_EXTRA_CA_CERTS=certs/russian_trusted_root_ca.pem nx serve api",
+    "start:api": "node scripts/run-with-certs.mjs nx serve api",
     "build": "nx run-many -t build",
     "test": "nx run-many -t test",
     "lint": "nx run-many -t lint",
