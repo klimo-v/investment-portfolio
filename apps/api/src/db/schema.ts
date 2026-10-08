@@ -93,7 +93,25 @@ export const quotes = sqliteTable('quotes', {
     .primaryKey()
     .references(() => instruments.id),
   price: text('price').notNull(),
+  /**
+   * Валюта ЦЕНЫ — та, в которой её отдал источник, а не валюта инструмента.
+   * У замещающих облигаций цена приходит в валюте номинала (USD), и курс
+   * пересчёта в рубли надо брать по ней.
+   */
   currency: text('currency').notNull(),
+  /**
+   * НКД на одну бумагу; null — инструмент без накопленного купона.
+   * Биржа котирует облигации «чисто», брокер показывает стоимость с НКД —
+   * без этого поля оценка портфеля занижена тем сильнее, чем ближе купон.
+   */
+  accruedInterest: text('accrued_interest'),
+  /**
+   * Валюта НКД — своя, а не `currency`: биржа отдаёт НКД в валюте расчётов режима
+   * торгов, а цену в валюте номинала. У замещающих облигаций они расходятся
+   * (цена в USD, НКД в рублях), и пересчёт НКД по курсу цены завышал стоимость
+   * в десятки раз.
+   */
+  accruedCurrency: text('accrued_currency'),
   source: text('source', { enum: ['moex', 'cbr', 'binance', 'manual'] }).notNull(),
   asOf: text('as_of').notNull(),
 });
@@ -156,7 +174,7 @@ export const snapshotInvalidations = sqliteTable('snapshot_invalidations', {
   }).notNull(),
   /** дата затронутой операции (YYYY-MM-DD) — снимки с этой даты под вопросом */
   operationDate: text('operation_date').notNull(),
-  /** человекочитаемое описание для таблицы в модалке: «Sell 10 SBER» */
+  /** человекочитаемое описание для таблицы в модалке: «Продажа 10 SBER удалена» */
   description: text('description').notNull(),
   /** тикер, если изменение про один инструмент; null у батчей (импорт, откат) */
   ticker: text('ticker'),

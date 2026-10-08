@@ -63,22 +63,36 @@ export class QuotesService {
       const quote = await provider.getQuote(inst.ticker);
       if (!quote) continue;
 
-      // валюта — из своего справочника инструментов, а не от провайдера: MOEX ISS
-      // не отдаёт валюту котировки напрямую (для валютных облигаций типа USD
-      // цена в FACEVALUE может быть не в RUB), а инструмент уже хранит верную
-      // валюту (docs/02-data-model.md) — единый источник правды вместо догадки
+      /*
+       * Валюта — та, в которой цену отдал источник, и только при её отсутствии
+       * валюта инструмента. Раньше здесь всегда стояла валюта инструмента, потому
+       * что MOEX ISS «не отдаёт валюту котировки»; на самом деле отдаёт — в
+       * FACEUNIT облигации (см. moex.provider.ts). Разница принципиальна для
+       * замещающих облигаций: цена приходит в долларах, а инструмент в справочнике
+       * может числиться рублёвым (сделки-то рублёвые), и пересчёт по курсу
+       * инструмента занижал стоимость позиции в десятки раз.
+       */
+      const currency = quote.currency || inst.currency;
+      const accruedInterest = quote.accruedInterest ?? null;
+      // валюта НКД своя (см. quotes.accruedCurrency); нет НКД — нет и валюты
+      const accruedCurrency = accruedInterest === null ? null : quote.accruedInterestCurrency ?? currency;
+
       this.db
         .insert(quotes)
         .values({
           instrumentId: inst.id,
           price: quote.price,
-          currency: inst.currency,
+          currency,
+          accruedInterest,
+          accruedCurrency,
           source: quote.source,
           asOf: quote.asOf,
         })
         .onConflictDoUpdate({
           target: quotes.instrumentId,
-          set: { price: quote.price, currency: inst.currency, asOf: quote.asOf },
+          // accruedInterest перезаписываем всегда, в том числе в null: после выплаты
+          // купона НКД обнуляется, и «прилипший» прошлый завышал бы стоимость
+          set: { price: quote.price, currency, accruedInterest, accruedCurrency, asOf: quote.asOf },
         })
         .run();
       updated++;
@@ -108,12 +122,29 @@ export class QuotesService {
     }
 
     const asOf = new Date().toISOString();
+    // ручная цена — всегда в валюте инструмента (пользователь вводит её, глядя на
+    // среднюю); НКД для неё неоткуда взять, поэтому явно сбрасываем в null
     this.db
       .insert(quotes)
-      .values({ instrumentId, price, currency: inst.currency, source: 'manual', asOf })
+      .values({
+        instrumentId,
+        price,
+        currency: inst.currency,
+        accruedInterest: null,
+        accruedCurrency: null,
+        source: 'manual',
+        asOf,
+      })
       .onConflictDoUpdate({
         target: quotes.instrumentId,
-        set: { price, currency: inst.currency, source: 'manual', asOf },
+        set: {
+          price,
+          currency: inst.currency,
+          accruedInterest: null,
+          accruedCurrency: null,
+          source: 'manual',
+          asOf,
+        },
       })
       .run();
 
@@ -144,19 +175,33 @@ export class QuotesService {
       const quote = await provider.getQuote(inst.ticker);
       if (!quote) continue;
 
+      // валюта и НКД — от источника, как и в refreshAll()
+      const currency = quote.currency || inst.currency;
+      const accruedInterest = quote.accruedInterest ?? null;
+      const accruedCurrency = accruedInterest === null ? null : quote.accruedInterestCurrency ?? currency;
+
       this.db.update(instruments).set({ marketSource: quote.source }).where(eq(instruments.id, instrumentId)).run();
       this.db
         .insert(quotes)
         .values({
           instrumentId,
           price: quote.price,
-          currency: inst.currency,
+          currency,
+          accruedInterest,
+          accruedCurrency,
           source: quote.source,
           asOf: quote.asOf,
         })
         .onConflictDoUpdate({
           target: quotes.instrumentId,
-          set: { price: quote.price, currency: inst.currency, source: quote.source, asOf: quote.asOf },
+          set: {
+            price: quote.price,
+            currency,
+            accruedInterest,
+            accruedCurrency,
+            source: quote.source,
+            asOf: quote.asOf,
+          },
         })
         .run();
 

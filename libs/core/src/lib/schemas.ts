@@ -132,7 +132,23 @@ export const PositionSchema = z.object({
   realizedPnlRub: decimalString,
   dividendsRub: decimalString,
   couponsRub: decimalString,
+  /**
+   * Валюта, в которой выражена avgBuyPrice, — валюта сделок. У замещающих
+   * облигаций она отличается от `currency` (валюты номинала): номинал в USD,
+   * а покупка прошла в рублях.
+   */
+  avgPriceCurrency: z.string(),
+  /** «Чистая» цена с биржи — без НКД, как её котирует рынок */
   currentPrice: decimalString.nullable(),
+  /**
+   * Валюта currentPrice. Для валютных облигаций это НЕ `currency` сделок:
+   * MOEX отдаёт цену в валюте номинала (FACEUNIT). По ней же берётся курс
+   * пересчёта в рубли — брать курс валюты инструмента было ошибкой.
+   */
+  priceCurrency: z.string().nullable(),
+  /** Накопленный купонный доход по всему остатку, в рублях; null — не облигация */
+  accruedInterestRub: decimalString.nullable(),
+  /** Рыночная стоимость остатка: (цена + НКД) × количество × курс */
   currentValueRub: decimalString.nullable(),
   pnlRub: decimalString.nullable(), // реализованный + нереализованный + дивиденды/купоны
 });
@@ -276,7 +292,12 @@ export const TradeSchema = z.object({
   realizedPnlRub: decimalString,
   dividendsRub: decimalString,
   couponsRub: decimalString,
+  /** валюта avgBuyPrice/investedCcy — валюта сделок (см. PositionSchema.avgPriceCurrency) */
+  avgPriceCurrency: z.string(),
   currentPrice: decimalString.nullable(),
+  /** валюта currentPrice (см. PositionSchema.priceCurrency) */
+  priceCurrency: z.string().nullable(),
+  /** рыночная стоимость остатка с учётом НКД */
   currentValueRub: decimalString.nullable(),
   pnlRub: decimalString.nullable(), // реализованный + нереализованный + выплаты
   openedAt: z.string(),

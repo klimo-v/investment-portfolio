@@ -55,6 +55,8 @@ interface Row {
   /** Средняя цена покупки без форматирования — стартовое значение для ручной цены */
   avgRaw: string;
   current: string;
+  /** Накопленный купонный доход по всему остатку, «—» для не-облигаций */
+  accrued: string;
   value: string;
   pnl: string;
   pnlClass: string;
@@ -69,6 +71,19 @@ interface Row {
    */
   suspicious: boolean;
 }
+const COLUMNS = ['ticker', 'qty', 'avg', 'current', 'value', 'pnl', 'actions'];
+/** У облигаций между ценой и стоимостью встаёт НКД — иначе «стоимость ≠ цена × кол-во» */
+const COLUMNS_WITH_ACCRUED = [
+  'ticker',
+  'qty',
+  'avg',
+  'current',
+  'accrued',
+  'value',
+  'pnl',
+  'actions',
+];
+
 /**
  * decimal-строка бэка → число для ячейки CSV. Именно число, а не строка: числовая
  * ячейка складывается и фильтруется в Excel, текстовая — нет. Точность не режем —
@@ -88,6 +103,8 @@ interface Group {
   label: string;
   rows: Row[];
   valueRub: number;
+  /** Колонки таблицы группы: НКД показываем только там, где он вообще есть (облигации) */
+  columns: string[];
 }
 
 @Component({
@@ -223,6 +240,16 @@ interface Group {
                   <th mat-header-cell *matHeaderCellDef>Тек. цена</th>
                   <td mat-cell *matCellDef="let r">{{ r.current }}</td>
                 </ng-container>
+                <ng-container matColumnDef="accrued">
+                  <th
+                    mat-header-cell
+                    *matHeaderCellDef
+                    matTooltip="Накопленный купонный доход по всему остатку. Биржа котирует облигации без него, а при продаже его платит покупатель — поэтому он входит в «Стоимость», как и у брокера."
+                  >
+                    НКД (₽)
+                  </th>
+                  <td mat-cell *matCellDef="let r">{{ r.accrued }}</td>
+                </ng-container>
                 <ng-container matColumnDef="value">
                   <th mat-header-cell *matHeaderCellDef>Стоимость (₽)</th>
                   <td mat-cell *matCellDef="let r">{{ r.value }}</td>
@@ -262,8 +289,8 @@ interface Group {
                     }
                   </td>
                 </ng-container>
-                <tr mat-header-row *matHeaderRowDef="columns"></tr>
-                <tr mat-row *matRowDef="let row; columns: columns"></tr>
+                <tr mat-header-row *matHeaderRowDef="g.columns"></tr>
+                <tr mat-row *matRowDef="let row; columns: g.columns"></tr>
               </table>
             </mat-card>
           }
@@ -360,7 +387,6 @@ export class PortfolioPage {
   private readonly dialog = inject(MatDialog);
   private readonly toast = inject(ToastService);
 
-  protected readonly columns = ['ticker', 'qty', 'avg', 'current', 'value', 'pnl', 'actions'];
   protected readonly refreshing = signal(false);
 
   /**
@@ -465,9 +491,13 @@ export class PortfolioPage {
         type: p.type,
         currency: p.currency,
         qty: p.quantity,
-        avg: formatMoney(p.avgBuyPrice, p.currency),
+        // средняя — в валюте СДЕЛОК, текущая цена — в валюте КОТИРОВКИ: у замещающих
+        // облигаций это разные валюты (покупка за рубли, номинал в долларах), и
+        // подписывать обе валютой инструмента значило показывать рубли со знаком $
+        avg: formatMoney(p.avgBuyPrice, p.avgPriceCurrency),
         avgRaw: p.avgBuyPrice,
-        current: p.currentPrice ? formatMoney(p.currentPrice, p.currency) : '—',
+        current: p.currentPrice ? formatMoney(p.currentPrice, p.priceCurrency ?? p.currency) : '—',
+        accrued: p.accruedInterestRub ? formatMoney(p.accruedInterestRub, 'RUB') : '—',
         value: p.currentValueRub ? formatMoney(p.currentValueRub, 'RUB') : '—',
         pnl: p.pnlRub ? formatMoney(p.pnlRub, 'RUB') : '—',
         pnlClass: p.pnlRub ? pnlColorClass(p.pnlRub) : 'pnl-zero',
@@ -477,12 +507,18 @@ export class PortfolioPage {
       valueByType.set(p.type, (valueByType.get(p.type) ?? 0) + Number(p.currentValueRub ?? 0));
     }
 
-    return TYPE_ORDER.filter((t) => byType.has(t)).map((t) => ({
-      type: t,
-      label: TYPE_LABEL[t],
-      rows: byType.get(t)!,
-      valueRub: valueByType.get(t) ?? 0,
-    }));
+    return TYPE_ORDER.filter((t) => byType.has(t)).map((t) => {
+      const rows = byType.get(t) ?? [];
+      return {
+        type: t,
+        label: TYPE_LABEL[t],
+        rows,
+        valueRub: valueByType.get(t) ?? 0,
+        // колонку НКД показываем, только если он реально есть хоть у одной бумаги
+        // группы, — по факту данных, а не по типу инструмента
+        columns: rows.some((r) => r.accrued !== '—') ? COLUMNS_WITH_ACCRUED : COLUMNS,
+      };
+    });
   });
 
   /** Доли распределения для круговой диаграммы — цвет закреплён за типом инструмента */
@@ -544,12 +580,17 @@ export class PortfolioPage {
     const columns: CsvColumn<Position>[] = [
       { header: 'Тип', value: (p) => TYPE_LABEL[p.type] },
       { header: 'Тикер', value: (p) => p.ticker },
-      { header: 'Валюта', value: (p) => p.currency },
+      { header: 'Валюта инструмента', value: (p) => p.currency },
       { header: 'Система', value: (p) => systems.get(p.systemId) ?? p.systemId },
       { header: 'Портфель', value: (p) => portfolios.get(p.portfolioId) ?? p.portfolioId },
       { header: 'Количество', value: (p) => csvNumber(p.quantity) },
       { header: 'Средняя цена', value: (p) => csvNumber(p.avgBuyPrice) },
+      // валюты выносим отдельными колонками: средняя и текущая цена бывают в разных
+      // (замещающие облигации), и без подписи столбцы нельзя интерпретировать
+      { header: 'Валюта средней', value: (p) => p.avgPriceCurrency },
       { header: 'Текущая цена', value: (p) => csvNumber(p.currentPrice) },
+      { header: 'Валюта цены', value: (p) => p.priceCurrency },
+      { header: 'НКД (₽)', value: (p) => csvMoney(p.accruedInterestRub) },
       { header: 'Вложено (₽)', value: (p) => csvMoney(p.investedRub) },
       { header: 'Стоимость (₽)', value: (p) => csvMoney(p.currentValueRub) },
       { header: 'Реализованный P&L (₽)', value: (p) => csvMoney(p.realizedPnlRub) },

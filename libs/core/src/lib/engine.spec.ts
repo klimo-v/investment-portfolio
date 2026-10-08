@@ -1,6 +1,12 @@
 import { describe, it, expect } from 'vitest';
 import Decimal from 'decimal.js';
-import { calculatePositions, calculateTrades, realizedPnlInRange, unrealizedPnl } from './engine';
+import {
+  calculatePositions,
+  calculateTrades,
+  marketValueRub,
+  realizedPnlInRange,
+  unrealizedPnl,
+} from './engine';
 import type { Operation } from './schemas';
 
 /**
@@ -299,5 +305,91 @@ describe('calculateTrades — закрытые/открытые/частично
       op({ id: 'o2', instrumentId: 'LKOH', operationType: 'Dividend', quantity: '1', price: '31733' }),
     ]);
     expect(trade.dividendsRub.toFixed(2)).toBe('31733.00');
+  });
+});
+
+describe('marketValueRub — рыночная оценка остатка', () => {
+  it('НКД входит в стоимость: 538 ОФЗ SU29015RMFS3 по 992.60 + НКД 8.87', () => {
+    const value = marketValueRub({
+      quantity: '538',
+      price: '992.6',
+      accruedInterest: '8.87',
+      fxRate: 1,
+    });
+    // 538 × 1001.47 — на 4 772.06 ₽ больше «чистой» оценки, ровно как у брокера
+    expect(value.toFixed(2)).toBe('538790.86');
+    expect(value.minus(new Decimal('538').mul('992.6')).toFixed(2)).toBe('4772.06');
+  });
+
+  it('без НКД (акции, ETF) формула вырождается в цену × количество', () => {
+    const value = marketValueRub({ quantity: '70176', price: '19.16', accruedInterest: null, fxRate: 1 });
+    expect(value.toFixed(2)).toBe('1344572.16');
+  });
+
+  it('валютная бумага пересчитывается по курсу вместе с НКД', () => {
+    // 28 шт по $100.3619 + НКД $1.659954, курс 83 ₽/$ — валюты цены и НКД совпадают
+    const value = marketValueRub({
+      quantity: '28',
+      price: '100.3619',
+      fxRate: '83',
+      accruedInterest: '1.659954',
+    });
+    expect(value.toFixed(2)).toBe('237098.79');
+  });
+
+  it('НКД в своей валюте: цена в долларах, НКД в рублях (RU000A10B4K3 на TQCB)', () => {
+    // цена $100.3999 при курсе 84.233 ₽/$, НКД 26.97024 ₽ — уже в рублях
+    const value = marketValueRub({
+      quantity: '28',
+      price: '100.3999',
+      fxRate: '84.233',
+      accruedInterest: '26.97024',
+      accruedFxRate: 1,
+    });
+    // сходится со стоимостью у брокера (237 551 ₽), а не 300 579 ₽
+    expect(Number(value.toFixed(2))).toBeCloseTo(237551, 0);
+  });
+
+  it('пересчёт рублёвого НКД по курсу доллара — та самая ошибка в 84 раза', () => {
+    const wrong = marketValueRub({
+      quantity: '28',
+      price: '100.3999',
+      fxRate: '84.233',
+      accruedInterest: '26.97024',
+      accruedFxRate: '84.233',
+    });
+    const right = marketValueRub({
+      quantity: '28',
+      price: '100.3999',
+      fxRate: '84.233',
+      accruedInterest: '26.97024',
+      accruedFxRate: 1,
+    });
+    expect(wrong.minus(right).toFixed(0)).toBe('62855');
+  });
+});
+
+describe('валюта сделок отделена от валюты инструмента', () => {
+  it('замещающая облигация: покупка за рубли даёт tradeCurrency=RUB', () => {
+    const [pos] = calculatePositions([
+      op({
+        instrumentId: 'RU000A10B4K3',
+        operationType: 'Buy',
+        quantity: '28',
+        price: '8452.21',
+        currency: 'RUB',
+      }),
+    ]);
+    // средняя выражена в рублях — подписывать её валютой номинала (USD) нельзя
+    expect(pos.tradeCurrency).toBe('RUB');
+    expect(pos.avgBuyPrice.toFixed(2)).toBe('8452.21');
+  });
+
+  it('берётся валюта последней покупки — она формирует текущий остаток', () => {
+    const [pos] = calculatePositions([
+      op({ date: '2025-01-01', instrumentId: 'X', quantity: '1', price: '100', currency: 'USD' }),
+      op({ date: '2025-02-01', instrumentId: 'X', quantity: '1', price: '100', currency: 'RUB' }),
+    ]);
+    expect(pos.tradeCurrency).toBe('RUB');
   });
 });

@@ -1,10 +1,12 @@
 import { randomUUID } from 'node:crypto';
 import { Inject, Injectable } from '@nestjs/common';
 import { eq } from 'drizzle-orm';
+import Decimal from 'decimal.js';
 import {
   calculatePositions,
   calculateTrades,
   cashBalanceRub,
+  marketValueRub,
   realizedPnlInRange,
   xirr,
   periodCashFlows,
@@ -179,16 +181,39 @@ export class OperationsService {
       const quote = quoteByInstrument.get(p.instrumentId);
 
       let currentPrice: string | null = null;
+      let priceCurrency: string | null = null;
+      let accruedInterestRub: string | null = null;
       let currentValueRub: string | null = null;
       let pnlRub: string | null = null;
 
       if (quote) {
         currentPrice = quote.price;
-        // курс валюты инструмента к рублю (для валютных позиций)
-        const fx = await this.quotesService.getFxRate(currency);
-        const qty = Number(p.quantity);
-        const valueCcy = qty * Number(quote.price);
-        currentValueRub = (valueCcy * fx).toFixed(2);
+        // курс берём по валюте КОТИРОВКИ, а не инструмента: у замещающих облигаций
+        // цена приходит в валюте номинала, и они расходятся (см. quotes.currency)
+        priceCurrency = quote.currency || currency;
+        const fx = await this.quotesService.getFxRate(priceCurrency);
+        // у НКД своя валюта: биржа отдаёт его в валюте расчётов режима торгов,
+        // а цену — в валюте номинала (см. quotes.accruedCurrency)
+        const accruedFx =
+          quote.accruedInterest === null
+            ? fx
+            : await this.quotesService.getFxRate(quote.accruedCurrency || priceCurrency);
+
+        currentValueRub = marketValueRub({
+          quantity: p.quantity,
+          price: quote.price,
+          fxRate: fx,
+          accruedInterest: quote.accruedInterest,
+          accruedFxRate: accruedFx,
+        }).toFixed(2);
+        // НКД отдаём отдельно: в «Стоимости» он уже учтён, но без своей колонки
+        // строка выглядела бы как ошибка — стоимость не сходится с ценой × количество
+        if (quote.accruedInterest !== null) {
+          accruedInterestRub = new Decimal(p.quantity)
+            .mul(quote.accruedInterest)
+            .mul(accruedFx)
+            .toFixed(2);
+        }
       }
       // P&L считаем, если знаем рыночную стоимость остатка (котировка есть), либо
       // остатка нет вовсе (позиция закрыта, qty=0) — тогда нереализованная часть
@@ -219,7 +244,10 @@ export class OperationsService {
         realizedPnlRub: p.realizedPnlRub.toFixed(2),
         dividendsRub: p.dividendsRub.toFixed(2),
         couponsRub: p.couponsRub.toFixed(2),
+        avgPriceCurrency: p.tradeCurrency || currency,
         currentPrice,
+        priceCurrency,
+        accruedInterestRub,
         currentValueRub,
         pnlRub,
       });
@@ -246,13 +274,27 @@ export class OperationsService {
       const quote = quoteByInstrument.get(t.instrumentId);
 
       let currentPrice: string | null = null;
+      let priceCurrency: string | null = null;
       let currentValueRub: string | null = null;
 
       if (quote && t.quantity.gt(0)) {
         currentPrice = quote.price;
-        const fx = await this.quotesService.getFxRate(currency);
-        const valueRub = Number(t.quantity) * Number(quote.price) * fx;
-        currentValueRub = valueRub.toFixed(2);
+        // та же оценка, что и в positions(): курс по валюте котировки, НКД в стоимости.
+        // Расхождение формул между страницами уже было источником «пропавших денег»
+        priceCurrency = quote.currency || currency;
+        const fx = await this.quotesService.getFxRate(priceCurrency);
+        const accruedFx =
+          quote.accruedInterest === null
+            ? fx
+            : await this.quotesService.getFxRate(quote.accruedCurrency || priceCurrency);
+
+        currentValueRub = marketValueRub({
+          quantity: t.quantity,
+          price: quote.price,
+          fxRate: fx,
+          accruedInterest: quote.accruedInterest,
+          accruedFxRate: accruedFx,
+        }).toFixed(2);
       }
       // P&L = реализованный (по проданной части) + нереализованный (по остатку) + выплаты
       const unrealizedRub = currentValueRub ? Number(currentValueRub) - Number(t.investedRub) : 0;
@@ -284,7 +326,9 @@ export class OperationsService {
         realizedPnlRub: t.realizedPnlRub.toFixed(2),
         dividendsRub: t.dividendsRub.toFixed(2),
         couponsRub: t.couponsRub.toFixed(2),
+        avgPriceCurrency: t.tradeCurrency || currency,
         currentPrice,
+        priceCurrency,
         currentValueRub,
         pnlRub,
         openedAt: t.openedAt,

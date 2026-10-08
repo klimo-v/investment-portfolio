@@ -32,6 +32,54 @@ export interface PositionResult {
   dividendsRub: Decimal;
   /** накопленные купоны в рублях */
   couponsRub: Decimal;
+  /**
+   * Валюта, в которой выражены avgBuyPrice / investedCcy / realizedPnlCcy, —
+   * это валюта СДЕЛОК, а не валюта номинала инструмента, и совпадать они не обязаны.
+   * Замещающая долларовая облигация покупается за рубли: номинал у неё в USD,
+   * а средняя цена в журнале — в рублях. Без этого поля интерфейс подписывал
+   * среднюю валютой инструмента и показывал «8 452,21 $» там, где рубли.
+   */
+  tradeCurrency: string;
+}
+
+/** Исходные данные рыночной оценки остатка (см. marketValueRub) */
+export interface MarketValueInput {
+  quantity: Decimal.Value;
+  /** «чистая» цена одной бумаги в валюте КОТИРОВКИ */
+  price: Decimal.Value;
+  /** курс валюты КОТИРОВКИ к рублю */
+  fxRate: Decimal.Value;
+  /** НКД на одну бумагу; null — не облигация */
+  accruedInterest?: Decimal.Value | null;
+  /**
+   * Курс валюты НКД к рублю. Отдельный от fxRate, потому что валюты у цены и у
+   * НКД разные и это НЕ край случай: замещающая облигация котируется в валюте
+   * номинала (USD), а НКД биржа отдаёт в валюте расчётов режима торгов (рубли на
+   * TQCB). Пересчёт НКД по курсу доллара завышал стоимость в 84 раза
+   * (63 646,96 ₽ вместо 755,17 ₽ на 28 бумагах RU000A10B4K3).
+   * По умолчанию — курс цены, то есть «валюты совпадают».
+   */
+  accruedFxRate?: Decimal.Value | null;
+}
+
+/**
+ * Рыночная стоимость остатка в рублях — единая формула для позиций, сделок и
+ * снимков (DRY: раньше она была продублирована в operations.service.ts и молча
+ * разъезжалась между страницами).
+ *
+ * НКД входит в стоимость, потому что при продаже облигации накопленный купон
+ * платит покупатель — это уже ваши деньги, и именно так считает брокер. Биржа
+ * котирует облигации «чисто», без НКД, поэтому без этого слагаемого оценка
+ * занижена тем сильнее, чем ближе купон (на 40 бумагах SU29008RMFS8 при НКД
+ * 60,24 ₽ — 2 409,60 ₽ разницы). Двойного счёта с couponsRub нет: там уже
+ * ВЫПЛАЧЕННЫЕ купоны, здесь — ещё не выплаченный накопленный.
+ */
+export function marketValueRub(input: MarketValueInput): Decimal {
+  const priceRub = new Decimal(input.price).mul(input.fxRate);
+  const accruedRub = new Decimal(input.accruedInterest ?? 0).mul(
+    input.accruedFxRate ?? input.fxRate,
+  );
+  return new Decimal(input.quantity).mul(priceRub.plus(accruedRub));
 }
 
 /** Ключ позиции: инструмент × система × портфель */
@@ -73,6 +121,7 @@ export function calculatePositions(operations: Operation[]): PositionResult[] {
         realizedPnlRub: new Decimal(0),
         dividendsRub: new Decimal(0),
         couponsRub: new Decimal(0),
+        tradeCurrency: op.currency,
       };
       map.set(key, pos);
     }
@@ -85,6 +134,10 @@ export function calculatePositions(operations: Operation[]): PositionResult[] {
     switch (op.operationType) {
       case 'Buy': {
         const cost = qty.mul(price).plus(fee);
+        // среднюю формируют ОСТАВШИЕСЯ лоты, поэтому валюта — из последней покупки:
+        // если бумагу когда-то брали за другую валюту, актуальна валюта тех лотов,
+        // что сейчас в остатке
+        pos.tradeCurrency = op.currency;
         pos.investedCcy = pos.investedCcy.plus(cost);
         pos.investedRub = pos.investedRub.plus(cost.mul(fxRate));
         pos.quantity = pos.quantity.plus(qty);
@@ -244,6 +297,8 @@ export interface TradeResult {
   realizedPnlRub: Decimal;
   dividendsRub: Decimal;
   couponsRub: Decimal;
+  /** валюта сделок — в ней выражены avgBuyPrice/investedCcy (см. PositionResult.tradeCurrency) */
+  tradeCurrency: string;
   openedAt: string;
   closedAt: string | null;
   /** id операций, из которых собрана сделка */
@@ -292,12 +347,14 @@ export function calculateTrades(operations: Operation[]): TradeResult[] {
           realizedPnlRub: new Decimal(0),
           dividendsRub: new Decimal(0),
           couponsRub: new Decimal(0),
+          tradeCurrency: op.currency,
           openedAt: op.date,
           closedAt: null,
           operationIds: [],
         };
         open.set(key, trade);
       }
+      trade.tradeCurrency = op.currency;
       const cost = qty.mul(price).plus(fee);
       trade.investedCcy = trade.investedCcy.plus(cost);
       trade.investedRub = trade.investedRub.plus(cost.mul(fxRate));
