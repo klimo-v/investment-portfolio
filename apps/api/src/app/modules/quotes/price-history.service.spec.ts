@@ -107,6 +107,33 @@ describe('PriceHistoryService.ensure: догрузка только недост
   });
 });
 
+describe('PriceHistoryService.ensure: диапазон у каждой бумаги свой', () => {
+  const series = ['2026-10-01', '2026-10-02', '2026-10-05', '2026-10-06'].map((d, i) => point(d, String(100 + i)));
+
+  it('бумага, которой на старте портфеля не было, не запрашивает заведомо пустое начало', async () => {
+    db.insert(instruments).values({ id: 'LATE', ticker: 'LATE', type: 'Stock', currency: 'RUB', marketSource: 'moex' }).run();
+    const { provider, calls } = fakeProvider(series);
+    const svc = new PriceHistoryService(db, [provider]);
+    await svc.ensureForInstruments(new Map([['SBER', '2026-10-01'], ['LATE', '2026-10-05']]), '2026-10-06');
+    const forLate = calls.filter((c) => c[0] === 'LATE');
+    expect(forLate).toEqual([['LATE', '2026-10-05', '2026-10-06']]);
+  });
+
+  it('пустой ответ по «голове» не блокирует загрузку «хвоста» той же бумаги', async () => {
+    const { provider, calls } = fakeProvider(series.filter((p) => p.date >= '2026-10-05'));
+    const svc = new PriceHistoryService(db, [provider]);
+    // первая загрузка покрыла 05–06 октября; теперь просим с 01 октября (голова пуста) и до 08 (хвост)
+    await svc.ensure([sber], '2026-10-05', '2026-10-06');
+    calls.length = 0;
+    await svc.ensure([sber], '2026-10-01', '2026-10-08'); // голова [01..04] — пусто; хвост [07..08] — пусто
+    await svc.ensure([sber], '2026-10-01', '2026-10-08');
+    expect(calls).toEqual([
+      ['SBER', '2026-10-01', '2026-10-04'],
+      ['SBER', '2026-10-07', '2026-10-08'],
+    ]); // каждый диапазон спрошен один раз: кэш не общий на бумагу, а по диапазону
+  });
+});
+
 describe('PriceHistoryService.targetsFor: курсы валют', () => {
   it('добавляет fx-цели для нерублёвых валют инструмента, цены и НКД; RUB — нет', () => {
     db.insert(instruments).values({ id: 'BOND', ticker: 'BOND', type: 'Bond', currency: 'RUB', marketSource: 'moex' }).run();

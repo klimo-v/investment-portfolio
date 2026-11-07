@@ -27,7 +27,7 @@ const addDays = (iso: string, n: number): string =>
 @Injectable()
 export class PriceHistoryService {
   private readonly log = new Logger(PriceHistoryService.name);
-  /** instrumentId → когда источник последний раз не дал данных (в памяти, не в БД) */
+  /** «id|от|до» → когда источник последний раз не дал данных для ЭТОГО диапазона (в памяти, не в БД) */
   private readonly failedAt = new Map<string, number>();
 
   constructor(
@@ -104,9 +104,16 @@ export class PriceHistoryService {
     ];
   }
 
-  /** Догрузить историю бумаг и их валют за [from, till] (см. ensure) */
-  async ensureForInstruments(instrumentIds: readonly string[], from: string, till: string): Promise<void> {
-    await this.ensure(this.targetsFor(instrumentIds), from, till);
+  /**
+   * Догрузить историю бумаг и их валют до `till` (см. ensure). Начало диапазона — своё у
+   * каждой бумаги (`fromById`: дата её первой операции): иначе бумага, которой на старте
+   * портфеля ещё не было, каждый раз запрашивала бы заведомо пустой период. Для курсов
+   * валют — самая ранняя из дат.
+   */
+  async ensureForInstruments(fromById: ReadonlyMap<string, string>, till: string): Promise<void> {
+    const earliest = [...fromById.values()].sort()[0];
+    if (!earliest) return;
+    await this.ensure(this.targetsFor([...fromById.keys()]), (t) => fromById.get(t.instrumentId) ?? earliest, till);
   }
 
   /**
@@ -118,20 +125,28 @@ export class PriceHistoryService {
    * Неудача источника не роняет расчёт: ошибка логируется, день остаётся «без цены»
    * (valuationSeries пометит его), повторная попытка — не чаще раза в час.
    */
-  async ensure(targets: readonly HistoryTarget[], from: string, till: string): Promise<void> {
+  async ensure(
+    targets: readonly HistoryTarget[],
+    from: string | ((target: HistoryTarget) => string),
+    till: string,
+  ): Promise<void> {
     for (const target of targets) {
       const provider = this.providers.find((p) => p.supports(target));
       if (!provider) continue;
-      const failed = this.failedAt.get(target.instrumentId);
-      if (failed !== undefined && Date.now() - failed < NEGATIVE_TTL_MS) continue;
+      const targetFrom = typeof from === 'function' ? from(target) : from;
 
-      for (const [rangeFrom, rangeTill] of this.missingRanges(target.instrumentId, from, till)) {
+      for (const [rangeFrom, rangeTill] of this.missingRanges(target.instrumentId, targetFrom, till)) {
+        // отрицательный кэш — по диапазону: пустой «голова» (бумаги ещё не было) не должен
+        // на час блокировать нужный хвост той же бумаги
+        const key = `${target.instrumentId}|${rangeFrom}|${rangeTill}`;
+        const failed = this.failedAt.get(key);
+        if (failed !== undefined && Date.now() - failed < NEGATIVE_TTL_MS) continue;
         try {
           const points = await provider.getHistory(target, rangeFrom, rangeTill);
-          if (points.length === 0) this.failedAt.set(target.instrumentId, Date.now());
+          if (points.length === 0) this.failedAt.set(key, Date.now());
           for (const p of points) this.record(target.instrumentId, p);
         } catch (err) {
-          this.failedAt.set(target.instrumentId, Date.now());
+          this.failedAt.set(key, Date.now());
           this.log.warn(`История цен ${target.ticker} ${rangeFrom}…${rangeTill}: ${(err as Error).message}`);
         }
       }

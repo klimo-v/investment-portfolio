@@ -39,8 +39,14 @@ export class ValuationService {
     }
 
     const instrumentIds = [...new Set(traded.map((o) => o.instrumentId as string))];
-    const firstDate = traded.reduce((min, o) => (o.date < min ? o.date : min), traded[0].date);
-    await this.priceHistory.ensureForInstruments(instrumentIds, firstDate, till);
+    // начало загрузки — своё у каждой бумаги: дата её первой операции
+    const firstOpDate = new Map<string, string>();
+    for (const o of traded) {
+      const id = o.instrumentId as string;
+      const known = firstOpDate.get(id);
+      if (known === undefined || o.date < known) firstOpDate.set(id, o.date);
+    }
+    await this.priceHistory.ensureForInstruments(firstOpDate, till);
 
     // история + текущие котировки и курсы как наблюдения: так итог ряда совпадает с текущей
     // сводкой, даже если «Обновить цены» сегодня ещё не нажимали. Котировка ставится на СВОЮ
