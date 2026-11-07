@@ -35,7 +35,7 @@ export class ValuationService {
       );
     const traded = ops.filter((o) => o.instrumentId && o.operationType !== 'Transfer' && o.date <= till);
     if (traded.length === 0) {
-      return ValuationSeriesSchema.parse({ from: query.from ?? null, till, groupBy: query.groupBy, groups: [] });
+      return ValuationSeriesSchema.parse({ from: query.from ?? null, till, groupBy: query.groupBy, groups: [], netContributionsRub: [] });
     }
 
     const instrumentIds = [...new Set(traded.map((o) => o.instrumentId as string))];

@@ -547,6 +547,8 @@ export const ValuationSeriesSchema = z.object({
       points: z.array(ValuationPointSchema),
     }),
   ),
+  /** накопленный чистый ввод средств (депозиты − выводы) по тем же датам, что и точки групп */
+  netContributionsRub: z.array(decimalString),
 });
 export type ValuationSeriesDto = z.infer<typeof ValuationSeriesSchema>;
 

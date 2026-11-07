@@ -1,7 +1,7 @@
 import { ChangeDetectionStrategy, Component, computed, inject, input } from '@angular/core';
 import { MatCardModule } from '@angular/material/card';
 import type { ChartConfiguration } from 'chart.js';
-import type { BenchmarkPoint, Snapshot } from '@core';
+import type { BenchmarkPoint } from '@core';
 import { chartSemantic, seriesColor, ThemeService } from '@web-shared';
 import { ChartCanvas } from '../chart-canvas/chart-canvas';
 
@@ -14,7 +14,7 @@ const DEPOSIT_ANNUAL_RATE = 0.16;
 
 /**
  * «Портфель против рынка»: рост ₽100, вложенных в начале периода — портфель (по
- * снимкам стоимости), индекс МосБиржи и вклад под фиксированную ставку.
+ * дневной стоимости из журнала и истории цен), индекс МосБиржи и вклад под фиксированную ставку.
  *
  * Нормировка на 100 обязательна: абсолютные рубли портфеля и пункты индекса
  * несопоставимы, а вопрос «обгоняю ли я рынок» — именно про относительный рост.
@@ -28,18 +28,13 @@ const DEPOSIT_ANNUAL_RATE = 0.16;
       <h3>Портфель против рынка</h3>
       <p class="note">
         Рост ₽100, вложенных в начале периода: ваш портфель, индекс МосБиржи (IMOEX)
-        и вклад под {{ depositRatePct }}% годовых. По снимкам стоимости.
-        @if (segmented()) {
-          Снимки не разбиты по системам/портфелям — график показывает портфель целиком.
-        }
+        и вклад под {{ depositRatePct }}% годовых. По дневной стоимости портфеля из
+        журнала операций и истории цен.
       </p>
       @if (config(); as cfg) {
         <app-chart-canvas [config]="cfg" />
       } @else {
-        <p class="note">
-          Нужно минимум два снимка стоимости и данные индекса. Снимки снимаются
-          кнопкой «Сделать снимок» у графика «Стоимость инструментов во времени».
-        </p>
+        <p class="note">Нужно минимум два дня стоимости портфеля и данные индекса.</p>
       }
     </mat-card>
   `,
@@ -61,12 +56,10 @@ const DEPOSIT_ANNUAL_RATE = 0.16;
   ],
 })
 export class BenchmarkChart {
-  /** Снимки по возрастанию даты, уже обрезанные под выбранный период */
-  readonly snapshots = input.required<readonly Snapshot[]>();
+  /** Дневная стоимость портфеля по возрастанию даты (valuationSeries), уже под выбранный фильтр */
+  readonly values = input.required<readonly { date: string; valueRub: number }[]>();
   /** История индекса; порядок неважен — сортируется здесь */
   readonly points = input<readonly BenchmarkPoint[]>([]);
-  /** Выбран конкретный система/портфель — снимки их не различают, предупреждаем */
-  readonly segmented = input(false);
 
   private readonly theme = inject(ThemeService);
   private readonly cc = computed(() => chartSemantic(this.theme.isDark()));
@@ -75,14 +68,18 @@ export class BenchmarkChart {
 
   /** null — данных для сравнения недостаточно */
   protected readonly config = computed<ChartConfiguration<'line'> | null>(() => {
-    const s = this.snapshots();
+    let s = [...this.values()];
     const b = [...this.points()].sort((a, b) => a.date.localeCompare(b.date));
     if (s.length < 2 || b.length === 0) return null;
 
-    const baseValue = s[0].currentValueRub > 0 ? s[0].currentValueRub : s[0].investedRub;
-    if (baseValue <= 0) return null;
+    // база нормировки — первый день, когда в портфеле что-то было (до первой покупки стоимость 0)
+    const firstHeld = s.findIndex((r) => r.valueRub > 0);
+    if (firstHeld < 0) return null;
+    s = s.slice(firstHeld);
+    if (s.length < 2) return null;
+    const baseValue = s[0].valueRub;
 
-    // Индекс торгуется не каждый день, снимки снимаются не каждый торговый день:
+    // Индекс торгуется не каждый день, а ряд портфеля идёт по календарным дням:
     // выравниваем по «последнему закрытию на дату или раньше»
     const closeOnOrBefore = (date: string): number => {
       let close = b[0].close;
@@ -96,7 +93,7 @@ export class BenchmarkChart {
     const baseTime = new Date(s[0].date + 'T00:00:00Z').getTime();
     const dayMs = 24 * 60 * 60 * 1000;
 
-    const portfolio = s.map((r) => (r.currentValueRub / baseValue) * 100);
+    const portfolio = s.map((r) => (r.valueRub / baseValue) * 100);
     const imoex = s.map((r) => (closeOnOrBefore(r.date) / baseClose) * 100);
     const deposit = s.map((r) => {
       const years = (new Date(r.date + 'T00:00:00Z').getTime() - baseTime) / dayMs / 365;

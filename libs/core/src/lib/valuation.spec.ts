@@ -227,3 +227,19 @@ describe('выплата после закрытия позиции', () => {
     expect(calculateTrades(orphan)).toEqual([]);
   });
 });
+
+describe('чистый ввод средств', () => {
+  it('депозиты минус выводы нарастающим итогом по тем же дням, что и точки; фильтр портфеля применяется', () => {
+    const ops: Operation[] = [
+      op({ date: '2026-03-02', operationType: 'Deposit', instrumentId: null as never, quantity: '1', price: '1000' }),
+      op({ date: '2026-03-02', operationType: 'Buy', instrumentId: 'SBER', quantity: '10', price: '100' }),
+      op({ date: '2026-03-04', operationType: 'Withdraw', instrumentId: null as never, quantity: '1', price: '300' }),
+      op({ date: '2026-03-04', operationType: 'Deposit', instrumentId: null as never, quantity: '1', price: '50', portfolioId: 'p2' }),
+    ];
+    const s = valuationSeries(ops, [], { till: '2026-03-05', groupBy: 'portfolio' });
+    expect(s.netContributionsRub).toEqual(['1000.00', '1000.00', '750.00', '750.00']);
+    expect(s.netContributionsRub).toHaveLength(s.groups[0].points.length);
+    const p1 = valuationSeries(ops, [], { till: '2026-03-05', groupBy: 'portfolio', portfolioId: 'p1' });
+    expect(p1.netContributionsRub).toEqual(['1000.00', '1000.00', '700.00', '700.00']);
+  });
+});

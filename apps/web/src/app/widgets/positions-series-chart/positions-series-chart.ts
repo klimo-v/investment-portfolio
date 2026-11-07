@@ -1,10 +1,7 @@
-import { ChangeDetectionStrategy, Component, computed, inject, input, output } from '@angular/core';
-import { MatButtonModule } from '@angular/material/button';
+import { ChangeDetectionStrategy, Component, computed, inject, input } from '@angular/core';
 import { MatCardModule } from '@angular/material/card';
-import { MatIconModule } from '@angular/material/icon';
-import { MatTooltipModule } from '@angular/material/tooltip';
 import type { ChartConfiguration } from 'chart.js';
-import type { PositionSeries, SnapshotStaleness } from '@core';
+import type { ValuationSeriesDto } from '@core';
 import { chartSemantic, formatRub, seriesColor, ThemeService } from '@web-shared';
 import { ChartCanvas } from '../chart-canvas/chart-canvas';
 
@@ -15,51 +12,28 @@ import { ChartCanvas } from '../chart-canvas/chart-canvas';
  * Линия внесённого здесь не украшение: без неё рост «Итого» невозможно отличить от
  * простого довнесения капитала.
  *
- * Виджет остаётся презентационным (FSD): снимок снимает и модалку открывает страница,
- * сюда приходят только данные и уходят события.
+ * Данные — дневной ряд оценки (valuationSeries, groupBy=instrument), считается из журнала
+ * операций и истории цен: точка на каждый день, без кнопки «Сделать снимок». Дни, где цена
+ * инструмента не найдена или взята от более ранней даты, отмечены на «Итого» и описаны в
+ * подсказке. Виджет презентационный (FSD): сюда приходят только данные.
  */
 @Component({
   selector: 'app-positions-series-chart',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [MatButtonModule, MatCardModule, MatIconModule, MatTooltipModule, ChartCanvas],
+  imports: [MatCardModule, ChartCanvas],
   template: `
     <mat-card>
-      <div class="head">
-        <h3>Стоимость инструментов во времени</h3>
-        @if (stale()) {
-          <button
-            type="button"
-            mat-icon-button
-            class="stale"
-            [matTooltip]="staleTooltip()"
-            [attr.aria-label]="staleTooltip()"
-            (click)="showChanges.emit()"
-          >
-            <mat-icon>warning</mat-icon>
-          </button>
-        }
-        <span class="spacer"></span>
-        <button type="button" mat-stroked-button [disabled]="capturing()" (click)="capture.emit()">
-          {{ capturing() ? 'Сохраняем…' : 'Сделать снимок' }}
-        </button>
-      </div>
+      <h3>Стоимость инструментов во времени</h3>
       <p class="note">
-        Стоимость каждого инструмента и итог по портфелю по датам снимков; пунктир —
-        внесено (нетто): депозиты минус выводы, чтобы отделить рост от довнесения
-        капитала. Сумма линий = «Текущая стоимость» портфеля. Точка на графике
-        появляется по кнопке «Сделать снимок» (одна на день — повторный снимок
-        обновит сегодняшнюю).
-        @if (segmented()) {
-          Разбивка не делится по системам/портфелям — показан портфель целиком.
-        }
+        Стоимость каждого инструмента и итог по портфелю по дням; пунктир — внесено (нетто):
+        депозиты минус выводы, чтобы отделить рост от довнесения капитала. Сумма линий =
+        «Текущая стоимость» портфеля. Янтарные точки на «Итого» — дни, где цена инструмента не
+        найдена или взята от более ранней даты (подробности в подсказке).
       </p>
       @if (config(); as cfg) {
         <app-chart-canvas [config]="cfg" [tall]="true" />
       } @else {
-        <p class="note">
-          Снимков пока нет — нажмите «Сделать снимок», чтобы зафиксировать текущую
-          стоимость инструментов. Дальше история копится от снимка к снимку.
-        </p>
+        <p class="note">Операций пока нет — график появится после первой сделки.</p>
       }
     </mat-card>
   `,
@@ -68,21 +42,9 @@ import { ChartCanvas } from '../chart-canvas/chart-canvas';
       mat-card {
         padding: 16px;
       }
-      .head {
-        display: flex;
-        align-items: center;
-        gap: 4px;
-        margin-bottom: 8px;
-      }
-      .spacer {
-        flex: 1;
-      }
       h3 {
-        margin: 0;
+        margin: 0 0 8px;
         font-weight: 500;
-      }
-      .stale {
-        color: var(--app-warn);
       }
       .note {
         margin: 0 0 12px;
@@ -93,39 +55,25 @@ import { ChartCanvas } from '../chart-canvas/chart-canvas';
   ],
 })
 export class PositionsSeriesChart {
-  /** Ряд из snapshot_positions; undefined — истории ещё нет */
-  readonly series = input<PositionSeries | undefined>(undefined);
-  readonly segmented = input(false);
-  /** Достоверность истории снимков; null — ещё не загружена */
-  readonly staleness = input<SnapshotStaleness | null>(null);
-  /** Снимок сохраняется прямо сейчас — блокируем повторный клик */
-  readonly capturing = input(false);
-
-  /** Снять снимок текущей стоимости */
-  readonly capture = output<void>();
-  /** Показать таблицу изменений, из-за которых снимкам нельзя доверять */
-  readonly showChanges = output<void>();
-
-  protected readonly stale = computed(() => this.staleness()?.stale === true);
-
-  protected readonly staleTooltip = computed(() => {
-    const since = this.staleness()?.staleSince;
-    const scope = since ? `Снимкам с ${since}` : 'Снимкам';
-    return `${scope} доверять нельзя: журнал операций изменился задним числом. Нажмите, чтобы посмотреть, что именно изменилось.`;
-  });
+  /** Дневной ряд по инструментам; undefined — ещё не загружен */
+  readonly series = input<ValuationSeriesDto | undefined>(undefined);
 
   private readonly theme = inject(ThemeService);
   private readonly cc = computed(() => chartSemantic(this.theme.isDark()));
 
   protected readonly config = computed<ChartConfiguration<'line'> | null>(() => {
     const s = this.series();
-    if (!s || s.dates.length === 0) return null;
+    const groups = s?.groups ?? [];
+    if (!s || groups.length === 0 || groups[0].points.length === 0) return null;
+    const dates = groups[0].points.map((p) => p.date);
 
-    // spanGaps: false — null означает «в эту дату инструмент не удерживался»;
-    // соединять такие точки линией значило бы рисовать несуществующую позицию
-    const instrumentDatasets = s.instruments.map((ins, i) => ({
-      label: ins.ticker,
-      data: ins.values,
+    // null — в эту дату инструмент не удерживался (нет ни вложений, ни стоимости): соединять
+    // такие точки линией значило бы рисовать несуществующую позицию
+    const instrumentDatasets = groups.map((g, i) => ({
+      label: g.name,
+      data: g.points.map((p) =>
+        Number(p.marketValueRub) === 0 && Number(p.investedRub) === 0 ? null : Number(p.marketValueRub),
+      ),
       borderColor: seriesColor(i),
       backgroundColor: seriesColor(i),
       borderWidth: 1.5,
@@ -134,24 +82,45 @@ export class PositionsSeriesChart {
       spanGaps: false,
     }));
 
+    const total = dates.map((_, i) => groups.reduce((sum, g) => sum + Number(g.points[i].marketValueRub), 0));
+    // что именно подменено на день: по инструментам из групп (уникальные пары, без дублей)
+    const carriedAt = (i: number): string[] => {
+      const seen = new Set<string>();
+      for (const g of groups) {
+        for (const c of g.points[i].carried) {
+          const text =
+            c.reason === 'no-price'
+              ? `${g.name}: цена на дату не найдена, оценено по себестоимости`
+              : c.reason === 'no-fx'
+                ? `${g.name}: нет курса валюты цены, оценено по себестоимости`
+                : `${g.name}: цена на дату не найдена, взята от ${c.priceDate}`;
+          seen.add(text);
+        }
+      }
+      return [...seen];
+    };
+    const flagged = dates.map((_, i) => groups.some((g) => g.points[i].carried.length > 0));
+
     return {
       type: 'line',
       data: {
-        labels: s.dates,
+        labels: dates,
         datasets: [
           ...instrumentDatasets,
           {
             label: 'Итого',
-            data: s.total,
+            data: total,
             borderColor: this.cc().total,
             backgroundColor: this.cc().total,
             borderWidth: 2.5,
-            pointRadius: 0,
+            pointRadius: (c) => (flagged[c.dataIndex] ? 3 : 0),
+            pointBackgroundColor: (c) => (flagged[c.dataIndex] ? this.cc().benchmark : this.cc().total),
+            pointBorderColor: (c) => (flagged[c.dataIndex] ? this.cc().benchmark : this.cc().total),
             tension: 0.2,
           },
           {
             label: 'Внесено (нетто)',
-            data: s.netContributions,
+            data: s.netContributionsRub.map(Number),
             borderColor: this.cc().neutral,
             backgroundColor: this.cc().neutral,
             borderWidth: 2,
@@ -167,7 +136,12 @@ export class PositionsSeriesChart {
         interaction: { mode: 'index', intersect: false },
         plugins: {
           legend: { display: true, position: 'bottom' },
-          tooltip: { callbacks: { label: (c) => `${c.dataset.label}: ${formatRub(c.parsed.y)}` } },
+          tooltip: {
+            callbacks: {
+              label: (c) => `${c.dataset.label}: ${formatRub(c.parsed.y)}`,
+              afterBody: (items) => (items.length > 0 ? carriedAt(items[0].dataIndex) : []),
+            },
+          },
         },
         scales: {
           x: { grid: { display: false } },

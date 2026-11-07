@@ -83,7 +83,7 @@ import {
         label="Макс. просадка"
         [value]="drawdownPct() === null ? '—' : pct(drawdownPct())"
         [tone]="tone(drawdownPct())"
-        hint="Наибольшее падение стоимости портфеля от пика к дну по снимкам"
+        hint="Наибольшее падение дневной стоимости портфеля от пика к дну (из журнала операций и истории цен)"
       />
     </div>
   `,
@@ -110,7 +110,7 @@ import {
 export class SummaryKpis {
   readonly totals = input.required<Effectiveness>();
   readonly cash = input.required<Cash>();
-  /** Просадка в процентах; null — снимков меньше двух, считать не из чего */
+  /** Просадка в процентах; null — меньше двух дней, считать не из чего */
   readonly drawdownPct = input<number | null>(null);
   readonly pnlHint = input('');
 

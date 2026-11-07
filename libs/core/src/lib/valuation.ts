@@ -93,6 +93,11 @@ export interface ValuationSeries {
   till: string;
   groupBy: ValuationGroupBy;
   groups: ValuationGroup[];
+  /**
+   * Накопленный чистый ввод средств (депозиты − выводы) на каждый день ряда — по тем же
+   * датам, что и точки групп. Нужен, чтобы отделить рост стоимости от довнесения капитала.
+   */
+  netContributionsRub: string[];
 }
 
 const ZERO = new Decimal(0);
@@ -165,8 +170,22 @@ export function valuationSeries(
 
   const keys = [...new Set(ops.map(keyOf))].sort();
   if (ops.length === 0) {
-    return { from: options.from ?? null, till: options.till, groupBy: options.groupBy, groups: [] };
+    return { from: options.from ?? null, till: options.till, groupBy: options.groupBy, groups: [], netContributionsRub: [] };
   }
+
+  // ввод/вывод денег — операции без инструмента; тот же фильтр системы/портфеля
+  const cashOps = operations
+    .filter(
+      (o) =>
+        (o.operationType === 'Deposit' || o.operationType === 'Withdraw') &&
+        o.date <= options.till &&
+        (!options.systemId || o.systemId === options.systemId) &&
+        (!options.portfolioId || o.portfolioId === options.portfolioId),
+    )
+    .sort((a, b) => a.date.localeCompare(b.date));
+  let nextCash = 0;
+  let netContributions = ZERO;
+  const netContributionsRub: string[] = [];
 
   const fixedByKey = new Map<string, Decimal>(keys.map((k) => [k, ZERO]));
   const ledger = new TradeLedger({ futureIds: options.futureIds }, (trade, event) => {
@@ -182,7 +201,13 @@ export function valuationSeries(
   let next = 0;
   for (let day = firstDay; day <= options.till; day = addDays(day, 1)) {
     while (next < ops.length && ops[next].date <= day) ledger.apply(ops[next++]);
+    while (nextCash < cashOps.length && cashOps[nextCash].date <= day) {
+      const o = cashOps[nextCash++];
+      const amount = new Decimal(o.quantity).mul(o.price).mul(o.fxRate ?? '1');
+      netContributions = o.operationType === 'Deposit' ? netContributions.plus(amount) : netContributions.minus(amount);
+    }
     if (day < outFrom) continue;
+    netContributionsRub.push(netContributions.toFixed(2));
 
     const acc = new Map<string, Accumulator>(
       keys.map((k) => [k, { invested: ZERO, value: ZERO, fixed: fixedByKey.get(k) ?? ZERO, carried: [] }]),
@@ -214,6 +239,7 @@ export function valuationSeries(
     till: options.till,
     groupBy: options.groupBy,
     groups: keys.map((key) => ({ key, points: points.get(key) as ValuationPoint[] })),
+    netContributionsRub,
   };
 }
 
