@@ -439,7 +439,7 @@ export function systemPerformance(
       closedResultRub: money(net.plus(income).minus(openIncome)),
       closedIncomeRub: money(income.minus(openIncome)),
       openIncomeRub: money(openIncome),
-      openResultRub: money(unrealized.plus(openIncome)),
+      openResultRub: money(unrealized.plus(openRealized).plus(openIncome)),
       totalRub: money(net.plus(openRealized).plus(unrealized).plus(income)),
       openCount: open.length,
     },

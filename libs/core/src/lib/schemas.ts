@@ -415,7 +415,7 @@ export const SystemPerformanceSchema = z.object({
     closedIncomeRub: decimalString,
     /** из них по открытым сделкам */
     openIncomeRub: decimalString,
-    /** нереализованный + выплаты по открытым: «открытые позиции» целиком */
+    /** нереализованный + уже зафиксированное (частичные продажи, комиссии) + выплаты по открытым: «открытые позиции» целиком; closedResult + openResult = totalRub */
     openResultRub: decimalString,
     /** net закрытых + openRealized + unrealized + income */
     totalRub: decimalString,

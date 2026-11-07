@@ -230,18 +230,18 @@ describe('systemPerformance: краевые случаи', () => {
     const open = trade('-10', '2026-01-05', { status: 'Open', closedAt: null, quantity: new Decimal(-2), feesRub: new Decimal(10) });
     const p = systemPerformance([open], { unrealizedOf: () => new Decimal(35) });
     expect(p.trades.closed).toBe(0);
-    expect(p.summary).toMatchObject({ netPnlRub: '0.00', openRealizedRub: '-10.00', unrealizedRub: '35.00', totalRub: '25.00', openCount: 1 });
+    expect(p.summary).toMatchObject({ netPnlRub: '0.00', openRealizedRub: '-10.00', unrealizedRub: '35.00', openResultRub: '25.00', totalRub: '25.00', openCount: 1 });
   });
 
   it('дивиденды и купоны входят в «Всего», но не в результат закрытых и не в нереализованный', () => {
-    const open = trade('0', '2026-01-05', {
-      status: 'Open',
+    const open = trade('40', '2026-01-05', {
+      status: 'Partial',
       closedAt: null,
       dividendsRub: new Decimal(100),
       couponsRub: new Decimal(20),
     });
     const p = systemPerformance([open], { unrealizedOf: () => new Decimal(-50) });
-    expect(p.summary).toMatchObject({ netPnlRub: '0.00', unrealizedRub: '-50.00', incomeRub: '120.00', openIncomeRub: '120.00', closedResultRub: '0.00', closedIncomeRub: '0.00', openResultRub: '70.00', totalRub: '70.00' });
+    expect(p.summary).toMatchObject({ netPnlRub: '0.00', unrealizedRub: '-50.00', incomeRub: '120.00', openIncomeRub: '120.00', closedResultRub: '0.00', closedIncomeRub: '0.00', openRealizedRub: '40.00', openResultRub: '110.00', totalRub: '110.00' });
   });
 
   it('дивиденды закрытой сделки входят в closedResultRub, netPnlRub не меняется', () => {
