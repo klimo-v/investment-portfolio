@@ -70,17 +70,24 @@ export class SnapshotsService {
     // разбивка по инструментам на сегодня — той же оценкой, что на дашборде.
     // Пишем ВСЕ оценённые инструменты (у кого есть текущая стоимость в RUB), без
     // фильтра по валюте — тогда сумма линий = «Текущая стоимость» портфеля.
+    // Исключение — фьючерсы: их оценка (нереализованный результат) входит в агрегатный
+    // снимок выше, но не в линии «стоимости инструментов», поэтому при открытом
+    // фьючерсе сумма линий меньше агрегата ровно на эту оценку.
     const positions = await this.operations.positions();
     const byInst = new Map<string, { value: number; qty: number }>();
     for (const p of positions) {
       if (p.currentValueRub === null) continue;
+      // фьючерс — не «стоимость инструмента»: его оценка это нереализованный результат,
+      // на графике стоимости инструментов (линии = то, что можно продать) он не нужен
+      if (p.type === 'Future') continue;
       const cur = byInst.get(p.instrumentId) ?? { value: 0, qty: 0 };
       cur.value += Number(p.currentValueRub);
       cur.qty += Number(p.quantity);
       byInst.set(p.instrumentId, cur);
     }
     for (const [instrumentId, v] of byInst) {
-      if (v.qty <= 1e-9) continue;
+      // допуск, а не === 0: float-сумма количеств может дать остаток вроде 5e-17
+      if (Math.abs(v.qty) <= 1e-9) continue;
       this.db
         .insert(snapshotPositions)
         .values({

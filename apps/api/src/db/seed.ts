@@ -61,6 +61,8 @@ db.insert(instruments)
     { id: 'GLDRUB_TOM', ticker: 'GLDRUB_TOM', type: 'Currency', currency: 'RUB', marketSource: 'moex' },
     { id: 'CNYRUB_TOM', ticker: 'CNYRUB_TOM', type: 'Currency', currency: 'RUB', marketSource: 'moex' },
     { id: 'SBMM', ticker: 'SBMM', type: 'ETF', currency: 'RUB', marketSource: 'moex' },
+    // фьючерс: тикер как в отчёте брокера, цена — ₽ за контракт, цену вводит/импортирует пользователь
+    { id: 'CNY-12.26', ticker: 'CNY-12.26', type: 'Future', currency: 'RUB', marketSource: 'manual' },
     { id: 'BTC', ticker: 'BTC', type: 'Crypto', currency: 'USD', marketSource: 'binance' },
     { id: 'USDT', ticker: 'USDT', type: 'Crypto', currency: 'USD', marketSource: 'binance' },
     {

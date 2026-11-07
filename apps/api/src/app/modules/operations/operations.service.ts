@@ -6,6 +6,7 @@ import {
   calculatePositions,
   calculateTrades,
   cashBalanceRub,
+  futureUnrealizedPnl,
   marketValueRub,
   realizedPnlInRange,
   xirr,
@@ -25,8 +26,6 @@ import {
   systems,
   portfolios,
   quotes,
-  strategyConfigs,
-  strategyDailyResults,
   type OperationRow,
 } from '../../../db/schema';
 import { DB } from '../../db/drizzle.module';
@@ -57,6 +56,22 @@ export class OperationsService {
     @Inject(DB) private readonly db: BetterSQLite3Database,
     private readonly quotesService: QuotesService,
   ) {}
+
+  /**
+   * id фьючерсных инструментов. Движок не знает типов (в операции только id), поэтому
+   * набор передаётся ему снаружи — для этих инструментов включается учёт позиции
+   * со знаком (шорт допустим), см. libs/core/futures-engine.ts.
+   */
+  futureIds(): Set<string> {
+    return new Set(
+      this.db
+        .select({ id: instruments.id })
+        .from(instruments)
+        .where(eq(instruments.type, 'Future'))
+        .all()
+        .map((r) => r.id),
+    );
+  }
 
   list(): Operation[] {
     const rows = this.db.select().from(operations).all();
@@ -92,6 +107,7 @@ export class OperationsService {
         tradeId: parsed.tradeId ?? null,
         note: parsed.note ?? null,
         brokerRef: parsed.brokerRef ?? null,
+        executedAt: parsed.executedAt ?? null,
         importBatchId: parsed.importBatchId ?? null,
       })
       .run();
@@ -128,11 +144,7 @@ export class OperationsService {
   reassign(id: string, raw: unknown): void {
     const patch = OperationReassignSchema.parse(raw);
     const [row] = this.db.select().from(operations).where(eq(operations.id, id)).all();
-    this.db
-      .update(operations)
-      .set(patch)
-      .where(eq(operations.id, id))
-      .run();
+    this.db.update(operations).set(patch).where(eq(operations.id, id)).run();
     if (!row) return;
 
     recordSnapshotInvalidation(this.db, this.changeEntry(rowToOperation(row), 'reassign'));
@@ -171,16 +183,18 @@ export class OperationsService {
    * посчитать позиции на отфильтрованном срезе (глобальный фильтр дашборда).
    */
   async positions(ops: Operation[] = this.list()): Promise<Position[]> {
+    const futureIds = this.futureIds();
     const instrumentRows = this.db.select().from(instruments).all();
     const quoteRows = this.db.select().from(quotes).all();
     const instrumentById = new Map(instrumentRows.map((i) => [i.id, i]));
     const quoteByInstrument = new Map(quoteRows.map((q) => [q.instrumentId, q]));
 
     const result: Position[] = [];
-    for (const p of calculatePositions(ops)) {
+    for (const p of calculatePositions(ops, { futureIds })) {
       const instrument = instrumentById.get(p.instrumentId);
       const currency = instrument?.currency ?? 'RUB';
       const quote = quoteByInstrument.get(p.instrumentId);
+      const isFuture = futureIds.has(p.instrumentId);
 
       let currentPrice: string | null = null;
       let priceCurrency: string | null = null;
@@ -188,7 +202,13 @@ export class OperationsService {
       let currentValueRub: string | null = null;
       let pnlRub: string | null = null;
 
-      if (quote) {
+      if (quote && isFuture) {
+        // фьючерс: «стоимость» = нереализованный результат (расчётная − средняя) × кол-во
+        // со знаком; quantity × price для шорта было бы бессмыслицей. Цена в ₽ за контракт.
+        currentPrice = quote.price;
+        priceCurrency = 'RUB';
+        currentValueRub = futureUnrealizedPnl(p, quote.price).toFixed(2);
+      } else if (quote) {
         currentPrice = quote.price;
         // курс берём по валюте КОТИРОВКИ, а не инструмента: у замещающих облигаций
         // цена приходит в валюте номинала, и они расходятся (см. quotes.currency)
@@ -264,13 +284,14 @@ export class OperationsService {
    */
   async trades(): Promise<Trade[]> {
     const ops = this.list();
+    const futureIds = this.futureIds();
     const instrumentRows = this.db.select().from(instruments).all();
     const quoteRows = this.db.select().from(quotes).all();
     const instrumentById = new Map(instrumentRows.map((i) => [i.id, i]));
     const quoteByInstrument = new Map(quoteRows.map((q) => [q.instrumentId, q]));
 
     const result: Trade[] = [];
-    for (const t of calculateTrades(ops)) {
+    for (const t of calculateTrades(ops, { futureIds })) {
       const instrument = instrumentById.get(t.instrumentId);
       const currency = instrument?.currency ?? 'RUB';
       const quote = quoteByInstrument.get(t.instrumentId);
@@ -279,7 +300,17 @@ export class OperationsService {
       let priceCurrency: string | null = null;
       let currentValueRub: string | null = null;
 
-      if (quote && t.quantity.gt(0)) {
+      if (quote && futureIds.has(t.instrumentId)) {
+        // открытая фьючерсная сделка (кол-во со знаком): оценка = нереализованный результат
+        if (!t.quantity.isZero()) {
+          currentPrice = quote.price;
+          priceCurrency = 'RUB';
+          currentValueRub = futureUnrealizedPnl(
+            { quantity: t.quantity, avgBuyPrice: t.avgBuyPrice },
+            quote.price,
+          ).toFixed(2);
+        }
+      } else if (quote && t.quantity.gt(0)) {
         currentPrice = quote.price;
         // та же оценка, что и в positions(): курс по валюте котировки, НКД в стоимости.
         // Расхождение формул между страницами уже было источником «пропавших денег»
@@ -365,30 +396,6 @@ export class OperationsService {
    *   начала периода, сворачивается в синтетический отток датой `from` (иначе не с
    *   чем сравнить терминальный поток на buy-and-hold без операций в окне).
    */
-  /**
-   * Реализованный результат стратегий (лента `strategy_daily_results`) в срезе фильтра.
-   * Портфель берётся из конфига стратегии на момент чтения. Срочные стратегии не живут в
-   * `operations`, поэтому их net добавляется к результату отдельно (см. summary()).
-   */
-  private strategyResults(filter: SummaryFilter): StrategyNetRow[] {
-    return this.db
-      .select({
-        systemId: strategyDailyResults.systemId,
-        portfolioId: strategyConfigs.portfolioId,
-        date: strategyDailyResults.date,
-        netRub: strategyDailyResults.netRub,
-      })
-      .from(strategyDailyResults)
-      .innerJoin(strategyConfigs, eq(strategyConfigs.systemId, strategyDailyResults.systemId))
-      .all()
-      .filter(
-        (r) =>
-          (!filter.systemId || r.systemId === filter.systemId) &&
-          (!filter.portfolioId || r.portfolioId === filter.portfolioId) &&
-          (!filter.till || r.date <= filter.till),
-      );
-  }
-
   async summary(filter: SummaryFilter = {}): Promise<DashboardSummary> {
     const allOps = this.list();
     const opsUpTo = allOps.filter(
@@ -399,7 +406,7 @@ export class OperationsService {
     );
     const periodOps = opsUpTo.filter((o) => !filter.from || o.date >= filter.from);
     const positions = await this.positions(opsUpTo);
-    const strategyRows = this.strategyResults(filter);
+    const futureIds = this.futureIds();
     const systemRows = this.db.select().from(systems).all();
     const portfolioRows = this.db.select().from(portfolios).all();
     const systemName = new Map(systemRows.map((s) => [s.id, s.name]));
@@ -424,7 +431,7 @@ export class OperationsService {
       .map(([period, v]) => ({ period, flow: v.flow, income: v.income }));
 
     // эффективность по системам: срез операций/позиций/сделок по systemId
-    const systemIds = [...new Set([...positions.map((p) => p.systemId), ...strategyRows.map((r) => r.systemId)])];
+    const systemIds = [...new Set(positions.map((p) => p.systemId))];
     const bySystem = systemIds
       .map((systemId) => ({
         systemId,
@@ -434,18 +441,13 @@ export class OperationsService {
           positions.filter((p) => p.systemId === systemId),
           today,
           filter.from,
-          strategyNetInPeriod(strategyRows.filter((r) => r.systemId === systemId), filter.from),
+          futureIds,
         ),
       }))
       .sort((a, b) => b.pnlRub - a.pnlRub);
 
     // эффективность по портфелям/счетам
-    const portfolioIds = [
-      ...new Set([
-        ...positions.map((p) => p.portfolioId),
-        ...strategyRows.flatMap((r) => (r.portfolioId ? [r.portfolioId] : [])),
-      ]),
-    ];
+    const portfolioIds = [...new Set(positions.map((p) => p.portfolioId))];
     const byPortfolio = portfolioIds
       .map((portfolioId) => ({
         portfolioId,
@@ -455,7 +457,7 @@ export class OperationsService {
           positions.filter((p) => p.portfolioId === portfolioId),
           today,
           filter.from,
-          strategyNetInPeriod(strategyRows.filter((r) => r.portfolioId === portfolioId), filter.from),
+          futureIds,
         ),
       }))
       .sort((a, b) => b.pnlRub - a.pnlRub);
@@ -466,20 +468,13 @@ export class OperationsService {
       .map((p) => ({ ticker: p.ticker, pnlRub: Number(p.pnlRub) }))
       .sort((a, b) => b.pnlRub - a.pnlRub);
 
-    const totals = this.effectiveness(
-      opsUpTo,
-      positions,
-      today,
-      filter.from,
-      strategyNetInPeriod(strategyRows, filter.from),
-    );
+    const totals = this.effectiveness(opsUpTo, positions, today, filter.from, futureIds);
 
     // Свободные деньги считаем по opsUpTo, т.е. по ВСЕЙ истории до `till` и намеренно
     // без `filter.from`: остаток на счёте — величина на момент, а не за период
     // (см. cash.ts). Фильтр по системе/портфелю при этом действует — он уже применён
     // к opsUpTo, и срез по портфелю даёт остаток именно этого счёта.
-    // Реализованный net срочных стратегий — тоже деньги на счёте: прибавляем весь net до `till`
-    const cashRub = cashBalanceRub(opsUpTo).plus(strategyNetInPeriod(strategyRows)).toNumber();
+    const cashRub = cashBalanceRub(opsUpTo, futureIds).toNumber();
     const cash = { cashRub, totalValueRub: totals.currentValueRub + cashRub };
 
     return { timeline, bySystem, byPortfolio, breakdown, totals, cash };
@@ -532,9 +527,9 @@ export class OperationsService {
     ops: Operation[],
     positions: Position[],
     today: string,
-    periodFrom?: string,
-    /** реализованный net срочных стратегий за период: входит в «Реализ.» и «P&L» (в XIRR не входит) */
-    strategyNet: Decimal = new Decimal(0),
+    periodFrom: string | undefined,
+    /** фьючерсные инструменты: вне XIRR и ROI, их результат — в P&L */
+    futureIds: ReadonlySet<string>,
   ): Effectiveness {
     const periodOps = periodFrom ? ops.filter((o) => o.date >= periodFrom) : ops;
 
@@ -544,15 +539,28 @@ export class OperationsService {
       if (op.operationType !== 'Dividend' && op.operationType !== 'Coupon') return s;
       return s + Number(op.quantity) * Number(op.price) * Number(op.fxRate);
     }, 0);
-    const realizedPnlRub =
-      realizedPnlInRange(ops, periodFrom).reduce((s, r) => s + r.realizedPnlRub.toNumber(), 0) + strategyNet.toNumber();
+    const realized = realizedPnlInRange(ops, periodFrom, undefined, { futureIds });
+    const realizedPnlRub = realized.reduce((s, r) => s + r.realizedPnlRub.toNumber(), 0);
     const unrealizedPnlRub = positions.reduce(
-      (s, p) => (p.currentValueRub === null ? s : s + (Number(p.currentValueRub) - Number(p.investedRub))),
+      (s, p) =>
+        p.currentValueRub === null ? s : s + (Number(p.currentValueRub) - Number(p.investedRub)),
       0,
     );
     const pnlRub = realizedPnlRub + unrealizedPnlRub + dividendsRub;
 
-    const flows = periodCashFlows(ops, periodFrom, currentValueRub, today);
+    // Фьючерсы вне XIRR (их денежных вложений нет — оценка это нереализованный результат)
+    // и вне ROI (результат без знаменателя исказил бы процент): считаем «без них».
+    const futuresPnlRub =
+      realized
+        .filter((r) => futureIds.has(r.instrumentId))
+        .reduce((s, r) => s + r.realizedPnlRub.toNumber(), 0) +
+      positions
+        .filter((p) => futureIds.has(p.instrumentId))
+        .reduce((s, p) => s + Number(p.currentValueRub ?? 0), 0);
+    const spotValueRub = positions
+      .filter((p) => !futureIds.has(p.instrumentId))
+      .reduce((s, p) => s + Number(p.currentValueRub ?? 0), 0);
+    const flows = periodCashFlows(ops, periodFrom, spotValueRub, today, futureIds);
     const rate = xirr(flows);
 
     return {
@@ -562,7 +570,7 @@ export class OperationsService {
       unrealizedPnlRub,
       dividendsRub,
       pnlRub,
-      roiPct: investedRub > 0 ? (pnlRub / investedRub) * 100 : null,
+      roiPct: investedRub > 0 ? ((pnlRub - futuresPnlRub) / investedRub) * 100 : null,
       dividendYieldPct: investedRub > 0 ? (dividendsRub / investedRub) * 100 : null,
       xirrPct: rate === null ? null : rate * 100,
     };
@@ -576,19 +584,6 @@ export class OperationsService {
 function trimZeros(value: string): string {
   if (!value.includes('.')) return value;
   return value.replace(/\.?0+$/, '') || '0';
-}
-
-/** Строка ленты результата стратегии с портфелем из её конфига */
-interface StrategyNetRow {
-  systemId: string;
-  portfolioId: string | null;
-  date: string;
-  netRub: string;
-}
-
-/** Сумма net стратегий за период (без `from` — вся история); Decimal, чтобы копейки не плыли */
-function strategyNetInPeriod(rows: StrategyNetRow[], from?: string): Decimal {
-  return rows.reduce((s, r) => (!from || r.date >= from ? s.plus(r.netRub) : s), new Decimal(0));
 }
 
 function rowToOperation(row: OperationRow): Operation {
@@ -608,6 +603,7 @@ function rowToOperation(row: OperationRow): Operation {
     tradeId: row.tradeId,
     note: row.note ?? undefined,
     brokerRef: row.brokerRef ?? undefined,
+    executedAt: row.executedAt,
     importBatchId: row.importBatchId,
   };
 }

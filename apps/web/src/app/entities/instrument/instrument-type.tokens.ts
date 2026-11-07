@@ -16,10 +16,11 @@ export const TYPE_LABEL: Record<InstrumentType, string> = {
   Currency: 'Валюта',
   Crypto: 'Крипта',
   Cash: 'Кэш',
+  Future: 'Фьючерсы',
 };
 
 /** Порядок групп на странице «Портфель» — от самого частого типа к редкому */
-export const TYPE_ORDER: InstrumentType[] = ['Stock', 'Bond', 'ETF', 'Currency', 'Crypto', 'Cash'];
+export const TYPE_ORDER: InstrumentType[] = ['Stock', 'Bond', 'ETF', 'Currency', 'Crypto', 'Future', 'Cash'];
 
 export const TYPE_COLOR: Record<InstrumentType, string> = {
   Stock: seriesColor(0),
@@ -27,6 +28,7 @@ export const TYPE_COLOR: Record<InstrumentType, string> = {
   Currency: seriesColor(2),
   ETF: seriesColor(3),
   Crypto: seriesColor(6),
+  Future: seriesColor(4),
   // Кэш — не «ещё один инструмент», а нейтральный остаток: берём нейтральный
   // смысловой цвет, а не следующий оттенок из палитры серий
   Cash: chartSemantic(false).neutral,

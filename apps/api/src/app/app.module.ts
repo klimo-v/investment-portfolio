@@ -4,13 +4,12 @@ import { OperationsModule } from './modules/operations/operations.module';
 import { PortfoliosModule } from './modules/portfolios/portfolios.module';
 import { ImportModule } from './modules/import/import.module';
 import { SnapshotsModule } from './modules/snapshots/snapshots.module';
-import { StrategiesModule } from './modules/strategies/strategies.module';
 
 /**
  * Корневой модуль. В Фазе 4 добавляется модуль quotes
  * (см. docs/04-roadmap.md и CLAUDE.md §2).
  */
 @Module({
-  imports: [DrizzleModule, OperationsModule, PortfoliosModule, ImportModule, SnapshotsModule, StrategiesModule],
+  imports: [DrizzleModule, OperationsModule, PortfoliosModule, ImportModule, SnapshotsModule],
 })
 export class AppModule {}

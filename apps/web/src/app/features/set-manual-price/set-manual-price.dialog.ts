@@ -10,6 +10,8 @@ export interface SetManualPriceData {
   currency: string;
   /** Средняя цена покупки — стартовое значение, чтобы не вводить с нуля */
   avgBuyPrice: string;
+  /** Фьючерс: цена вводится в ₽ за контракт (с учётом множителя серии), а не за «штуку» */
+  perContract?: boolean;
 }
 
 export interface SetManualPriceResult {
@@ -34,7 +36,7 @@ export interface SetManualPriceResult {
         цены» её не тронет, обновлять придётся самостоятельно.
       </p>
       <mat-form-field appearance="outline">
-        <mat-label>Цена, {{ data.currency }}</mat-label>
+        <mat-label>{{ data.perContract ? 'Цена, ₽ за контракт' : 'Цена, ' + data.currency }}</mat-label>
         <input matInput type="number" [formField]="priceForm.price" />
       </mat-form-field>
     </mat-dialog-content>

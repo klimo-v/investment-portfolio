@@ -13,6 +13,7 @@ export const InstrumentType = z.enum([
   'Currency',
   'Crypto',
   'Cash',
+  'Future', // срочный контракт: позиция со знаком (шорт допустим), цена в ₽ за контракт
 ]);
 export type InstrumentType = z.infer<typeof InstrumentType>;
 
@@ -55,6 +56,8 @@ export const OperationSchema = z.object({
   tradeId: z.string().nullish(),
   note: z.string().nullish(),
   brokerRef: z.string().nullish(),
+  /** время сделки «ЧЧ:ММ:СС» — порядок внутри дня (важен для шортов по фьючерсам) */
+  executedAt: z.string().regex(/^\d{2}:\d{2}:\d{2}$/, 'Время в формате ЧЧ:ММ:СС').nullish(),
   importBatchId: z.string().nullish(),
 });
 export type Operation = z.infer<typeof OperationSchema>;
@@ -330,8 +333,6 @@ export const SnapshotInvalidationKind = z.enum([
   'merge',
   'import-commit',
   'import-rollback',
-  /** пересчёт или удаление результата срочной стратегии (лента strategy_daily_results) */
-  'strategy-sync',
 ]);
 export type SnapshotInvalidationKind = z.infer<typeof SnapshotInvalidationKind>;
 

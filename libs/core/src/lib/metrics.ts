@@ -1,5 +1,6 @@
 import Decimal from 'decimal.js';
 import type { Operation } from './schemas';
+import { compareOperations } from './operation-order';
 
 /**
  * Метрики эффективности портфеля/системы (docs/05-review-usability.md §1).
@@ -41,7 +42,9 @@ interface Lot {
  * портфель), не только периодные — себестоимость лотов иначе была бы искажена.
  * `periodFrom` — начало периода (undefined/null → без периода, потоки строятся по
  * всей истории без синтетики). `currentValueRub` — терминальная стоимость остатка
- * сегодня (0 → терминальный поток не добавляется).
+ * сегодня (0 → терминальный поток не добавляется). `futureIds` — фьючерсные
+ * инструменты, которые из потоков исключаются (в XIRR их нет: денежно-взвешенной
+ * доходности на нулевых вложениях не существует).
  *
  * Пройдены и отброшены три неверных варианта (числовой пример: 100 акций по
  * 1000₽ куплено ДО periodFrom, 50 продано по 1200₽ ВНУТРИ периода, остаток 50
@@ -87,8 +90,9 @@ export function periodCashFlows(
   periodFrom: string | undefined,
   currentValueRub: number,
   today: string = new Date().toISOString().slice(0, 10),
+  futureIds?: ReadonlySet<string>,
 ): CashFlow[] {
-  const sorted = [...ops].sort((a, b) => a.date.localeCompare(b.date));
+  const sorted = [...ops].sort(compareOperations);
   const flows: CashFlow[] = [];
   const queues = new Map<string, Lot[]>();
 
@@ -102,6 +106,8 @@ export function periodCashFlows(
       continue;
     }
     if (!op.instrumentId || op.operationType === 'Transfer') continue;
+    // фьючерсы вне XIRR: «вложено» у них 0, а результат идёт через вариацию цены
+    if (futureIds?.has(op.instrumentId)) continue;
 
     const key = positionKey(op);
     let queue = queues.get(key);

@@ -179,12 +179,7 @@ interface Group {
         [value]="dividendsTotal()"
         [hint]="dividendsHint"
       />
-      <app-kpi-card
-        label="P&L (₽)"
-        [value]="pnlTotal()"
-        [tone]="pnlTone()"
-        [hint]="pnlHint"
-      />
+      <app-kpi-card label="P&L (₽)" [value]="pnlTotal()" [tone]="pnlTone()" [hint]="pnlHint" />
     </div>
 
     @if (positionApi.positions.error()) {
@@ -223,6 +218,13 @@ interface Group {
                 <h3>{{ g.label }}</h3>
                 <span class="group-total">{{ money(g.valueRub) }}</span>
               </div>
+              @if (g.type === 'Future') {
+                <p class="group-note">
+                  Цены — в ₽ за контракт. Количество со знаком: минус — короткая позиция (шорт).
+                  «Стоимость» — нереализованный результат по расчётной цене: вложений у фьючерса
+                  нет. В XIRR и ROI фьючерсы не входят, их результат учтён только в P&L.
+                </p>
+              }
               <table mat-table [dataSource]="g.rows">
                 <ng-container matColumnDef="ticker">
                   <th mat-header-cell *matHeaderCellDef>Тикер</th>
@@ -262,19 +264,25 @@ interface Group {
                   <th mat-header-cell *matHeaderCellDef></th>
                   <td mat-cell *matCellDef="let r">
                     @if (r.suspicious) {
-                      <button
-                        mat-icon-button
-                        (click)="resolvePrice(r)"
-                        aria-label="Найти цену на бирже"
-                        matTooltip="Проверить, не торгуется ли этот инструмент на MOEX/Binance под тем же тикером — импорт из отчёта заводит новые бумаги без автоисточника цены, даже когда биржа их знает."
-                      >
-                        <mat-icon>travel_explore</mat-icon>
-                      </button>
+                      @if (r.type !== 'Future') {
+                        <button
+                          mat-icon-button
+                          (click)="resolvePrice(r)"
+                          aria-label="Найти цену на бирже"
+                          matTooltip="Проверить, не торгуется ли этот инструмент на MOEX/Binance под тем же тикером — импорт из отчёта заводит новые бумаги без автоисточника цены, даже когда биржа их знает."
+                        >
+                          <mat-icon>travel_explore</mat-icon>
+                        </button>
+                      }
                       <button
                         mat-icon-button
                         (click)="setManualPrice(r)"
                         aria-label="Указать цену вручную"
-                        matTooltip="Если на бирже её не найти (внебиржевой актив) — введите цену сами."
+                        [matTooltip]="
+                          r.type === 'Future'
+                            ? 'Расчётную цену фьючерса (₽ за контракт) подставляет импорт отчёта брокера; если её нет — введите сами.'
+                            : 'Если на бирже её не найти (внебиржевой актив) — введите цену сами.'
+                        "
                       >
                         <mat-icon>edit</mat-icon>
                       </button>
@@ -371,6 +379,11 @@ interface Group {
         font-weight: 500;
       }
       .group-total {
+        color: var(--app-text-muted);
+      }
+      .group-note {
+        margin: 4px 8px 0;
+        font-size: 12px;
         color: var(--app-text-muted);
       }
       table {
@@ -521,9 +534,15 @@ export class PortfolioPage {
     });
   });
 
-  /** Доли распределения для круговой диаграммы — цвет закреплён за типом инструмента */
+  /**
+   * Доли распределения для круговой диаграммы — цвет закреплён за типом инструмента.
+   * Фьючерсы в диаграмму не входят: их «стоимость» — нереализованный результат (может
+   * быть отрицательной), а не доля капитала, и сектор круга для неё не имеет смысла.
+   */
   protected readonly allocation = computed(() =>
-    this.groups().map((g) => ({ label: g.label, valueRub: g.valueRub, color: TYPE_COLOR[g.type] })),
+    this.groups()
+      .filter((g) => g.type !== 'Future')
+      .map((g) => ({ label: g.label, valueRub: g.valueRub, color: TYPE_COLOR[g.type] })),
   );
 
   /**
@@ -618,7 +637,11 @@ export class PortfolioPage {
   }
 
   protected managePortfolios(): void {
-    this.dialog.open(ManagePortfoliosDialog, { autoFocus: false, width: '760px', maxWidth: '95vw' });
+    this.dialog.open(ManagePortfoliosDialog, {
+      autoFocus: false,
+      width: '760px',
+      maxWidth: '95vw',
+    });
   }
 
   protected manageSystems(): void {
@@ -659,7 +682,12 @@ export class PortfolioPage {
   protected async setManualPrice(row: Row): Promise<void> {
     const ref = this.dialog.open(SetManualPriceDialog, {
       autoFocus: false,
-      data: { ticker: row.ticker, currency: row.currency, avgBuyPrice: row.avgRaw },
+      data: {
+        ticker: row.ticker,
+        currency: row.currency,
+        avgBuyPrice: row.avgRaw,
+        perContract: row.type === 'Future',
+      },
     });
     const result = await firstValueFrom(ref.afterClosed());
     if (!result) return;

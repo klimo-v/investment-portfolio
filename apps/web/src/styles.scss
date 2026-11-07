@@ -194,30 +194,3 @@ td.pnl-zero,
   background-color: #0277bd !important;
 }
 
-/* Таблицы среза «ЮВ1» (страница /yv1): плотные, числа выровнены вправо */
-.yv1-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 13px;
-}
-.yv1-table th,
-.yv1-table td {
-  padding: 6px 10px;
-  text-align: left;
-  border-bottom: 1px solid var(--app-outline);
-  white-space: nowrap;
-}
-.yv1-table th {
-  font-weight: 500;
-  color: var(--app-text-muted);
-}
-.yv1-table td.num,
-.yv1-table th.num {
-  text-align: right;
-  font-variant-numeric: tabular-nums;
-}
-
-/* Горизонтальная прокрутка широких таблиц среза «ЮВ1» (13 колонок не умещаются в карточку) */
-.table-scroll {
-  overflow-x: auto;
-}

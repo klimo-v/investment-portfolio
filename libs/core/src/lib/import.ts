@@ -50,6 +50,17 @@ export interface RawRow {
    * находятся в справочнике (apps/api/.../import.service.ts, ensureInstruments).
    */
   name?: string;
+  /**
+   * Время сделки «ЧЧ:ММ:СС» (если брокер его указывает). Нужно для порядка сделок
+   * внутри дня — от него зависит результат по шортам (фьючерсы).
+   */
+  time?: string;
+  /**
+   * Причина, по которой строку нельзя импортировать (напр. опцион или неизвестная
+   * серия фьючерса). Если задана, `normalizeRow` возвращает ошибку с этим текстом,
+   * и операция не создаётся — пользователь видит строку с понятной причиной.
+   */
+  skipReason?: string;
 }
 
 /** Результат нормализации одной строки */
@@ -88,6 +99,12 @@ export function normalizeDate(raw: string): string | null {
     return `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
   }
   return null;
+}
+
+/** Время «ЧЧ:ММ[:СС]» → «ЧЧ:ММ:СС»; нераспознанное — undefined */
+function normalizeTime(raw: string | undefined): string | undefined {
+  const m = raw?.trim().match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?$/);
+  return m ? `${m[1].padStart(2, '0')}:${m[2]}:${m[3] ?? '00'}` : undefined;
 }
 
 /** Убирает разделители разрядов и приводит к десятичной строке */
@@ -170,6 +187,8 @@ export function normalizeRow(
     systemChosenForTicker?: (ticker?: string) => boolean;
   },
 ): NormalizedRow | { error: string } {
+  if (raw.skipReason) return { error: raw.skipReason };
+
   const date = normalizeDate(raw.date);
   if (!date) return { error: `Не удалось распознать дату: "${raw.date}"` };
 
@@ -224,6 +243,7 @@ export function normalizeRow(
     currency: (raw.currency ?? 'RUB').trim() || 'RUB',
     note: raw.note?.trim() || undefined,
     brokerRef: raw.brokerRef,
+    executedAt: normalizeTime(raw.time),
   };
 
   return { operation, confidence, reason, dedupeKey: makeDedupeKey(operation), systemUncertain };

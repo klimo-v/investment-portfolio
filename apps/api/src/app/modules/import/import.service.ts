@@ -2,13 +2,26 @@ import { randomUUID } from 'node:crypto';
 import { BadRequestException, Inject, Injectable } from '@nestjs/common';
 import { desc, eq } from 'drizzle-orm';
 import ExcelJS from 'exceljs';
-import { normalizeRow, makeDedupeKey, parseBrokerHtmlReport, type RawRow, type Operation } from '@core';
+import {
+  normalizeRow,
+  makeDedupeKey,
+  parseBrokerHtmlReportWithMarks,
+  type RawRow,
+  type Operation,
+  type FuturesMark,
+} from '@core';
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
-import { operations, systems, portfolios, instruments, type InstrumentRow } from '../../../db/schema';
+import { operations, systems, portfolios, instruments, quotes, type InstrumentRow } from '../../../db/schema';
 import { DB } from '../../db/drizzle.module';
 import { recordSnapshotInvalidation } from '../../../db/snapshot-invalidations';
 import { parseCsv } from './csv-parser';
 import { parseTbankXlsx } from './tbank-xlsx-report';
+
+/** Результат разбора файла, лежащий в кэше загрузок */
+interface ParsedUpload {
+  rows: RawRow[];
+  marks: FuturesMark[];
+}
 
 /** Одна строка предпросмотра импорта */
 export interface PreviewRow {
@@ -26,6 +39,8 @@ export interface PreviewRow {
 export interface PreviewResult {
   rows: PreviewRow[];
   summary: { total: number; ok: number; warn: number; error: number; duplicate: number };
+  /** Расчётные цены фьючерсов из отчёта — при commit() сохраняются как цена инструмента на дату отчёта */
+  marks: FuturesMark[];
   /** Id уже распарсенного файла — передать в следующий preview()/commit() вместо content (см. ImportInput) */
   uploadId: string;
 }
@@ -44,7 +59,7 @@ export type ImportFormat = 'csv' | 'html' | 'xlsx';
  */
 const ISIN_RE = /^RU[A-Z0-9]{9}\d$/;
 
-const INSTRUMENT_TYPES = new Set(['Stock', 'Bond', 'ETF', 'Currency', 'Crypto', 'Cash']);
+const INSTRUMENT_TYPES = new Set(['Stock', 'Bond', 'ETF', 'Currency', 'Crypto', 'Cash', 'Future']);
 
 /** Точное совпадение имени после схлопывания пробелов/регистра — намеренно без
  * нечёткого фаззи-матчинга, чтобы не склеить случайно два разных инструмента */
@@ -99,20 +114,22 @@ export class ImportService {
    * (см. ImportInput). Однопользовательское локальное приложение — простой
    * Map с ограничением размера вместо TTL/внешнего кэша (YAGNI).
    */
-  private readonly uploads = new Map<string, RawRow[]>();
+  private readonly uploads = new Map<string, ParsedUpload>();
   private static readonly MAX_UPLOADS = 20;
 
   /** Строки файла: из кэша по uploadId либо свежий разбор content (Factory: формат → парсер) */
-  private async resolveRawRows(input: ImportInput): Promise<{ rows: RawRow[]; uploadId: string }> {
+  private async resolveRawRows(
+    input: ImportInput,
+  ): Promise<{ rows: RawRow[]; marks: FuturesMark[]; uploadId: string }> {
     if (input.uploadId) {
       const cached = this.uploads.get(input.uploadId);
-      if (cached) return { rows: cached, uploadId: input.uploadId };
+      if (cached) return { ...cached, uploadId: input.uploadId };
       if (!input.content) {
         throw new BadRequestException('Файл больше не в кэше — выберите его заново');
       }
     }
-    const rows = await this.parseFile(input.content ?? '', input.format);
-    return { rows, uploadId: this.stashRawRows(rows, input.uploadId) };
+    const parsed = await this.parseFile(input.content ?? '', input.format);
+    return { ...parsed, uploadId: this.stashRawRows(parsed.rows, input.uploadId, parsed.marks) };
   }
 
   /**
@@ -123,9 +140,9 @@ export class ImportService {
    * после чего фронт вызывает те же самые preview()/commit() с этим uploadId —
    * весь конвейер ниже парсера остаётся общим для файлов и API (CLAUDE.md §7, DRY).
    */
-  stashRawRows(rows: RawRow[], reuseId?: string): string {
+  stashRawRows(rows: RawRow[], reuseId?: string, marks: FuturesMark[] = []): string {
     const uploadId = reuseId ?? randomUUID();
-    this.uploads.set(uploadId, rows);
+    this.uploads.set(uploadId, { rows, marks });
     if (this.uploads.size > ImportService.MAX_UPLOADS) {
       const oldest = this.uploads.keys().next().value;
       if (oldest) this.uploads.delete(oldest);
@@ -308,7 +325,8 @@ export class ImportService {
     }
 
     for (const raw of rawRows) {
-      if (!raw.ticker) continue;
+      // строка, которую нельзя импортировать (опцион, неизвестная серия), инструмент не заводит
+      if (!raw.ticker || raw.skipReason) continue;
       const t = raw.ticker.toLowerCase();
       const isinLike = ISIN_RE.test(raw.ticker) ? raw.ticker : null;
       const name = normalizeName(raw.name);
@@ -353,7 +371,7 @@ export class ImportService {
    * Разбор исходного файла нужным парсером (Factory: формат → парсер). xlsx —
    * бинарный формат, `content` для него — base64 (CSV/HTML передаются текстом).
    */
-  private async parseFile(content: string, format: ImportFormat = 'csv'): Promise<RawRow[]> {
+  private async parseFile(content: string, format: ImportFormat = 'csv'): Promise<ParsedUpload> {
     if (format === 'xlsx') {
       const workbook = new ExcelJS.Workbook();
       // exceljs резолвит собственную (более старую) версию @types/node с иначе
@@ -367,9 +385,10 @@ export class ImportService {
       // результат (проверено побайтовым сравнением), а разбор занимает ~200мс.
       await workbook.xlsx.load(buf, { ignoreNodes: ['mergeCells'] });
       const ws = workbook.worksheets[0];
-      return ws ? parseTbankXlsx(ws) : [];
+      return { rows: ws ? parseTbankXlsx(ws) : [], marks: [] };
     }
-    return format === 'html' ? parseBrokerHtmlReport(content) : parseCsv(content);
+    if (format === 'html') return parseBrokerHtmlReportWithMarks(content);
+    return { rows: parseCsv(content), marks: [] };
   }
 
   /** Существующие ключи дедупликации (чтобы не задвоить при повторной загрузке) */
@@ -396,7 +415,7 @@ export class ImportService {
 
   /** Предпросмотр (dry-run): распознаёт строки, но ничего не пишет */
   async preview(input: ImportInput): Promise<PreviewResult> {
-    const { rows: rawRows, uploadId } = await this.resolveRawRows(input);
+    const { rows: rawRows, marks, uploadId } = await this.resolveRawRows(input);
     const resolvers = this.buildResolvers(rawRows, {
       systemId: input.systemId,
       portfolioId: input.portfolioId,
@@ -444,7 +463,7 @@ export class ImportService {
       error: rows.filter((r) => r.confidence === 'error').length,
       duplicate: rows.filter((r) => r.confidence === 'duplicate').length,
     };
-    return { rows, summary, uploadId };
+    return { rows, summary, marks, uploadId };
   }
 
   /** Импорт: сохраняет все ok/warn строки (не error, не duplicate) под общим batchId */
@@ -480,6 +499,7 @@ export class ImportService {
           currency: row.operation.currency,
           note: row.operation.note ?? null,
           brokerRef: row.operation.brokerRef ?? null,
+          executedAt: row.operation.executedAt ?? null,
           importBatchId: batchId,
         })
         .run();
@@ -494,6 +514,7 @@ export class ImportService {
       }
     }
 
+    this.saveMarks(preview.marks);
     this.uploads.delete(preview.uploadId);
 
     // Импорт задним числом меняет то, что должно было быть посчитано на прошлые даты
@@ -509,6 +530,37 @@ export class ImportService {
     }
 
     return { batchId, imported };
+  }
+
+  /**
+   * Расчётные цены фьючерсов из отчёта → цена инструмента на дату отчёта (источник
+   * `manual`, валюта RUB). Только для существующих инструментов с marketSource='manual'
+   * (у остальных есть свой провайдер котировок). Более свежую цену не затираем:
+   * даты сравниваем по первым 10 символам ISO-строки `asOf`. Откат импорта цену не
+   * возвращает — это ожидаемо (цена — факт рынка на дату, а не часть операций).
+   */
+  private saveMarks(marks: FuturesMark[]): void {
+    for (const mark of marks) {
+      const [inst] = this.db.select().from(instruments).where(eq(instruments.ticker, mark.ticker)).all();
+      if (!inst || inst.marketSource !== 'manual') continue;
+
+      const [current] = this.db.select().from(quotes).where(eq(quotes.instrumentId, inst.id)).all();
+      if (current && current.asOf.slice(0, 10) > mark.date) continue;
+
+      const values = {
+        price: mark.price,
+        currency: 'RUB',
+        accruedInterest: null,
+        accruedCurrency: null,
+        source: 'manual' as const,
+        asOf: `${mark.date}T00:00:00.000Z`,
+      };
+      this.db
+        .insert(quotes)
+        .values({ instrumentId: inst.id, ...values })
+        .onConflictDoUpdate({ target: quotes.instrumentId, set: values })
+        .run();
+    }
   }
 
   /**

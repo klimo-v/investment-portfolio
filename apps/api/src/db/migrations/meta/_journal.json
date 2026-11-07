@@ -92,6 +92,20 @@
       "when": 1794041349551,
       "tag": "0012_strategy_daily_results",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "6",
+      "when": 1794054070625,
+      "tag": "0013_operations_executed_at",
+      "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "6",
+      "when": 1794055704126,
+      "tag": "0014_drop_yv1_strategy_tables",
+      "breakpoints": true
     }
   ]
 }

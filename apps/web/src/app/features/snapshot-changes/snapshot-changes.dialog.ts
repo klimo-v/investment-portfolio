@@ -14,7 +14,6 @@ const KIND_LABELS: Record<SnapshotInvalidationKind, string> = {
   merge: 'слияние инструментов',
   'import-commit': 'импортированы задним числом',
   'import-rollback': 'откат импорта',
-  'strategy-sync': 'пересчёт результата стратегии',
 };
 
 /**

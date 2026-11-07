@@ -1,5 +1,6 @@
 import Decimal from 'decimal.js';
 import type { Operation } from './schemas';
+import { calculatePositions } from './engine';
 
 /**
  * Денежный остаток счёта («свободные деньги») — то, что лежит на счёте кэшем после
@@ -7,6 +8,9 @@ import type { Operation } from './schemas';
  * остаток нельзя посчитать «за 1 год», его можно посчитать только «на дату». Поэтому
  * функция принимает всю историю до нужной даты и не знает про `from` (см. вызов в
  * operations.service.ts — там срез уже сделан фильтром `till`).
+ *
+ * Фьючерсы (`futureIds`): их сделки кэш не двигают, вместо них прибавляется
+ * реализованный результат (за вычетом комиссий).
  *
  * Считается на decimal.js — деньги никогда не во float (CLAUDE.md §11).
  */
@@ -46,15 +50,30 @@ const CASH_SIGN: Record<Operation['operationType'], number> = {
  * комиссий, приходящих отдельными строками) либо позиции набирались с плечом.
  * Прятать такой остаток нельзя — он и есть индикатор неполноты журнала.
  */
-export function cashBalanceRub(operations: Operation[]): Decimal {
+export function cashBalanceRub(
+  operations: Operation[],
+  futureIds?: ReadonlySet<string>,
+): Decimal {
   let cash = new Decimal(0);
 
   for (const op of operations) {
+    // фьючерсы двигают деньги не сделкой «купил-заплатил», а результатом (см. ниже)
+    if (futureIds && op.instrumentId && futureIds.has(op.instrumentId)) continue;
+
     const fxRate = new Decimal(op.fxRate ?? '1');
     const amount = new Decimal(op.quantity).mul(op.price).mul(fxRate);
     const fee = new Decimal(op.fee ?? '0').mul(fxRate);
 
     cash = cash.plus(amount.mul(CASH_SIGN[op.operationType])).minus(fee);
+  }
+
+  // Фьючерс: деньги двигает только реализованный результат по цене, уже за вычетом
+  // комиссий (способ А, futures-engine.ts). Считаем тем же движком по тем же операциям,
+  // чтобы срез по дате (`till`) и результат не могли разойтись.
+  if (futureIds && futureIds.size > 0) {
+    for (const pos of calculatePositions(operations, { futureIds })) {
+      if (futureIds.has(pos.instrumentId)) cash = cash.plus(pos.realizedPnlRub);
+    }
   }
 
   return cash;

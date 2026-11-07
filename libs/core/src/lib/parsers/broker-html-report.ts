@@ -1,4 +1,5 @@
-import type { RawRow } from '../import';
+import { normalizeDate, type RawRow } from '../import';
+import { futuresMultiplier, scaleByPowerOfTen } from '../futures';
 
 /**
  * Парсер HTML-отчёта брокера (формат «Отчет брокера», торговый код в шапке —
@@ -12,6 +13,10 @@ import type { RawRow } from '../import';
  *  - Из «Движения ДС» берём только то, чего нет в сделках: дивиденды, купоны,
  *    зачисления/списания денег.
  *  - Валютные/товарные сделки (GLD/RUB) — отдельная таблица с другими колонками.
+ *  - Срочные сделки (фьючерсы) — таблица «Срочные сделки» (12 колонок, Вид контракта
+ *    на индексе 4, Покупка/Продажа на 5). Цена и расчётная цена умножаются на
+ *    множитель серии (`FUTURES_SPECS`) — ₽ за контракт; вариационную маржу из
+ *    «Движения ДС» пропускаем (иначе двойной счёт с результатом по цене сделок).
  *  - `system` в отчёте отсутствует всегда — это разметка пользователя (§3.1),
  *    назначается на весь батч в UI импорта, здесь не заполняется.
  *  - `accountRef`/`accountKind` — признак СЧЁТА (не системы!): один файл в общем
@@ -227,6 +232,90 @@ function currencyTradeRows(rows: string[][], ctx: AccountContext): RawRow[] {
 }
 
 /**
+ * Срочные сделки (12 колонок): дата | дата расчётов | время | контракт | вид контракта |
+ * Покупка/Продажа | кол-во | цена | комиссия брокера | комиссия биржи | № сделки | комментарий.
+ * Колонки берём по индексам. Опционы и неизвестные серии отдаём строкой со `skipReason`
+ * (пользователь увидит причину), а не молча теряем.
+ */
+function futuresTradeRows(rows: string[][], ctx: AccountContext): RawRow[] {
+  const out: RawRow[] = [];
+  for (const c of rows) {
+    if (c.length !== 12 || !DATE_RE.test(c[0]) || !BUY_SELL.has(c[5])) continue;
+
+    const ticker = c[3];
+    const base: RawRow = {
+      date: c[0],
+      time: c[2] || undefined,
+      instrumentType: 'Future',
+      ticker,
+      currency: 'RUB',
+      tradeType: c[5],
+      quantity: clean(c[6]),
+      price: clean(c[7]),
+      fee: feeSum(c[8], c[9]),
+      note: c[10] ? `Сделка № ${c[10]}` : undefined,
+      brokerRef: c[10] || undefined,
+      accountRef: ctx.accountRef,
+      accountKind: ctx.accountKind,
+    };
+
+    if (c[4].toLowerCase() !== 'фьючерс') {
+      out.push({ ...base, skipReason: `Контракты вида «${c[4]}» не поддерживаются (${ticker})` });
+      continue;
+    }
+    const multiplier = futuresMultiplier(ticker);
+    if (!multiplier) {
+      out.push({ ...base, skipReason: `Неизвестная серия фьючерса "${ticker}": добавьте множитель в FUTURES_SPECS` });
+      continue;
+    }
+    if (!/^\d+(\.\d+)?$/.test(base.price ?? '')) {
+      out.push({ ...base, skipReason: `Не удалось разобрать цену "${c[7]}" (${ticker})` });
+      continue;
+    }
+    out.push({ ...base, price: scaleByPowerOfTen(base.price ?? '0', multiplier) });
+  }
+  return out;
+}
+
+/** Расчётная цена фьючерса на конец периода отчёта (₽ за контракт, уже с множителем) */
+export interface FuturesMark {
+  ticker: string;
+  /** ISO YYYY-MM-DD — конец периода отчёта */
+  date: string;
+  price: string;
+}
+
+/**
+ * «Срочный рынок» (10 колонок): код | вид | цена исполнения | дата исполнения |
+ * кол-во нач. | расч. цена нач. | кол-во кон. | расч. цена кон. | ВМ | плановая ВМ.
+ * Берём расчётную цену на конец периода (индекс 7). Дата — конец периода, её
+ * проставляет вызывающий (она в шапке отчёта, а не в строке).
+ */
+function futuresMarkCandidates(
+  rows: string[][],
+  expiries: Map<string, string>,
+): Array<{ ticker: string; price: string }> {
+  const out: Array<{ ticker: string; price: string }> = [];
+  for (const c of rows) {
+    if (c.length !== 10 || c[1].toLowerCase() !== 'фьючерс') continue;
+    // дата исполнения нужна для названия инструмента, даже если расчётной цены нет
+    if (DATE_RE.test(c[3])) expiries.set(c[0], c[3]);
+    if (!c[7]) continue;
+    const multiplier = futuresMultiplier(c[0]);
+    const price = clean(c[7]);
+    if (!multiplier || !/^\d+(\.\d+)?$/.test(price)) continue;
+    out.push({ ticker: c[0], price: scaleByPowerOfTen(price, multiplier) });
+  }
+  return out;
+}
+
+/** Конец периода отчёта («за период с 27.10.2026 по 05.11.2026») → ISO-дата */
+function reportPeriodEnd(text: string): string | null {
+  const m = plainText(text).match(/за период с \d{2}\.\d{2}\.\d{4} по (\d{2}\.\d{2}\.\d{4})/i);
+  return m ? normalizeDate(m[1]) : null;
+}
+
+/**
  * Движение денежных средств → RawRow[] только для того, чего нет в сделках:
  * дивиденды, купоны, зачисления/списания денег. Сделки и комиссии пропускаем.
  * Колонки: Дата | Площадка | Описание | Валюта | Зачисление | Списание.
@@ -279,22 +368,45 @@ function cashRow(
   };
 }
 
-/** Главная точка входа: HTML-отчёт → RawRow[] (контракт как у parseCsv) */
-export function parseBrokerHtmlReport(html: string): RawRow[] {
+/** Результат разбора отчёта: строки операций + расчётные цены фьючерсов */
+export interface BrokerReportParseResult {
+  rows: RawRow[];
+  marks: FuturesMark[];
+}
+
+/** Главная точка входа: HTML-отчёт → строки операций и расчётные цены фьючерсов */
+export function parseBrokerHtmlReportWithMarks(html: string): BrokerReportParseResult {
   const segments = segmentDocument(html);
   const tables = segments.flatMap((s) => (s.kind === 'table' ? [s.rows] : []));
   const ref = buildReference(tables);
 
   const out: RawRow[] = [];
+  const markCandidates: Array<{ ticker: string; price: string }> = [];
+  const expiries = new Map<string, string>();
+  let periodEnd: string | null = null;
   let ctx: AccountContext = {};
   for (const seg of segments) {
     if (seg.kind === 'text') {
       ctx = { ...ctx, ...detectAccountUpdates(seg.text) };
+      periodEnd ??= reportPeriodEnd(seg.text);
       continue;
     }
     out.push(...securityTradeRows(seg.rows, ref, ctx));
     out.push(...currencyTradeRows(seg.rows, ctx));
+    out.push(...futuresTradeRows(seg.rows, ctx));
     out.push(...cashFlowRows(seg.rows, ref, ctx));
+    markCandidates.push(...futuresMarkCandidates(seg.rows, expiries));
   }
-  return out;
+  // название фьючерса — с датой исполнения (она есть только в «Срочном рынке»)
+  for (const r of out) {
+    const expiry = r.instrumentType === 'Future' && r.ticker ? expiries.get(r.ticker) : undefined;
+    if (expiry && !r.name) r.name = `Фьючерс ${r.ticker}, исполнение ${expiry}`;
+  }
+  const marks = periodEnd ? markCandidates.map((m) => ({ ...m, date: periodEnd as string })) : [];
+  return { rows: out, marks };
+}
+
+/** HTML-отчёт → RawRow[] (контракт как у parseCsv); расчётные цены — в `parseBrokerHtmlReportWithMarks` */
+export function parseBrokerHtmlReport(html: string): RawRow[] {
+  return parseBrokerHtmlReportWithMarks(html).rows;
 }

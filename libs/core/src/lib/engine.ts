@@ -1,5 +1,7 @@
 import Decimal from 'decimal.js';
 import type { Operation } from './schemas';
+import { applyFutureFill, type FuturePosition } from './futures-engine';
+import { compareOperations } from './operation-order';
 
 /**
  * Движок расчётов позиций. Единственный источник финансовой логики (SRP, CLAUDE.md §7).
@@ -11,6 +13,15 @@ import type { Operation } from './schemas';
  */
 
 Decimal.set({ precision: 40 });
+
+/**
+ * Параметры расчёта. Движок не знает типов инструментов (в операции только
+ * instrumentId), поэтому набор фьючерсных id приходит снаружи: для них включается
+ * учёт позиции со знаком (futures-engine.ts), остальные считаются как раньше.
+ */
+export interface EngineOptions {
+  futureIds?: ReadonlySet<string>;
+}
 
 export interface PositionResult {
   instrumentId: string;
@@ -95,11 +106,14 @@ function d(value: string): Decimal {
  * Считает позиции из журнала операций методом средневзвешенной цены.
  * Переводы между портфелями (Transfer) не влияют на P&L инструмента.
  */
-export function calculatePositions(operations: Operation[]): PositionResult[] {
+export function calculatePositions(
+  operations: Operation[],
+  options: EngineOptions = {},
+): PositionResult[] {
   const map = new Map<string, PositionResult>();
 
   // операции обрабатываем в хронологическом порядке
-  const sorted = [...operations].sort((a, b) => a.date.localeCompare(b.date));
+  const sorted = [...operations].sort(compareOperations);
 
   for (const op of sorted) {
     // кэш-операции и переводы без инструмента не создают позицию
@@ -130,6 +144,18 @@ export function calculatePositions(operations: Operation[]): PositionResult[] {
     const price = d(op.price);
     const fee = d(op.fee ?? '0');
     const fxRate = d(op.fxRate ?? '1');
+
+    // фьючерс: позиция со знаком, комиссия сразу в реализованном; «вложено» = 0
+    if (options.futureIds?.has(op.instrumentId)) {
+      if (op.operationType === 'Buy' || op.operationType === 'Sell') {
+        pos.tradeCurrency = op.currency;
+        const fill = applyFutureFill(pos, op.operationType, qty, price, fee);
+        const net = fill.pnlCcy.minus(fill.feeCcy);
+        pos.realizedPnlCcy = pos.realizedPnlCcy.plus(net);
+        pos.realizedPnlRub = pos.realizedPnlRub.plus(net.mul(fxRate));
+      }
+      continue;
+    }
 
     switch (op.operationType) {
       case 'Buy': {
@@ -204,6 +230,7 @@ export function realizedPnlInRange(
   operations: Operation[],
   from?: string,
   till?: string,
+  options: EngineOptions = {},
 ): RealizedInRangeResult[] {
   const map = new Map<
     string,
@@ -219,7 +246,7 @@ export function realizedPnlInRange(
 
   const sorted = [...operations]
     .filter((op) => !till || op.date <= till)
-    .sort((a, b) => a.date.localeCompare(b.date));
+    .sort(compareOperations);
 
   for (const op of sorted) {
     if (!op.instrumentId) continue;
@@ -243,6 +270,17 @@ export function realizedPnlInRange(
     const price = d(op.price);
     const fee = d(op.fee ?? '0');
     const fxRate = d(op.fxRate ?? '1');
+
+    if (options.futureIds?.has(op.instrumentId)) {
+      if (op.operationType === 'Buy' || op.operationType === 'Sell') {
+        const fill = applyFutureFill(pos, op.operationType, qty, price, fee);
+        // результат с комиссией попадает в период по дате самой сделки
+        if (!from || op.date >= from) {
+          pos.realizedPnlRub = pos.realizedPnlRub.plus(fill.pnlCcy.minus(fill.feeCcy).mul(fxRate));
+        }
+      }
+      continue;
+    }
 
     if (op.operationType === 'Buy') {
       const cost = qty.mul(price).plus(fee);
@@ -311,11 +349,16 @@ export interface TradeResult {
  * когда остаток уходит в ноль. Если позиция открывается заново после закрытия —
  * это уже новая сделка (реальный кейс: купил-продал-купил снова).
  */
-export function calculateTrades(operations: Operation[]): TradeResult[] {
+export function calculateTrades(
+  operations: Operation[],
+  options: EngineOptions = {},
+): TradeResult[] {
   const closed: TradeResult[] = [];
   const open = new Map<string, TradeResult>();
 
-  const sorted = [...operations].sort((a, b) => a.date.localeCompare(b.date));
+  const sorted = [...operations].sort(compareOperations);
+  // позиция фьючерса по ключу (нужна, чтобы применять сделки по порядку)
+  const futurePos = new Map<string, FuturePosition>();
 
   for (const op of sorted) {
     if (!op.instrumentId) continue;
@@ -326,6 +369,13 @@ export function calculateTrades(operations: Operation[]): TradeResult[] {
     const price = d(op.price);
     const fee = d(op.fee ?? '0');
     const fxRate = d(op.fxRate ?? '1');
+
+    if (options.futureIds?.has(op.instrumentId)) {
+      if (op.operationType === 'Buy' || op.operationType === 'Sell') {
+        applyFutureTrade(op, op.operationType, qty, price, fee, fxRate, key, futurePos, open, closed);
+      }
+      continue;
+    }
 
     if (op.operationType === 'Buy') {
       let trade = open.get(key);
@@ -408,4 +458,104 @@ export function calculateTrades(operations: Operation[]): TradeResult[] {
   }
 
   return [...closed, ...open.values()];
+}
+
+/**
+ * Фьючерсная сделка в терминах «сделок» (trades): открывается, когда позиция уходит
+ * из нуля (в любую сторону), закрывается, когда возвращается в ноль. Переворот через
+ * ноль закрывает текущую сделку и открывает новую на остаток; комиссия делится
+ * пропорционально количеству. `quantity` у сделки — остаток со знаком, «вложено» = 0.
+ */
+function applyFutureTrade(
+  op: Operation,
+  side: 'Buy' | 'Sell',
+  qty: Decimal,
+  price: Decimal,
+  fee: Decimal,
+  fxRate: Decimal,
+  key: string,
+  futurePos: Map<string, FuturePosition>,
+  open: Map<string, TradeResult>,
+  closed: TradeResult[],
+): void {
+  let pos = futurePos.get(key);
+  if (!pos) {
+    pos = { quantity: new Decimal(0), avgBuyPrice: new Decimal(0) };
+    futurePos.set(key, pos);
+  }
+
+  const before = pos.quantity;
+  // часть сделки, закрывающая позицию, и часть, открывающая новую (при перевороте)
+  const closingQty = before.isZero()
+    ? new Decimal(0)
+    : before.isPositive() === (side === 'Buy')
+      ? new Decimal(0)
+      : Decimal.min(qty, before.abs());
+  const feeClose = qty.isZero() ? new Decimal(0) : fee.mul(closingQty).div(qty);
+  const feeOpen = fee.minus(feeClose);
+
+  const record = (trade: TradeResult, partQty: Decimal, partFee: Decimal, pnl: Decimal): void => {
+    const net = pnl.minus(partFee);
+    trade.realizedPnlCcy = trade.realizedPnlCcy.plus(net);
+    trade.realizedPnlRub = trade.realizedPnlRub.plus(net.mul(fxRate));
+    if (side === 'Buy') trade.qtyBought = trade.qtyBought.plus(partQty);
+    else trade.qtySold = trade.qtySold.plus(partQty);
+    if (op.id && !trade.operationIds.includes(op.id)) trade.operationIds.push(op.id);
+  };
+
+  const fill = applyFutureFill(pos, side, qty, price, fee);
+
+  // 1) закрывающая часть — в уже открытую сделку
+  if (fill.closedQty.gt(0)) {
+    const trade = open.get(key);
+    if (trade) {
+      record(trade, fill.closedQty, feeClose, fill.pnlCcy);
+      trade.quantity = pos.quantity.isZero() || fill.openedQty.gt(0) ? new Decimal(0) : pos.quantity;
+      if (pos.quantity.isZero() || fill.openedQty.gt(0)) {
+        trade.status = 'Closed';
+        trade.closedAt = op.date;
+        open.delete(key);
+        closed.push(trade);
+      } else {
+        // «Partial» = по сделке уже были закрытия; последующее наращивание статус не
+        // сбрасывает (qtySold/qtyBought показывают историю)
+        trade.status = 'Partial';
+        trade.avgBuyPrice = pos.avgBuyPrice;
+      }
+    }
+  }
+
+  // 2) открывающая часть — в новую сделку (первое открытие или остаток после переворота)
+  //    либо наращивание уже открытой
+  if (fill.openedQty.gt(0)) {
+    let trade = open.get(key);
+    if (!trade) {
+      trade = {
+        instrumentId: op.instrumentId as string,
+        systemId: op.systemId,
+        portfolioId: op.portfolioId,
+        status: 'Open',
+        quantity: new Decimal(0),
+        qtyBought: new Decimal(0),
+        qtySold: new Decimal(0),
+        avgBuyPrice: new Decimal(0),
+        investedCcy: new Decimal(0),
+        investedRub: new Decimal(0),
+        proceedsCcy: new Decimal(0),
+        proceedsRub: new Decimal(0),
+        realizedPnlCcy: new Decimal(0),
+        realizedPnlRub: new Decimal(0),
+        dividendsRub: new Decimal(0),
+        couponsRub: new Decimal(0),
+        tradeCurrency: op.currency,
+        openedAt: op.date,
+        closedAt: null,
+        operationIds: [],
+      };
+      open.set(key, trade);
+    }
+    record(trade, fill.openedQty, feeOpen, new Decimal(0));
+    trade.quantity = pos.quantity;
+    trade.avgBuyPrice = pos.avgBuyPrice;
+  }
 }
