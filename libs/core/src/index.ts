@@ -5,6 +5,8 @@ export * from './lib/engine';
 export * from './lib/cash';
 export * from './lib/metrics';
 export * from './lib/import';
+export * from './lib/isin';
+export * from './lib/instrument-identity';
 export * from './lib/futures';
 export * from './lib/futures-engine';
 export * from './lib/operation-order';

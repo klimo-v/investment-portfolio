@@ -1,6 +1,7 @@
 import Decimal from 'decimal.js';
 import { z } from 'zod';
 import { OperationType, type Operation } from './schemas';
+import { identityKey, type InstrumentIdentifiers, type InstrumentSuggestion } from './instrument-identity';
 
 /**
  * Движок импорта: нормализация «сырых» строк отчёта брокера в операции +
@@ -15,7 +16,17 @@ export interface RawRow {
   date: string; // любой распознаваемый формат даты
   system?: string;
   instrumentType?: string;
+  /**
+   * Биржевой тикер (только он). Валидный ISIN в этом поле шаг `normalizeRawRows` сам
+   * переносит в `identifiers.isin`, хвост «@» срезается там же.
+   */
   ticker?: string;
+  /**
+   * Структурированные идентификаторы инструмента, которые парсер реально знает
+   * (docs/02-data-model.md, «Идентичность инструментов»). Заполняет парсер, не
+   * дублируя их в `ticker`.
+   */
+  identifiers?: InstrumentIdentifiers;
   currency?: string;
   tradeType?: string; // Buy/Sell/Deposit/… или брокер-специфичное
   betweenPortfolios?: string; // "Да"/"Нет"/true
@@ -70,6 +81,17 @@ export interface RawRow {
    * и операция не создаётся — пользователь видит строку с понятной причиной.
    */
   skipReason?: string;
+}
+
+/** Итог резолва инструмента для одной строки (то, что нужно normalizeRow) */
+export interface InstrumentResolution {
+  instrumentId: string | null;
+  /** Идентификаторы указывают на разные инструменты и т. п. — строка не импортируется */
+  conflict?: string;
+  /** Инструмента ещё нет в справочнике (будет заведён при commit) */
+  isNew?: boolean;
+  /** Похожие существующие инструменты — подсказка для новой строки */
+  suggestions?: InstrumentSuggestion[];
 }
 
 /** Результат нормализации одной строки */
@@ -190,8 +212,11 @@ export function normalizeRow(
     resolveSystem: (name?: string, ticker?: string) => string | null;
     /** accountRef — признак счёта из отчёта (docs/04-roadmap.md §3.1), пробуется прежде батч-дефолта */
     resolvePortfolio: (accountRef?: string) => string | null;
-    /** name — резервный ключ, когда ticker/ISIN нет в справочнике (см. RawRow.name) */
-    resolveInstrument: (ticker?: string, name?: string) => string | null;
+    /**
+     * Резолв инструмента строки (core/instrument-identity.ts: planInstrumentIdentities).
+     * Принимает всю строку: ключи — идентификаторы, тикер и название (RawRow.name).
+     */
+    resolveInstrument: (raw: RawRow) => InstrumentResolution;
     /** true, если для тикера система выбрана явно в этом импорте (не батч-дефолт) */
     systemChosenForTicker?: (ticker?: string) => boolean;
   },
@@ -206,8 +231,10 @@ export function normalizeRow(
   // §3.1-подобный). Выбор системы должен быть ОДИН на реальный инструмент, а не
   // разный для каждого сырого кода — иначе одна и та же бумага молча расползается
   // на две позиции с разными системами (движок группирует по instrumentId+systemId).
-  const instrumentId = raw.ticker ? resolvers.resolveInstrument(raw.ticker, raw.name) : null;
-  const systemKey = instrumentId ?? raw.ticker;
+  const identity = resolvers.resolveInstrument(raw);
+  if (identity.conflict) return { error: identity.conflict };
+  const instrumentId = identity.instrumentId;
+  const systemKey = instrumentId ?? identityKey(raw);
 
   const systemId = resolvers.resolveSystem(raw.system, systemKey);
   const portfolioId = resolvers.resolvePortfolio(raw.accountRef);
@@ -237,6 +264,13 @@ export function normalizeRow(
   if (systemUncertain && confidence === 'ok') {
     confidence = 'warn';
     reason = `Система назначена по умолчанию — выберите систему для "${systemKey}"`;
+  }
+  // Новый инструмент, похожий на уже известный: связывать автоматически нельзя (решает
+  // человек), но молча заводить дубль тоже нельзя — подсказываем в предпросмотре.
+  const similar = identity.isNew ? identity.suggestions?.[0] : undefined;
+  if (similar && confidence === 'ok') {
+    confidence = 'warn';
+    reason = `Новый инструмент «${systemKey}» — возможно, это «${similar.ticker}» (${similar.reason}). Выберите существующий или оставьте новый.`;
   }
 
   const operation: Operation = {

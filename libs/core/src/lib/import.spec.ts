@@ -12,7 +12,7 @@ const resolvers = {
   resolveSystem: (n?: string) =>
     ({ Верников: 'vernikov', Верников_трейдинг: 'vernikov_trading' })[n ?? ''] ?? null,
   resolvePortfolio: () => 'tinkoff',
-  resolveInstrument: (t?: string) => t ?? null,
+  resolveInstrument: (r: RawRow) => ({ instrumentId: r.ticker ?? null }),
 };
 
 describe('normalizeDate', () => {
@@ -121,7 +121,7 @@ describe('normalizeRow — выбор системы по тикеру в рам
       return 'vernikov'; // батч-дефолт
     },
     resolvePortfolio: () => 'tinkoff',
-    resolveInstrument: (t?: string) => t ?? null,
+    resolveInstrument: (r: RawRow) => ({ instrumentId: r.ticker ?? null }),
     systemChosenForTicker: (ticker?: string) => ticker === 'SBER',
   };
 
@@ -155,7 +155,7 @@ describe('normalizeRow — выбор системы по тикеру в рам
     const res = normalizeRow(rawFor('SBMM'), {
       resolveSystem: () => 'vernikov',
       resolvePortfolio: () => 'tinkoff',
-      resolveInstrument: (t?: string) => t ?? null,
+      resolveInstrument: (r: RawRow) => ({ instrumentId: r.ticker ?? null }),
       // systemChosenForTicker не передан
     });
     if (!('operation' in res)) throw new Error('expected operation');
@@ -167,14 +167,14 @@ describe('normalizeRow — выбор системы по тикеру в рам
     const firstImport = normalizeRow(rawFor('SBER'), {
       resolveSystem: (n?: string, t?: string) => (t === 'SBER' ? 'vernikov_trading' : 'vernikov'),
       resolvePortfolio: () => 'tinkoff',
-      resolveInstrument: (t?: string) => t ?? null,
+      resolveInstrument: (r: RawRow) => ({ instrumentId: r.ticker ?? null }),
       systemChosenForTicker: (t?: string) => t === 'SBER',
     });
     // "новый импорт" — независимый вызов с другим выбором пользователя для того же тикера
     const secondImport = normalizeRow(rawFor('SBER'), {
       resolveSystem: (n?: string, t?: string) => (t === 'SBER' ? 'vernikov' : 'vernikov_trading'),
       resolvePortfolio: () => 'tinkoff',
-      resolveInstrument: (t?: string) => t ?? null,
+      resolveInstrument: (r: RawRow) => ({ instrumentId: r.ticker ?? null }),
       systemChosenForTicker: (t?: string) => t === 'SBER',
     });
     if (!('operation' in firstImport) || !('operation' in secondImport)) {
@@ -189,7 +189,9 @@ describe('normalizeRow — выбор системы по тикеру в рам
       resolveSystem: (n?: string, key?: string) => (key === 'SBER' ? 'vernikov_trading' : 'vernikov'),
       resolvePortfolio: () => 'tinkoff',
       // ISIN резолвится в тот же инструмент 'SBER', что и тикер
-      resolveInstrument: (t?: string) => (t === 'SBER' || t === 'RU0009029540' ? 'SBER' : (t ?? null)),
+      resolveInstrument: (r: RawRow) => ({
+        instrumentId: r.ticker === 'SBER' || r.ticker === 'RU0009029540' ? 'SBER' : (r.ticker ?? null),
+      }),
       systemChosenForTicker: (key?: string) => key === 'SBER',
     };
 

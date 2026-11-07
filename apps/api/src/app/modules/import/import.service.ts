@@ -273,17 +273,18 @@ export class ImportService {
         }
         return defaults?.portfolioId ?? null;
       },
-      resolveInstrument: (ticker?: string, name?: string) => {
+      resolveInstrument: (raw: RawRow) => {
+        const { ticker, name } = raw;
         if (ticker) {
           const hit = instrumentByTicker.get(ticker.toLowerCase()) ?? instrumentByIsin.get(ticker.toLowerCase());
-          if (hit) return hit;
+          if (hit) return { instrumentId: hit };
         }
         const n = normalizeName(name);
         if (n) {
           const hit = batchNameToInstrument.get(n) ?? instrumentByName.get(n);
-          if (hit) return hit;
+          if (hit) return { instrumentId: hit };
         }
-        return null;
+        return { instrumentId: null };
       },
     };
   }

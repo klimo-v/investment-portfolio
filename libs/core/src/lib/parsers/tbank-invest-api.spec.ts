@@ -232,7 +232,7 @@ describe('mapTbankOperations — фильтры и незнакомые типы
     const normalized = normalizeRow(rows[0], {
       resolveSystem: () => 'sys',
       resolvePortfolio: () => 'pf',
-      resolveInstrument: () => null,
+      resolveInstrument: () => ({ instrumentId: null }),
     });
     expect('error' in normalized).toBe(false);
     expect((normalized as { confidence: string }).confidence).toBe('warn');
@@ -291,7 +291,7 @@ describe('дедупликация с файловым импортом', () => 
     const resolvers = {
       resolveSystem: () => 'sys',
       resolvePortfolio: () => 'pf',
-      resolveInstrument: () => 'SBER',
+      resolveInstrument: () => ({ instrumentId: 'SBER' }),
     };
 
     const api = normalizeRow(fromApi, resolvers);
@@ -310,7 +310,7 @@ describe('дедупликация с файловым импортом', () => 
     const resolvers = {
       resolveSystem: () => 'sys',
       resolvePortfolio: () => 'pf',
-      resolveInstrument: () => 'SBER',
+      resolveInstrument: () => ({ instrumentId: 'SBER' }),
     };
     const keys = rows.map((r) => {
       const res = normalizeRow(r, resolvers);
