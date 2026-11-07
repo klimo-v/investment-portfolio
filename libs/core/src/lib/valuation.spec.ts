@@ -4,7 +4,7 @@ import type { Operation } from './schemas';
 import { calculateTrades, marketValueRub } from './engine';
 import { futureUnrealizedPnl } from './futures-engine';
 import { systemPerformance } from './performance';
-import { timeWeightedIndex, valuationSeries, type PriceObservation, type ValuationSeries } from './valuation';
+import { rebaseToPeriod, timeWeightedIndex, valuationSeries, type PriceObservation, type ValuationSeries } from './valuation';
 
 const base = { fee: '0', fxRate: '1', currency: 'RUB' } as const;
 const op = (o: Partial<Operation> & Pick<Operation, 'date' | 'operationType' | 'instrumentId'>): Operation =>
@@ -305,5 +305,26 @@ describe('выплаты без инструмента', () => {
     const trades = calculateTrades(ops.filter((o) => o.instrumentId));
     const p = systemPerformance(trades, { unrealizedOf: () => new Decimal(30), unattributedIncomeRub: '500' });
     expect(p.summary).toMatchObject({ incomeRub: '500.00', closedIncomeRub: '500.00', closedResultRub: '500.00', openResultRub: '30.00', totalRub: '530.00' });
+  });
+});
+
+describe('rebaseToPeriod: результат за период', () => {
+  const pt = (date: string, fixed: string, unrealized: string): ValuationPoint => ({
+    date, investedRub: '1000.00', marketValueRub: '1100.00', fixedRub: fixed, unrealizedRub: unrealized,
+    totalRub: new Decimal(fixed).plus(unrealized).toFixed(2), carried: [],
+  });
+  const full = [pt('2026-03-01', '0.00', '0.00'), pt('2026-03-02', '100.00', '20.00'), pt('2026-03-03', '150.00', '-30.00'), pt('2026-03-04', '150.00', '10.00')];
+
+  it('день до from = ноль: зафиксированное и переоценка сдвигаются каждое на свою базу', () => {
+    const r = rebaseToPeriod(full, '2026-03-03');
+    expect(r.map((p) => p.date)).toEqual(['2026-03-03', '2026-03-04']);
+    expect(r[0]).toMatchObject({ fixedRub: '50.00', unrealizedRub: '-50.00', totalRub: '0.00' });
+    expect(r[1]).toMatchObject({ fixedRub: '50.00', unrealizedRub: '-10.00', totalRub: '40.00' });
+    expect(r[0].investedRub).toBe('1000.00'); // состояние на день не трогаем
+  });
+
+  it('from не позже первой точки — без сдвига; from после ряда — пусто', () => {
+    expect(rebaseToPeriod(full, '2026-01-01')).toEqual(full);
+    expect(rebaseToPeriod(full, '2027-01-01')).toEqual([]);
   });
 });

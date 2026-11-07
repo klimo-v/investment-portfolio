@@ -129,6 +129,22 @@ describe('SystemPerformanceService', () => {
     expect(other.summary.incomeRub).toBe('0.00');
   });
 
+  it('фильтр from: кривая — результат ЗА период (на день до from — ноль), а не накопленный с начала', async () => {
+    const all = await service.performance('sys', {});
+    const win = await service.performance('sys', { from: '2026-11-04' });
+    const at = (r: typeof all, d: string) => r.series.result.find((x) => x.date === d)!;
+    expect(win.series.result[0].date).toBe('2026-11-04');
+    // 03.11: накопленное с начала = 184,70 (первый цикл); окно с 04.11 начинается от нуля
+    expect(at(all, '2026-11-03').totalRub).toBe('184.70');
+    expect(new Decimal(at(win, '2026-11-04').totalRub).toFixed(2)).toBe(
+      new Decimal(at(all, '2026-11-04').totalRub).minus(at(all, '2026-11-03').totalRub).toFixed(2),
+    );
+    // конец окна = конец полной кривой минус база: итог периода
+    expect(win.series.result.at(-1)!.totalRub).toBe(
+      new Decimal(all.series.result.at(-1)!.totalRub).minus(at(all, '2026-11-03').totalRub).toFixed(2),
+    );
+  });
+
   it('без котировки последняя точка кривой совпадает с «Всего» (оценки нет: переоценка 0)', async () => {
     db.delete(quotes).run();
     const p = await service.performance('sys', {});

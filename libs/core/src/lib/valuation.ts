@@ -371,3 +371,28 @@ export function timeWeightedIndex(
   }
   return index;
 }
+
+/**
+ * Дневной ряд «за период»: накопленные значения сдвигаются так, чтобы на день ДО `from`
+ * они были нулём (результат за период, а не с начала истории). Зафиксированное и переоценка
+ * сдвигаются каждое на свою базу, поэтому totalRub = fixedRub + unrealizedRub остаётся верным.
+ * Точки до `from` отбрасываются; вложено/стоимость — состояние на день, их не трогаем.
+ * Нет точки до `from` (период начинается с первой операции) — сдвиг нулевой.
+ */
+export function rebaseToPeriod(points: readonly ValuationPoint[], from: string): ValuationPoint[] {
+  const firstIdx = points.findIndex((p) => p.date >= from);
+  if (firstIdx < 0) return [];
+  const base = firstIdx > 0 ? points[firstIdx - 1] : null;
+  const baseFixed = new Decimal(base?.fixedRub ?? 0);
+  const baseUnrealized = new Decimal(base?.unrealizedRub ?? 0);
+  return points.slice(firstIdx).map((p) => {
+    const fixed = new Decimal(p.fixedRub).minus(baseFixed);
+    const unrealized = new Decimal(p.unrealizedRub).minus(baseUnrealized);
+    return {
+      ...p,
+      fixedRub: fixed.toFixed(2),
+      unrealizedRub: unrealized.toFixed(2),
+      totalRub: fixed.plus(unrealized).toFixed(2),
+    };
+  });
+}

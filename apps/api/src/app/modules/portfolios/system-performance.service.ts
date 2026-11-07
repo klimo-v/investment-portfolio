@@ -5,6 +5,7 @@ import Decimal from 'decimal.js';
 import {
   incomeAmountRub,
   isUnattributedIncome,
+  rebaseToPeriod,
   SystemPerformanceSchema,
   systemPerformance,
   type ExecutionFill,
@@ -49,10 +50,12 @@ export class SystemPerformanceService {
       groupBy: 'system',
       systemId,
       portfolioId: query.portfolioId,
-      from: query.from,
       till: query.till,
     });
-    const daily = curve.groups.find((g) => g.key === systemId)?.points ?? [];
+    const full = curve.groups.find((g) => g.key === systemId)?.points ?? [];
+    // фильтр периода: кривая — результат ЗА период (от нуля на день до `from`), а не накопленный
+    // с начала истории; метрики кривой (просадка, Sharpe) считаются по этому окну
+    const daily = query.from ? rebaseToPeriod(full, query.from) : full;
     // выплаты без инструмента: к сделкам не относятся, но в сводке дашборда они есть
     const unattributedIncomeRub = this.operations
       .list()

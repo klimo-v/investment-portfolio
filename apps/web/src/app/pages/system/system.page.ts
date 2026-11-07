@@ -133,7 +133,12 @@ import { TradesTable } from '../../widgets/trades-table/trades-table';
         <div class="charts">
           <div class="wide">
             @defer (on viewport) {
-              <app-system-equity-chart [performance]="p" [curve]="curve()" (curveChange)="setCurve($event)" />
+              <app-system-equity-chart [performance]="p"
+                [curve]="curve()"
+                [periodFrom]="filter.range().from ?? null"
+                [periodTill]="filter.range().till ?? null"
+                (curveChange)="setCurve($event)"
+              />
             } @placeholder {
               <div class="chart-box"></div>
             }

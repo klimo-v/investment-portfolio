@@ -33,6 +33,9 @@ export type EquityCurve = 'trades' | 'result';
         </mat-button-toggle-group>
       </div>
       <p class="note">{{ note() }}</p>
+      @if (periodNote()) {
+        <p class="note">{{ periodNote() }}</p>
+      }
       @if (config(); as cfg) {
         <app-chart-canvas [config]="cfg" />
       } @else {
@@ -67,7 +70,24 @@ export type EquityCurve = 'trades' | 'result';
 export class SystemEquityChart {
   readonly performance = input.required<SystemPerformance>();
   readonly curve = input<EquityCurve>('result');
+  /** Выбран период: кривая «Результат системы» идёт от нуля на его начало; даты — для подписи */
+  readonly periodFrom = input<string | null>(null);
+  readonly periodTill = input<string | null>(null);
   readonly curveChange = output<EquityCurve>();
+
+  protected readonly periodNote = computed(() => {
+    const from = this.periodFrom();
+    // «до сегодня» (пресеты ytd/1y) — не отдельное ограничение: переоценка остатка есть
+    const tillRaw = this.periodTill();
+    const till = tillRaw && tillRaw < new Date().toISOString().slice(0, 10) ? tillRaw : null;
+    if (this.curve() !== 'result' || (!from && !till)) return '';
+    const parts: string[] = [];
+    if (from) parts.push(`Кривая начинается с нуля на ${from}: это результат за период, а не накопленный с начала истории.`);
+    if (till) {
+      parts.push(`Конец периода ${till}: кривая оценена по ценам из истории на эти даты, а плашки «Открытые позиции» и «Всего» — без переоценки остатка (котировки только текущие).`);
+    }
+    return parts.join(' ');
+  });
 
   protected readonly note = computed(() =>
     this.curve() === 'result'
