@@ -3,6 +3,7 @@ import { and, eq, sql } from 'drizzle-orm';
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
 import {
   findPossibleDuplicates,
+  isValidIsin,
   normalizeCode,
   normalizeName,
   planInstrumentIdentities,
@@ -23,6 +24,19 @@ import {
   quotes,
 } from '../../../db/schema';
 import { DB } from '../../db/drizzle.module';
+
+/** Пара возможных дублей с предложенным направлением слияния (source → target) */
+export interface PossibleDuplicateDto {
+  sourceId: string;
+  sourceTicker: string;
+  sourceName: string | null;
+  targetId: string;
+  targetTicker: string;
+  targetName: string | null;
+  type: string;
+  reason: string;
+  deterministic: boolean;
+}
 
 /**
  * Единственный, кто пишет в `instrument_identifiers` (docs/02-data-model.md,
@@ -72,9 +86,36 @@ export class InstrumentIdentityService {
     return code ? loadIdentityIndex(this.db).find('ticker', code) : undefined;
   }
 
-  /** Список «Возможные дубли» — те же эвристики, что и подсказки в предпросмотре */
-  possibleDuplicates(): PossibleDuplicate[] {
-    return findPossibleDuplicates(loadIdentityIndex(this.db).instruments());
+  /**
+   * Список «Возможные дубли» — те же эвристики, что и подсказки в предпросмотре. Для
+   * каждой пары предлагается направление слияния: целью становится «более каноничный»
+   * инструмент (нормализованный тикер, валидный ISIN, рыночный источник цены).
+   */
+  possibleDuplicates(): PossibleDuplicateDto[] {
+    const rows = new Map(this.db.select().from(instruments).all().map((i) => [i.id, i]));
+    const score = (id: string): number => {
+      const i = rows.get(id);
+      if (!i) return 0;
+      return (
+        Number(i.ticker === normalizeCode(i.ticker)) +
+        Number(isValidIsin(i.ticker) || isValidIsin(i.isin)) +
+        Number(i.marketSource !== 'manual')
+      );
+    };
+    return findPossibleDuplicates(loadIdentityIndex(this.db).instruments()).map((d: PossibleDuplicate) => {
+      const [target, source] = score(d.b.id) > score(d.a.id) ? [d.b, d.a] : [d.a, d.b];
+      return {
+        sourceId: source.id,
+        sourceTicker: source.ticker,
+        sourceName: source.name ?? null,
+        targetId: target.id,
+        targetTicker: target.ticker,
+        targetName: target.name ?? null,
+        type: source.type,
+        reason: d.reason,
+        deterministic: d.deterministic,
+      };
+    });
   }
 
   /**

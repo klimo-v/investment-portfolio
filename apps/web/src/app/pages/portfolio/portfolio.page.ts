@@ -21,6 +21,7 @@ import {
 } from '../../entities/instrument/instrument-type.tokens';
 import { ManagePortfoliosDialog } from '../../features/manage-portfolios/manage-portfolios.dialog';
 import { ManageSystemsDialog } from '../../features/manage-systems/manage-systems.dialog';
+import { PossibleDuplicatesCard } from '../../features/possible-duplicates/possible-duplicates.card';
 import { MergeInstrumentDialog } from '../../features/merge-instrument/merge-instrument.dialog';
 import { SetManualPriceDialog } from '../../features/set-manual-price/set-manual-price.dialog';
 import { AllocationChart } from '../../widgets/allocation-chart/allocation-chart';
@@ -125,6 +126,7 @@ interface Group {
     KpiCard,
     StateMessage,
     AllocationChart,
+    PossibleDuplicatesCard,
   ],
   template: `
     <div class="header">
@@ -185,6 +187,8 @@ interface Group {
         </a>
       }
     </div>
+
+    <app-possible-duplicates />
 
     <div class="kpi-grid">
       <app-kpi-card label="Вложено (₽)" [value]="investedTotal()" />

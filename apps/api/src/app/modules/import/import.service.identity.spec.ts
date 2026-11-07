@@ -171,6 +171,6 @@ describe('слияние инструментов', () => {
     db.insert(instruments).values({ id: 'TMON@', ticker: 'TMON@', type: 'ETF', currency: 'RUB', name: 'Денежный рынок', marketSource: 'manual' }).run();
     const dups = identity.possibleDuplicates();
     expect(dups).toHaveLength(1);
-    expect(dups[0].deterministic).toBe(true);
+    expect(dups[0]).toMatchObject({ sourceId: 'TMON@', targetId: 'TMON', deterministic: true });
   });
 });

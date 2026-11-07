@@ -31,8 +31,31 @@ export interface PreviewRow {
   systemUncertain?: boolean;
 }
 
+/** Похожий на новый инструмент уже существующий (подсказка эвристик) */
+export interface InstrumentSuggestion {
+  instrumentId: string;
+  ticker: string;
+  name: string | null;
+  reason: string;
+}
+
+/** Инструмента ещё нет в справочнике: пользователь выбирает «новый / существующий» */
+export interface UnresolvedInstrument {
+  /** код строки — ключ в `instrumentChoices` */
+  key: string;
+  name: string | null;
+  instrumentType: string;
+  currency: string;
+  suggestions: InstrumentSuggestion[];
+}
+
+/** Решение по неопознанному инструменту: завести новый или записать как существующий */
+export type InstrumentChoice = { action: 'new' } | { action: 'existing'; instrumentId: string };
+
 export interface PreviewResult {
   rows: PreviewRow[];
+  /** Новые инструменты, которые заведёт импорт, — с подсказками о возможных дублях */
+  unresolvedInstruments: UnresolvedInstrument[];
   summary: { total: number; ok: number; warn: number; error: number; duplicate: number; update: number };
   /** Id уже распарсенного на сервере файла — передать в следующий preview()/commit() вместо content */
   uploadId: string;
@@ -73,6 +96,8 @@ export interface ImportOptions {
   systemId?: string;
   portfolioId?: string;
   tickerSystemOverrides?: Record<string, string>;
+  /** Решения по неопознанным инструментам этого импорта (ключ — код строки) */
+  instrumentChoices?: Record<string, InstrumentChoice>;
 }
 
 /**

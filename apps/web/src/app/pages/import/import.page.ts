@@ -7,7 +7,13 @@ import { MatTableModule } from '@angular/material/table';
 import { MatFormFieldModule } from '@angular/material/form-field';
 import { MatSelectModule } from '@angular/material/select';
 import { MatDatepickerModule } from '@angular/material/datepicker';
-import { ImportApi, type PreviewResult, type ImportFormat } from '../../entities/import/import.api';
+import {
+  ImportApi,
+  type InstrumentChoice,
+  type PreviewResult,
+  type ImportFormat,
+  type UnresolvedInstrument,
+} from '../../entities/import/import.api';
 import { ReferenceApi } from '../../entities/reference/reference.api';
 import { ImportAnnotations } from '../../features/import-annotations/import-annotations';
 import { parseIsoDate, toIsoDate } from '../../shared/iso-date';
@@ -222,6 +228,35 @@ export function defaultSyncRange(
         </mat-card>
       }
 
+      @if (newInstruments().length > 0) {
+        <mat-card class="rules">
+          <p class="rules-hint">
+            Этих инструментов ещё нет в справочнике. Если это уже известный актив под другим
+            кодом (например, внутренний код брокера), выберите его — решение запомнится, и
+            повторный импорт не заведёт дубль. Иначе будет создан новый инструмент.
+          </p>
+          @for (u of newInstruments(); track u.key) {
+            <div class="rule-row">
+              <span class="rule-ticker">
+                {{ u.key }}
+                @if (u.name) {
+                  <span class="rule-name">{{ u.name }}</span>
+                }
+              </span>
+              <mat-form-field appearance="outline">
+                <mat-label>Что это</mat-label>
+                <mat-select [value]="instrumentChoiceValue(u.key)" (valueChange)="setInstrumentChoice(u.key, $event)">
+                  <mat-option value="new">Новый инструмент</mat-option>
+                  @for (o of instrumentOptions(u); track o.id) {
+                    <mat-option [value]="o.id">{{ o.label }}</mat-option>
+                  }
+                </mat-select>
+              </mat-form-field>
+            </div>
+          }
+        </mat-card>
+      }
+
       <mat-card>
         <table mat-table [dataSource]="preview()!.rows">
           <ng-container matColumnDef="status">
@@ -372,6 +407,11 @@ export function defaultSyncRange(
         font-weight: 500;
         line-height: 56px;
       }
+      .rule-name {
+        display: block;
+        color: var(--app-text-muted);
+        font-size: 0.8em;
+      }
       .rule-row mat-form-field {
         flex: 1 1 200px;
         min-width: 0;
@@ -466,6 +506,21 @@ export class ImportPage {
    */
   private readonly tickerSystemChoices = signal<Record<string, string>>({});
 
+  /**
+   * Решения по неопознанным инструментам этого импорта (ключ — код строки). Как и выбор
+   * системы, живут только пока открыта страница: сами они запоминаются на бэке при
+   * импорте (идентификаторы инструмента), а не здесь.
+   */
+  private readonly instrumentChoices = signal<Record<string, InstrumentChoice>>({});
+
+  /**
+   * Новые инструменты файла. Запоминаем всё, что бэк однажды назвал неопознанным: после
+   * выбора «существующий» бэк уже не считает строку новой, а выбор надо оставить видимым,
+   * чтобы его можно было поменять.
+   */
+  private readonly seenUnresolved = signal<Record<string, UnresolvedInstrument>>({});
+  protected readonly newInstruments = computed(() => Object.values(this.seenUnresolved()));
+
   private fileContent = '';
   /**
    * Id файла, уже распарсенного бэком (из ответа preview()). Пока он есть,
@@ -524,6 +579,8 @@ export class ImportPage {
     this.lastBatch.set(null);
     this.preview.set(null);
     this.tickerSystemChoices.set({});
+    this.instrumentChoices.set({});
+    this.seenUnresolved.set({});
     this.uploadId = undefined;
   }
 
@@ -579,6 +636,33 @@ export class ImportPage {
     this.tryPreview();
   }
 
+  /** Значение селекта: 'new' или id выбранного существующего инструмента */
+  protected instrumentChoiceValue(key: string): string {
+    const c = this.instrumentChoices()[key];
+    return c?.action === 'existing' ? c.instrumentId : 'new';
+  }
+
+  /** Варианты «существующий»: сначала подсказки эвристик, затем остальные инструменты того же типа */
+  protected instrumentOptions(u: UnresolvedInstrument): Array<{ id: string; label: string }> {
+    const suggested = u.suggestions.map((s) => ({
+      id: s.instrumentId,
+      label: `${s.ticker}${s.name ? ' — ' + s.name : ''} · возможно: ${s.reason}`,
+    }));
+    const taken = new Set(suggested.map((o) => o.id));
+    const rest = (this.reference.instruments.value() ?? [])
+      .filter((i) => i.type === u.instrumentType && !taken.has(i.id))
+      .map((i) => ({ id: i.id, label: `${i.ticker}${i.name ? ' — ' + i.name : ''}` }));
+    return [...suggested, ...rest];
+  }
+
+  /** Записать решение и пересчитать предпросмотр (строка перестаёт быть «новой» или остаётся ею) */
+  protected setInstrumentChoice(key: string, value: string): void {
+    const choice: InstrumentChoice =
+      value === 'new' ? { action: 'new' } : { action: 'existing', instrumentId: value };
+    this.instrumentChoices.update((m) => ({ ...m, [key]: choice }));
+    this.tryPreview();
+  }
+
   /** Предпросмотр запускается автоматически, когда есть данные и достаточно разметки */
   private async tryPreview(): Promise<void> {
     if ((!this.fileContent && !this.uploadId) || !this.batchReady()) return;
@@ -586,6 +670,10 @@ export class ImportPage {
     try {
       const result = await this.api.preview(this.request());
       this.uploadId = result.uploadId;
+      this.seenUnresolved.update((m) => ({
+        ...m,
+        ...Object.fromEntries(result.unresolvedInstruments.map((u) => [u.key, u])),
+      }));
       this.preview.set(result);
     } catch (e: unknown) {
       this.errorMessage.set(
@@ -607,6 +695,8 @@ export class ImportPage {
       const result = await this.api.commit(this.request());
       this.lastBatch.set(result);
       this.preview.set(null);
+      this.instrumentChoices.set({});
+      this.seenUnresolved.set({});
       this.uploadId = undefined; // батч закоммичен — кэш файла на бэке уже очищен
     } catch {
       this.errorMessage.set('Не удалось импортировать. Попробуйте ещё раз.');
@@ -640,6 +730,7 @@ export class ImportPage {
       systemId: this.systemId(),
       portfolioId: this.portfolioId(),
       tickerSystemOverrides: this.tickerSystemChoices(),
+      instrumentChoices: this.instrumentChoices(),
     };
   }
 

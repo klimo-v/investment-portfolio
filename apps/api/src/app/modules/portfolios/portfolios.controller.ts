@@ -1,6 +1,7 @@
 import { BadRequestException, Body, Controller, Delete, Get, Param, Post, Query } from '@nestjs/common';
 import { SystemPerformanceQuerySchema, type SystemPerformance } from '@core';
 import type { SystemRow, PortfolioRow, InstrumentRow } from '../../../db/schema';
+import type { PossibleDuplicateDto } from '../instruments/instrument-identity.service';
 import { PortfoliosService } from './portfolios.service';
 import { SystemPerformanceService } from './system-performance.service';
 
@@ -57,6 +58,12 @@ export class PortfoliosController {
   @Get('instruments')
   instruments(): InstrumentRow[] {
     return this.service.listInstruments();
+  }
+
+  /** Пары похожих инструментов, которые, возможно, дубли (подсказка, не решение) */
+  @Get('instruments/possible-duplicates')
+  possibleDuplicates(): PossibleDuplicateDto[] {
+    return this.service.possibleDuplicates();
   }
 
   @Post('instruments/:sourceId/merge-into/:targetId')

@@ -12,7 +12,7 @@ import {
   type PortfolioRow,
   type InstrumentRow,
 } from '../../../db/schema';
-import { InstrumentIdentityService } from '../instruments/instrument-identity.service';
+import { InstrumentIdentityService, type PossibleDuplicateDto } from '../instruments/instrument-identity.service';
 import { DB } from '../../db/drizzle.module';
 
 /**
@@ -120,6 +120,11 @@ export class PortfoliosService {
    * Слить дубль-инструмент в другой. Вся работа — в InstrumentIdentityService: он же
    * единственный пишет идентификаторы инструментов, поэтому решение запоминается.
    */
+  /** «Возможные дубли» справочника (эвристики core) с предложенным направлением слияния */
+  possibleDuplicates(): PossibleDuplicateDto[] {
+    return this.identity.possibleDuplicates();
+  }
+
   mergeInstruments(sourceId: string, targetId: string): { merged: true; movedOperations: number } {
     return this.identity.merge(sourceId, targetId);
   }

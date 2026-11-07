@@ -16,6 +16,21 @@ const PortfolioRowSchema = PortfolioSchema.required({ id: true });
 const SystemRowSchema = SystemSchema.required({ id: true });
 
 export type Instrument = z.infer<typeof InstrumentSchema>;
+
+/** Пара возможных дублей справочника с предложенным направлением слияния (source → target) */
+const PossibleDuplicateSchema = z.object({
+  sourceId: z.string(),
+  sourceTicker: z.string(),
+  sourceName: z.string().nullable(),
+  targetId: z.string(),
+  targetTicker: z.string(),
+  targetName: z.string().nullable(),
+  type: z.string(),
+  reason: z.string(),
+  /** тикеры совпали после нормализации — слияние безопасно */
+  deterministic: z.boolean(),
+});
+export type PossibleDuplicate = z.infer<typeof PossibleDuplicateSchema>;
 export type { Portfolio, System };
 
 @Injectable({ providedIn: 'root' })
@@ -42,9 +57,22 @@ export class ReferenceApi {
     { parse: z.array(PortfolioRowSchema).parse },
   );
 
-  readonly instruments = httpResource(() => '/api/instruments', {
-    parse: z.array(InstrumentSchema).parse,
-  });
+  readonly instruments = httpResource(
+    () => {
+      this.reloadTrigger();
+      return '/api/instruments';
+    },
+    { parse: z.array(InstrumentSchema).parse },
+  );
+
+  /** «Возможные дубли»: похожие инструменты (эвристики core), решение остаётся за пользователем */
+  readonly possibleDuplicates = httpResource(
+    () => {
+      this.reloadTrigger();
+      return '/api/instruments/possible-duplicates';
+    },
+    { parse: z.array(PossibleDuplicateSchema).parse },
+  );
 
   /** Создать портфель, затем перезагрузить список */
   async createPortfolio(portfolio: Portfolio): Promise<Portfolio> {

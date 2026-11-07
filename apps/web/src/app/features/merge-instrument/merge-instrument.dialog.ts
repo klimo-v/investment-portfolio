@@ -10,6 +10,8 @@ export interface MergeInstrumentData {
   sourceId: string;
   sourceTicker: string;
   type: InstrumentType;
+  /** Предложенная цель слияния (из списка «Возможные дубли») — подставляется в выбор */
+  suggestedTargetId?: string;
 }
 
 export interface MergeInstrumentResult {
@@ -93,7 +95,7 @@ export class MergeInstrumentDialog {
   protected readonly data = inject<MergeInstrumentData>(MAT_DIALOG_DATA);
   private readonly reference = inject(ReferenceApi);
 
-  protected readonly targetId = signal<string | undefined>(undefined);
+  protected readonly targetId = signal<string | undefined>(this.data.suggestedTargetId);
 
   protected readonly targets = computed(() =>
     (this.reference.instruments.value() ?? []).filter(
