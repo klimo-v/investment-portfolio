@@ -315,6 +315,18 @@ export function unrealizedPnl(pos: PositionResult, currentPrice: Decimal): Decim
   return currentValue.minus(pos.investedCcy);
 }
 
+/**
+ * Денежное событие сделки на дату: единый источник и для итога сделки, и для дневной
+ * кривой результата системы (сумма событий сделки = realizedPnlRub + дивиденды + купоны).
+ * Спот: продажа (в т.ч. частичная) — realized, дивиденд/купон — income; фьючерс —
+ * каждое исполнение (результат минус комиссия) — realized.
+ */
+export interface TradeEvent {
+  date: string;
+  kind: 'realized' | 'income';
+  rub: Decimal;
+}
+
 export interface TradeResult {
   instrumentId: string;
   systemId: string;
@@ -352,6 +364,8 @@ export interface TradeResult {
   feesRub: Decimal;
   /** id операций, из которых собрана сделка */
   operationIds: string[];
+  /** зафиксированные денежные события по датам (см. TradeEvent) */
+  events: TradeEvent[];
 }
 
 function newTrade(
@@ -383,6 +397,7 @@ function newTrade(
     closedTime: null,
     feesRub: new Decimal(0),
     operationIds: [],
+    events: [],
   };
 }
 
@@ -448,6 +463,7 @@ export function calculateTrades(
       const proceeds = qty.mul(price).minus(fee);
       trade.realizedPnlCcy = trade.realizedPnlCcy.plus(proceeds.minus(costOfSold));
       trade.realizedPnlRub = trade.realizedPnlRub.plus(proceeds.minus(costOfSold).mul(fxRate));
+      trade.events.push({ date: op.date, kind: 'realized', rub: proceeds.minus(costOfSold).mul(fxRate) });
       trade.proceedsCcy = trade.proceedsCcy.plus(proceeds);
       trade.proceedsRub = trade.proceedsRub.plus(proceeds.mul(fxRate));
       trade.investedCcy = trade.investedCcy.minus(costOfSold);
@@ -478,6 +494,7 @@ export function calculateTrades(
       const amount = qty.mul(price).mul(fxRate);
       if (op.operationType === 'Dividend') trade.dividendsRub = trade.dividendsRub.plus(amount);
       else trade.couponsRub = trade.couponsRub.plus(amount);
+      trade.events.push({ date: op.date, kind: 'income', rub: amount });
       if (op.id) trade.operationIds.push(op.id);
     }
   }
@@ -523,6 +540,7 @@ function applyFutureTrade(
     const net = pnl.minus(partFee);
     trade.realizedPnlCcy = trade.realizedPnlCcy.plus(net);
     trade.realizedPnlRub = trade.realizedPnlRub.plus(net.mul(fxRate));
+    if (!net.isZero()) trade.events.push({ date: op.date, kind: 'realized', rub: net.mul(fxRate) });
     trade.feesRub = trade.feesRub.plus(partFee.mul(fxRate));
     if (side === 'Buy') trade.qtyBought = trade.qtyBought.plus(partQty);
     else trade.qtySold = trade.qtySold.plus(partQty);

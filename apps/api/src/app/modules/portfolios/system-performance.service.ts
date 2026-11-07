@@ -40,9 +40,11 @@ export class SystemPerformanceService {
         .map((v) => [v.trade, new Decimal(v.currentValueRub as string).minus(v.trade.investedRub)]),
     );
 
+    const todayIso = new Date().toISOString().slice(0, 10);
+    const asOf = query.till && query.till < todayIso ? query.till : todayIso;
     const body = systemPerformance(
       valued.map((v) => v.trade),
-      { unrealizedOf: (t) => unrealized.get(t) ?? null, fills: this.executionFills(valued.map((v) => v.trade)) },
+      { unrealizedOf: (t) => unrealized.get(t) ?? null, asOf, fills: this.executionFills(valued.map((v) => v.trade)) },
     );
     // ВМ брокера привязана к счёту и инструменту, а не к системе: показываем сверку
     // только там, где весь инструмент в портфеле принадлежит этой системе

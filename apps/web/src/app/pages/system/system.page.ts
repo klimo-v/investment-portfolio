@@ -12,10 +12,11 @@ import {
   systemPerformanceResource,
   type SystemPerformanceFilter,
 } from '../../entities/system-performance/system-performance.api';
+import { queryParams } from '../../shared/query-param';
 import { dashboardFilter } from '../../widgets/dashboard-filters/dashboard-filter.state';
 import { SystemExecution } from '../../widgets/system-execution/system-execution';
 import { SystemKpis } from '../../widgets/system-kpis/system-kpis';
-import { SystemEquityChart } from '../../widgets/system-equity-chart/system-equity-chart';
+import { SystemEquityChart, type EquityCurve } from '../../widgets/system-equity-chart/system-equity-chart';
 import { SystemPnlBreakdown } from '../../widgets/system-pnl-breakdown/system-pnl-breakdown';
 import { SystemTradeDistribution } from '../../widgets/system-trade-distribution/system-trade-distribution';
 import { TradesTable } from '../../widgets/trades-table/trades-table';
@@ -132,7 +133,7 @@ import { TradesTable } from '../../widgets/trades-table/trades-table';
         <div class="charts">
           <div class="wide">
             @defer (on viewport) {
-              <app-system-equity-chart [performance]="p" />
+              <app-system-equity-chart [performance]="p" [curve]="curve()" (curveChange)="setCurve($event)" />
             } @placeholder {
               <div class="chart-box"></div>
             }
@@ -205,6 +206,17 @@ export class SystemPage {
   protected readonly operationApi = inject(OperationApi);
   private readonly tradeApi = inject(TradeApi);
   protected readonly filter = dashboardFilter();
+
+  /** Какая кривая на графике: по закрытым сделкам или результат системы. Живёт в адресе (?curve=) */
+  private readonly params = queryParams();
+  private readonly curveParam = this.params.read('curve');
+  protected readonly curve = computed<EquityCurve>(() =>
+    this.curveParam() === 'trades' ? 'trades' : 'result',
+  );
+  protected setCurve(value: EquityCurve): void {
+    // «result» — значение по умолчанию, в адрес не пишем
+    void this.params.patch({ curve: value === 'result' ? null : value });
+  }
 
   private readonly performanceFilter = computed<SystemPerformanceFilter>(() => {
     const r = this.filter.range();

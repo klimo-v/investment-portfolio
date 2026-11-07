@@ -475,6 +475,20 @@ export const SystemPerformanceSchema = z.object({
     equity: z.array(
       z.object({ date: z.string(), equityRub: decimalString, drawdownRub: decimalString }),
     ),
+    /**
+     * «Результат системы»: зафиксированное нарастающим итогом на дату каждого события
+     * (продажи, в т.ч. частичные; дивиденды/купоны; комиссии) + стартовый ноль
+     */
+    result: z.array(z.object({ date: z.string(), fixedRub: decimalString })),
+    /** точка «сегодня»: зафиксированное + переоценка остатка по текущим котировкам = summary.totalRub */
+    today: z
+      .object({
+        date: z.string(),
+        fixedRub: decimalString,
+        unrealizedRub: decimalString,
+        totalRub: decimalString,
+      })
+      .nullable(),
     byMonth: z.array(z.object({ period: z.string(), pnlRub: decimalString, trades: z.number() })),
     /** weekday: 1 = понедельник … 7 = воскресенье (по дате закрытия) */
     byWeekday: z.array(z.object({ weekday: z.number(), pnlRub: decimalString, trades: z.number() })),

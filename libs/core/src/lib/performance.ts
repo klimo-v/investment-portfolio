@@ -42,6 +42,8 @@ export interface PerformanceOptions {
    * оценки нет. Считает вызывающий: у него котировки, у чистой функции их нет.
    */
   unrealizedOf?: (trade: TradeResult) => Decimal | null;
+  /** «сегодня» (YYYY-MM-DD) для точки текущего результата; без него точки нет */
+  asOf?: string;
 }
 
 // ───────────────────────── общие классификация и счётчики ─────────────────────────
@@ -374,6 +376,35 @@ export function systemPerformance(
       equityValues.push(acc);
     }
   }
+  // ── результат системы: зафиксированное по дате события (продажи, в т.ч. частичные,
+  // выплаты, комиссии) нарастающим итогом + точка «сегодня» с переоценкой остатка
+  const dailyFixed = new Map<string, Decimal>();
+  for (const t of trades) {
+    for (const e of t.events) dailyFixed.set(e.date, (dailyFixed.get(e.date) ?? ZERO).plus(e.rub));
+  }
+  const fixedDays = [...dailyFixed.keys()].sort();
+  const resultSeries: { date: string; fixedRub: string }[] = [];
+  let fixedAcc = ZERO;
+  if (fixedDays.length > 0) {
+    const firstOpened = trades.map((t) => t.openedAt).sort()[0];
+    resultSeries.push({
+      date: firstOpened < fixedDays[0] ? firstOpened : addDays(fixedDays[0], -1),
+      fixedRub: money(ZERO),
+    });
+    for (const day of fixedDays) {
+      fixedAcc = fixedAcc.plus(dailyFixed.get(day) as Decimal);
+      resultSeries.push({ date: day, fixedRub: money(fixedAcc) });
+    }
+  }
+  const today = options.asOf
+    ? {
+        date: options.asOf,
+        fixedRub: money(fixedAcc),
+        unrealizedRub: money(unrealized),
+        totalRub: money(fixedAcc.plus(unrealized)),
+      }
+    : null;
+
   const dd = absoluteDrawdown(equityValues);
   const equity = equityDates.map((date, i) => ({
     date,
@@ -486,6 +517,8 @@ export function systemPerformance(
     ratios: { sharpe, sortino, days: daily.length, assumptions: RATIO_ASSUMPTIONS },
     series: {
       equity,
+      result: resultSeries,
+      today,
       byMonth: [...monthly.entries()]
         .sort((a, b) => a[0].localeCompare(b[0]))
         .map(([period, v]) => ({ period, pnlRub: money(v.pnl), trades: v.n })),

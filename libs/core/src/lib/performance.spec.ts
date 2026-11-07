@@ -198,6 +198,7 @@ function trade(pnl: string, closedAt: string, over: Partial<TradeResult> = {}): 
     closedTime: null,
     feesRub: new Decimal(0),
     operationIds: [`o${seq}`],
+    events: [],
     ...over,
   };
 }
@@ -353,5 +354,39 @@ describe('единая формула win rate', () => {
     const dd = absoluteDrawdown([0, 10, 4, 12, 3].map((x) => new Decimal(x)));
     expect(dd.maxDrawdown.toString()).toBe('9');
     expect([dd.peakIndex, dd.troughIndex, dd.recoveryIndex]).toEqual([3, 4, null]);
+  });
+});
+
+describe('результат системы по дням (series.result / series.today)', () => {
+  it('эталон CNY: последняя точка зафиксированного + нереализованный = «Всего»', () => {
+    const trades = calculateTrades(CNY_OPS, { futureIds: FUT });
+    const p = systemPerformance(trades, { unrealizedOf, asOf: '2026-06-30' });
+    const last = p.series.result[p.series.result.length - 1];
+    expect(new Decimal(last.fixedRub).plus(p.summary.unrealizedRub).toFixed(2)).toBe(p.summary.totalRub);
+    expect(p.series.today).toMatchObject({ date: '2026-06-30', totalRub: p.summary.totalRub, unrealizedRub: '4288.00' });
+    expect(p.series.today?.totalRub).toBe('-11875.91');
+  });
+
+  it('спот: частичная продажа и дивиденд попадают на свою дату, закрытой сделки нет', () => {
+    const base = { systemId: 's', portfolioId: 'p', instrumentId: 'SBER', fee: '0', fxRate: '1', currency: 'RUB' } as const;
+    const trades = calculateTrades([
+      { ...base, date: '2026-01-10', operationType: 'Buy', quantity: '10', price: '100' },
+      { ...base, date: '2026-02-01', operationType: 'Sell', quantity: '4', price: '130' }, // +120
+      { ...base, date: '2026-03-01', operationType: 'Dividend', quantity: '1', price: '50' },
+    ]);
+    const p = systemPerformance(trades, { unrealizedOf: () => new Decimal(60), asOf: '2026-04-01' });
+    expect(p.trades.closed).toBe(0);
+    expect(p.series.equity).toHaveLength(0); // кривая по закрытым сделкам не меняется
+    expect(p.series.result).toEqual([
+      { date: '2026-01-10', fixedRub: '0.00' },
+      { date: '2026-02-01', fixedRub: '120.00' },
+      { date: '2026-03-01', fixedRub: '170.00' },
+    ]);
+    expect(p.series.today).toMatchObject({ fixedRub: '170.00', unrealizedRub: '60.00', totalRub: '230.00' });
+    expect(p.summary.totalRub).toBe('230.00');
+  });
+
+  it('без asOf точки «сегодня» нет', () => {
+    expect(systemPerformance([]).series.today).toBeNull();
   });
 });
