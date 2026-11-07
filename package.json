@@ -17,7 +17,7 @@
     "db:generate": "drizzle-kit generate --config apps/api/drizzle.config.ts",
     "db:migrate": "tsx apps/api/src/db/migrate.ts",
     "db:seed": "tsx apps/api/src/db/seed.ts",
-    "db:fix-duplicates": "tsx apps/api/src/db/fix-instrument-duplicates.ts",
+    "db:fix-duplicates": "tsx --tsconfig apps/api/tsconfig.app.json apps/api/src/db/fix-instrument-duplicates.ts",
     "db:studio": "drizzle-kit studio --config apps/api/drizzle.config.ts"
   },
   "devDependencies": {
