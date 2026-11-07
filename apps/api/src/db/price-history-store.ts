@@ -19,7 +19,7 @@ export interface PricePoint {
  * записи в price_history — её используют и сервис истории, и импорт отчётов, и перенос
  * снимков, поэтому политика конфликтов не расходится. true — строка записана.
  */
-export function recordPrice(db: BetterSQLite3Database, instrumentId: string, point: PricePoint): boolean {
+export function recordPrice(db: Pick<BetterSQLite3Database, 'select' | 'insert'>, instrumentId: string, point: PricePoint): boolean {
   const [existing] = db
     .select()
     .from(priceHistory)

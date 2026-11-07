@@ -4,11 +4,17 @@ import { desc, eq } from 'drizzle-orm';
 import ExcelJS from 'exceljs';
 import {
   attachParentFees,
+  identityKey,
   mergeBrokerFields,
+  normalizeRawRows,
   normalizeRow,
   makeDedupeKey,
   parseBrokerHtmlReportWithMarks,
   type FieldChange,
+  type IdentityChoice,
+  type InstrumentIdentifiers,
+  type InstrumentSuggestion,
+  type RowIdentity,
   type FuturesSettlement,
   type RawRow,
   type Operation,
@@ -22,10 +28,10 @@ import {
   portfolios,
   instruments,
   quotes,
-  type InstrumentRow,
   type OperationRow,
 } from '../../../db/schema';
 import { DB } from '../../db/drizzle.module';
+import { InstrumentIdentityService } from '../instruments/instrument-identity.service';
 import { recordPrice } from '../../../db/price-history-store';
 import { parseCsv } from './csv-parser';
 import { parseTbankXlsx } from './tbank-xlsx-report';
@@ -59,8 +65,22 @@ export interface PreviewRow {
   systemUncertain?: boolean;
 }
 
+/** Инструмент, которого ещё нет в справочнике: пользователь выбирает «новый / существующий» */
+export interface UnresolvedInstrument {
+  /** код строки — ключ в `instrumentChoices` */
+  key: string;
+  name: string | null;
+  instrumentType: string;
+  currency: string;
+  identifiers: InstrumentIdentifiers;
+  /** похожие существующие инструменты (эвристики), сильнейшие первыми */
+  suggestions: InstrumentSuggestion[];
+}
+
 export interface PreviewResult {
   rows: PreviewRow[];
+  /** Новые инструменты, которые заведёт commit(), с подсказками о возможных дублях */
+  unresolvedInstruments: UnresolvedInstrument[];
   summary: { total: number; ok: number; warn: number; error: number; duplicate: number; update: number };
   /** Расчётные цены фьючерсов из отчёта — при commit() сохраняются как цена инструмента на дату отчёта */
   marks: FuturesMark[];
@@ -70,26 +90,6 @@ export interface PreviewResult {
 
 /** Формат исходного файла (Factory: новый брокер = новый парсер, OCP) */
 export type ImportFormat = 'csv' | 'html' | 'xlsx';
-
-/**
- * ISIN: 2 буквы страны + 9 букв/цифр + 1 цифра-контроль (12 символов). Страна
- * жёстко ограничена RU (а не любые 2 буквы) — иначе тикеры гособлигаций MOEX
- * (СЕКОД вида SU52002RMFS1) ложно распознаются как ISIN: формат случайно
- * совпадает (SU + 9 alnum + 1 цифра), но это НЕ ISIN — настоящий ISIN этой же
- * бумаги другой (напр. RU000A0ZYZ26). Ложное совпадение приводило к тому, что
- * в справочник инструментов писался тикер вместо настоящего ISIN — реальный
- * ISIN из отчёта брокера тогда не резолвился бы в этот же инструмент.
- */
-const ISIN_RE = /^RU[A-Z0-9]{9}\d$/;
-
-const INSTRUMENT_TYPES = new Set(['Stock', 'Bond', 'ETF', 'Currency', 'Crypto', 'Cash', 'Future']);
-
-/** Точное совпадение имени после схлопывания пробелов/регистра — намеренно без
- * нечёткого фаззи-матчинга, чтобы не склеить случайно два разных инструмента */
-function normalizeName(name?: string | null): string | null {
-  const n = (name ?? '').trim().toLowerCase().replace(/\s+/g, ' ');
-  return n || null;
-}
 
 /**
  * Параметры импорта. systemId/portfolioId — разметка на весь батч: в отчётах
@@ -108,6 +108,12 @@ export interface ImportOptions {
   systemId?: string | null;
   portfolioId?: string | null;
   tickerSystemOverrides?: Record<string, string>;
+  /**
+   * Решения по неопознанным инструментам: ключ — код строки (`identityKey`), значение —
+   * «новый» или «это существующий инструмент X». Существующий записывается как
+   * идентификаторы с origin 'manual', поэтому следующий импорт опознаёт сам.
+   */
+  instrumentChoices?: Record<string, IdentityChoice>;
 }
 
 /**
@@ -130,7 +136,10 @@ export interface ImportInput extends ImportOptions {
  */
 @Injectable()
 export class ImportService {
-  constructor(@Inject(DB) private readonly db: BetterSQLite3Database) {}
+  constructor(
+    @Inject(DB) private readonly db: BetterSQLite3Database,
+    private readonly identity: InstrumentIdentityService,
+  ) {}
 
   /**
    * Кэш уже распарсенных файлов на время правки батч-разметки/тикер-выбора
@@ -171,9 +180,11 @@ export class ImportService {
     settlements: FuturesSettlement[] = [],
   ): string {
     const uploadId = reuseId ?? randomUUID();
-    // общий шаг нормализации для ЛЮБОГО источника: комиссия отдельной строкой по ссылке
-    // на сделку прибавляется к fee сделки (core/import.ts: attachParentFees)
-    this.uploads.set(uploadId, { rows: attachParentFees(rows), marks, settlements });
+    // общие шаги нормализации для ЛЮБОГО источника (файлы и API сходятся именно здесь):
+    // комиссия отдельной строкой по ссылке на сделку прибавляется к fee сделки
+    // (core/import.ts: attachParentFees); коды инструментов приводятся к единому виду,
+    // ISIN/figi/uid раскладываются по идентификаторам (core: normalizeRawRows)
+    this.uploads.set(uploadId, { rows: normalizeRawRows(attachParentFees(rows)), marks, settlements });
     if (this.uploads.size > ImportService.MAX_UPLOADS) {
       const oldest = this.uploads.keys().next().value;
       if (oldest) this.uploads.delete(oldest);
@@ -208,10 +219,11 @@ export class ImportService {
       portfolioId?: string | null;
       tickerSystemOverrides?: Record<string, string>;
     },
+    /** резолв инструментов строк (план core/instrument-identity.ts) */
+    identities?: Map<RawRow, RowIdentity>,
   ) {
     const systemRows = this.db.select().from(systems).all();
     const portfolioRows = this.db.select().from(portfolios).all();
-    const instrumentRows = this.db.select().from(instruments).all();
 
     const systemByName = new Map(systemRows.map((s) => [s.name.toLowerCase(), s.id]));
     // выбор системы по тикеру для ЭТОГО импорта (docs/04-roadmap.md §3.1) — не
@@ -226,31 +238,6 @@ export class ImportService {
     const portfolioByAccountRef = new Map(
       portfolioRows.filter((p) => p.accountRef).map((p) => [p.accountRef as string, p.id]),
     );
-    const instrumentByTicker = new Map(instrumentRows.map((i) => [i.ticker.toLowerCase(), i.id]));
-    // фоллбэк по ISIN — некоторые брокеры репортят один и тот же инструмент то
-    // тикером, то ISIN-кодом в зависимости от площадки/типа сделки (§3.1-подобный
-    // случай, но для инструментов, не для систем/счетов)
-    const instrumentByIsin = new Map(
-      instrumentRows.filter((i) => i.isin).map((i) => [(i.isin as string).toLowerCase(), i.id]),
-    );
-    const instrumentByName = new Map(
-      instrumentRows
-        .filter((i) => i.name)
-        .map((i) => [normalizeName(i.name) as string, i.id]),
-    );
-    // кросс-ссылка «имя бумаги → id» из ЭТОГО ЖЕ импорта: брокер может репортить
-    // один и тот же актив то тикером (биржа), то ISIN (внебиржевая сделка/выплата,
-    // см. docs/04-roadmap.md §3.1-подобный случай) — если в файле есть строка,
-    // где тикер уже резолвится, а имя совпадает со строкой, где резолвится только
-    // ISIN, подхватываем тот же инструмент вместо неудачного резолва
-    const batchNameToInstrument = new Map<string, string>();
-    for (const raw of rawRows) {
-      const t = raw.ticker?.toLowerCase();
-      const hit = t ? (instrumentByTicker.get(t) ?? instrumentByIsin.get(t)) : undefined;
-      const name = normalizeName(raw.name);
-      if (hit && name && !batchNameToInstrument.has(name)) batchNameToInstrument.set(name, hit);
-    }
-
     return {
       resolveSystem: (name?: string, ticker?: string) => {
         if (name) {
@@ -274,17 +261,10 @@ export class ImportService {
         return defaults?.portfolioId ?? null;
       },
       resolveInstrument: (raw: RawRow) => {
-        const { ticker, name } = raw;
-        if (ticker) {
-          const hit = instrumentByTicker.get(ticker.toLowerCase()) ?? instrumentByIsin.get(ticker.toLowerCase());
-          if (hit) return { instrumentId: hit };
-        }
-        const n = normalizeName(name);
-        if (n) {
-          const hit = batchNameToInstrument.get(n) ?? instrumentByName.get(n);
-          if (hit) return { instrumentId: hit };
-        }
-        return { instrumentId: null };
+        const hit = identities?.get(raw);
+        return hit
+          ? { instrumentId: hit.instrumentId, conflict: hit.conflict, isNew: hit.isNew, suggestions: hit.suggestions }
+          : { instrumentId: null };
       },
     };
   }
@@ -308,95 +288,6 @@ export class ImportService {
     if (target.length === 0 || target[0].accountRef) return;
 
     this.db.update(portfolios).set({ accountRef }).where(eq(portfolios.id, portfolioId)).run();
-  }
-
-  /**
-   * Авто-обучение справочника инструментов новыми тикерами/ISIN из отчёта
-   * (вызывается только из commit(), preview() остаётся dry-run без записи в БД).
-   *
-   * Резолв в 3 шага, чтобы не создать дубль-инструмент, когда брокер репортит
-   * ОДИН И ТОТ ЖЕ актив то тикером (биржа), то ISIN (внебиржевая сделка/выплата
-   * — реальный случай, найденный на LKOH/SBER/X5 в отчётах Т-Банка):
-   *   1. Тикер/ISIN уже есть в справочнике → это тот же инструмент, донаучиваем
-   *      недостающие поля (isin/name), НЕ создаём новую строку.
-   *   2. Не резолвится по тикеру/ISIN, но имя бумаги совпадает с уже известным
-   *      инструментом (из справочника или из другой строки этого же файла) →
-   *      тот же случай, донаучиваем isin на существующую строку.
-   *   3. Ни тикер/ISIN, ни имя нигде не найдены → это ДЕЙСТВИТЕЛЬНО новый
-   *      инструмент, создаём новую строку. marketSource оставляем 'manual' —
-   *      автоматически считать любой новый код торгуемым на MOEX небезопасно,
-   *      пользователь может переключить вручную, когда убедится, что это так
-   *      (см. docs/04-roadmap.md §3.1).
-   */
-  private ensureInstruments(rawRows: RawRow[]): void {
-    const rows = this.db.select().from(instruments).all();
-    const byTicker = new Map(rows.map((i) => [i.ticker.toLowerCase(), i]));
-    const byIsin = new Map(rows.filter((i) => i.isin).map((i) => [(i.isin as string).toLowerCase(), i]));
-    const byName = new Map(rows.filter((i) => i.name).map((i) => [normalizeName(i.name) as string, i]));
-    const createdInBatch = new Set<string>();
-
-    const rememberInstrument = (inst: InstrumentRow): void => {
-      byTicker.set(inst.ticker.toLowerCase(), inst);
-      if (inst.isin) byIsin.set(inst.isin.toLowerCase(), inst);
-      if (inst.name) byName.set(normalizeName(inst.name) as string, inst);
-    };
-
-    // предварительный проход по ВСЕМУ файлу: если тикер/ISIN какой-то строки уже
-    // резолвится, запоминаем её имя → инструмент. Без этого прохода результат
-    // зависел бы от ПОРЯДКА строк в файле — брокер может расположить ISIN-код
-    // одного и того же актива РАНЬШЕ его же биржевых сделок с обычным тикером
-    // (реальный случай: ЛУКОЙЛ по ISIN на внебирже в файле стоял перед сделками
-    // по тикеру LKOH), и тогда имя ещё не «выучено», когда до этой строки дошла
-    // бы очередь — резолв по имени ниже не сработал бы и создал бы дубль-инструмент.
-    for (const raw of rawRows) {
-      if (!raw.ticker) continue;
-      const t = raw.ticker.toLowerCase();
-      const hit = byTicker.get(t) ?? byIsin.get(t);
-      const name = normalizeName(raw.name);
-      if (hit && name && !byName.has(name)) byName.set(name, hit);
-    }
-
-    for (const raw of rawRows) {
-      // строка, которую нельзя импортировать (опцион, неизвестная серия), инструмент не заводит
-      if (!raw.ticker || raw.skipReason) continue;
-      const t = raw.ticker.toLowerCase();
-      const isinLike = ISIN_RE.test(raw.ticker) ? raw.ticker : null;
-      const name = normalizeName(raw.name);
-      const existing = byTicker.get(t) ?? byIsin.get(t) ?? (name ? byName.get(name) : undefined);
-
-      if (existing) {
-        // уже резолвится (по тикеру/ISIN/имени) — донаучиваем недостающие поля,
-        // существующие значения никогда не перезаписываем молча
-        const patch: Partial<Pick<InstrumentRow, 'isin' | 'name'>> = {};
-        if (!existing.isin && isinLike) patch.isin = isinLike;
-        if (!existing.name && raw.name) patch.name = raw.name.trim();
-        if (Object.keys(patch).length > 0) {
-          this.db.update(instruments).set(patch).where(eq(instruments.id, existing.id)).run();
-          rememberInstrument({ ...existing, ...patch });
-        } else {
-          rememberInstrument(existing);
-        }
-        continue;
-      }
-
-      // совсем новый инструмент — ни тикер/ISIN, ни имя нигде не найдены
-      if (createdInBatch.has(t)) continue;
-      createdInBatch.add(t);
-      const type = INSTRUMENT_TYPES.has(raw.instrumentType ?? '')
-        ? (raw.instrumentType as InstrumentRow['type'])
-        : 'Stock';
-      const created: InstrumentRow = {
-        id: raw.ticker,
-        ticker: raw.ticker,
-        type,
-        currency: raw.currency?.trim() || 'RUB',
-        isin: isinLike,
-        name: raw.name?.trim() || null,
-        marketSource: 'manual',
-      };
-      this.db.insert(instruments).values(created).onConflictDoNothing().run();
-      rememberInstrument(created);
-    }
   }
 
   /**
@@ -448,11 +339,18 @@ export class ImportService {
   /** Предпросмотр (dry-run): распознаёт строки, но ничего не пишет */
   async preview(input: ImportInput): Promise<PreviewResult> {
     const { rows: rawRows, marks, uploadId } = await this.resolveRawRows(input);
-    const resolvers = this.buildResolvers(rawRows, {
-      systemId: input.systemId,
-      portfolioId: input.portfolioId,
-      tickerSystemOverrides: input.tickerSystemOverrides,
-    });
+    // dry-run резолва инструментов: ничего не пишет, commit применяет ТОТ ЖЕ план
+    const plan = this.identity.plan(rawRows, input.instrumentChoices);
+    const identities = new Map(rawRows.map((raw, i) => [raw, plan.rows[i]] as const));
+    const resolvers = this.buildResolvers(
+      rawRows,
+      {
+        systemId: input.systemId,
+        portfolioId: input.portfolioId,
+        tickerSystemOverrides: input.tickerSystemOverrides,
+      },
+      identities,
+    );
     const existing = this.existingByDedupeKey();
     const seenInBatch = new Set<string>();
 
@@ -465,7 +363,7 @@ export class ImportService {
       // сырой тикер/ISIN (то же самое, что и systemKey в normalizeRow, §3.1):
       // один и тот же актив брокер может репортить то тикером, то ISIN — выбор
       // системы для "SBER" должен применяться и к строке, пришедшей по её ISIN.
-      const ticker = res.operation.instrumentId ?? raw.ticker;
+      const ticker = res.operation.instrumentId ?? identityKey(raw);
       // уже есть в базе: полное совпадение — дубль; тот же номер у брокера в том же портфеле
       // с другими значениями (комиссия пришла позже и т. п.) — обновление существующей
       const stored = existing.get(res.dedupeKey);
@@ -515,15 +413,30 @@ export class ImportService {
       duplicate: rows.filter((r) => r.confidence === 'duplicate').length,
       update: rows.filter((r) => r.confidence === 'update').length,
     };
-    return { rows, summary, marks, uploadId };
+    const unresolvedInstruments: UnresolvedInstrument[] = [];
+    rawRows.forEach((raw, i) => {
+      const id = plan.rows[i];
+      const created = id.isNew ? plan.created.find((c) => c.id === id.instrumentId) : undefined;
+      if (!id.key || !created) return;
+      unresolvedInstruments.push({
+        key: id.key,
+        name: created.name,
+        instrumentType: created.type,
+        currency: created.currency,
+        identifiers: raw.identifiers ?? {},
+        suggestions: id.suggestions,
+      });
+    });
+    return { rows, unresolvedInstruments, summary, marks, uploadId };
   }
 
   /** Импорт: сохраняет все ok/warn строки (не error, не duplicate) под общим batchId */
   async commit(input: ImportInput): Promise<{ batchId: string; imported: number; updated: number }> {
-    // авто-обучение справочника инструментов ДО резолва — preview() внутри
-    // подхватит уже созданные/донаученные строки при обычном поиске по тикеру/ISIN
+    // применяем план резолва инструментов (новые инструменты, идентификаторы, выбор
+    // пользователя) ДО preview(): тот пересчитает план уже по обновлённому справочнику
+    // и найдёт всё по идентификаторам
     const { rows: rawRows, settlements } = await this.resolveRawRows(input);
-    this.ensureInstruments(rawRows);
+    this.identity.apply(this.identity.plan(rawRows, input.instrumentChoices));
 
     const preview = await this.preview(input);
     const batchId = randomUUID();
@@ -604,8 +517,8 @@ export class ImportService {
     });
     for (const st of settlements) {
       const portfolioId = resolvePortfolio(st.accountRef);
-      const [inst] = this.db.select().from(instruments).where(eq(instruments.ticker, st.ticker)).all();
-      if (!portfolioId || !inst) continue;
+      const instrumentId = this.identity.findByTicker(st.ticker);
+      if (!portfolioId || !instrumentId) continue;
       const values = {
         periodFrom: st.periodFrom,
         vmPeriod: st.vmPeriod,
@@ -617,7 +530,7 @@ export class ImportService {
       };
       this.db
         .insert(futuresSettlements)
-        .values({ portfolioId, instrumentId: inst.id, date: st.date, ...values })
+        .values({ portfolioId, instrumentId, date: st.date, ...values })
         .onConflictDoUpdate({
           target: [futuresSettlements.portfolioId, futuresSettlements.instrumentId, futuresSettlements.date],
           set: values,
@@ -635,7 +548,8 @@ export class ImportService {
    */
   private saveMarks(marks: FuturesMark[]): void {
     for (const mark of marks) {
-      const [inst] = this.db.select().from(instruments).where(eq(instruments.ticker, mark.ticker)).all();
+      const instrumentId = this.identity.findByTicker(mark.ticker);
+      const [inst] = instrumentId ? this.db.select().from(instruments).where(eq(instruments.id, instrumentId)).all() : [];
       if (!inst || inst.marketSource !== 'manual') continue;
 
       // история цен — независимо от того, свежее ли это текущей котировки: цена на СВОЮ дату

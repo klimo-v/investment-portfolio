@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { instruments, priceHistory, quotes } from '../../../db/schema';
 import { PriceHistoryService } from './price-history.service';
 import type { HistoryPoint, HistoryTarget, PriceHistoryProvider } from './price-history.provider';
+import { InstrumentIdentityService } from '../instruments/instrument-identity.service';
 
 let db: BetterSQLite3Database;
 
@@ -155,7 +156,7 @@ describe('слияние инструментов: история цен пер�
     svc.record('OLD', point('2026-10-01', '1', 'manual'));
     svc.record('OLD', point('2026-10-02', '2', 'snapshot'));
 
-    new PortfoliosService(db as never).mergeInstruments('OLD', 'SBER');
+    new PortfoliosService(db as never, new InstrumentIdentityService(db as never)).mergeInstruments('OLD', 'SBER');
 
     expect(rows().map((r) => [r.instrumentId, r.date, r.price, r.source])).toEqual([
       ['SBER', '2026-10-01', '300', 'moex'],
@@ -188,7 +189,7 @@ describe('слияние инструментов в разных валютах
     const { PortfoliosService } = await import('../portfolios/portfolios.service');
     db.insert(instruments).values({ id: 'USDX', ticker: 'USDX', type: 'Stock', currency: 'USD', marketSource: 'manual' }).run();
     new PriceHistoryService(db, []).record('USDX', point('2026-10-01', '10', 'manual'));
-    new PortfoliosService(db as never).mergeInstruments('USDX', 'SBER');
+    new PortfoliosService(db as never, new InstrumentIdentityService(db as never)).mergeInstruments('USDX', 'SBER');
     expect(rows()).toEqual([]);
   });
 });

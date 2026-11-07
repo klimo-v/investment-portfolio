@@ -1,4 +1,4 @@
-import { sqliteTable, text, integer, primaryKey } from 'drizzle-orm/sqlite-core';
+import { sqliteTable, text, integer, primaryKey, index } from 'drizzle-orm/sqlite-core';
 import { sql } from 'drizzle-orm';
 
 /**
@@ -142,6 +142,35 @@ export const priceHistory = sqliteTable(
   (t) => [primaryKey({ columns: [t.instrumentId, t.date] })],
 );
 export type PriceHistoryRow = typeof priceHistory.$inferSelect;
+
+/**
+ * Идентификаторы инструмента: все коды, под которыми один и тот же актив приходит из
+ * разных источников (тикер, ISIN, figi, uid Т-Банка, внутренний код брокера, название).
+ * Резолв инструмента при импорте идёт ТОЛЬКО через эту таблицу
+ * (libs/core/instrument-identity.ts). Это знание о справочнике, а не данные операций:
+ * удаление сделок/систем/портфелей её не трогает; идентификаторы удаляются вместе с
+ * инструментом (cascade), а слияние сначала переносит их на цель.
+ *
+ * `origin`: 'import' — выучено из отчёта, 'merge' — после слияния дубля, 'manual' —
+ * выбор пользователя в предпросмотре импорта. (scheme, value) уникальны глобально:
+ * один код принадлежит одному инструменту.
+ */
+export const instrumentIdentifiers = sqliteTable(
+  'instrument_identifiers',
+  {
+    scheme: text('scheme', {
+      enum: ['ticker', 'isin', 'figi', 'tbank_uid', 'broker_code', 'name'],
+    }).notNull(),
+    value: text('value').notNull(),
+    instrumentId: text('instrument_id')
+      .notNull()
+      .references(() => instruments.id, { onDelete: 'cascade' }),
+    origin: text('origin', { enum: ['import', 'merge', 'manual'] }).notNull(),
+    createdAt: text('created_at').notNull().default(sql`(datetime('now'))`),
+  },
+  (t) => [primaryKey({ columns: [t.scheme, t.value] }), index('instrument_identifiers_instrument_idx').on(t.instrumentId)],
+);
+export type InstrumentIdentifierRow = typeof instrumentIdentifiers.$inferSelect;
 
 export type SystemRow = typeof systems.$inferSelect;
 export type PortfolioRow = typeof portfolios.$inferSelect;

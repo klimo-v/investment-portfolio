@@ -74,3 +74,44 @@ describe('обрыв между созданием price_history и перено
     expect(sqlite.prepare(`SELECT price, source FROM price_history`).all()).toEqual([{ price: '250', source: 'snapshot' }]);
   });
 });
+
+describe('заполнение instrument_identifiers из существующих инструментов', () => {
+  it('тикер, ISIN и название; невалидный ISIN — код брокера; TMON@ уступает код TMON', () => {
+    const sqlite = new Database(':memory:');
+    applyMigrations(sqlite, FULL);
+    sqlite.exec(`
+      INSERT INTO instruments (id, ticker, type, currency, isin, name, market_source) VALUES
+        ('TMON@','TMON@','ETF','RUB',NULL,'Денежный рынок','manual'),
+        ('TMON','TMON','ETF','RUB',NULL,'паи БПИФ рфи Т-КапиталДенРынок','moex'),
+        ('SBER','SBER','Stock','RUB','RU0009029540','Сбербанк','moex'),
+        ('TCS00A10B4K3','TCS00A10B4K3','Bond','RUB','TCS00A10B4K3',NULL,'manual');
+    `);
+    applyMigrations(sqlite, FULL);
+    const rows = sqlite
+      .prepare(`SELECT scheme, value, instrument_id AS id FROM instrument_identifiers ORDER BY scheme, value`)
+      .all();
+    expect(rows).toEqual([
+      { scheme: 'broker_code', value: 'TCS00A10B4K3', id: 'TCS00A10B4K3' },
+      { scheme: 'isin', value: 'RU0009029540', id: 'SBER' },
+      { scheme: 'name', value: 'денежный рынок', id: 'TMON@' },
+      { scheme: 'name', value: 'паи бпиф рфи т-капиталденрынок', id: 'TMON' },
+      { scheme: 'name', value: 'сбербанк', id: 'SBER' },
+      { scheme: 'ticker', value: 'SBER', id: 'SBER' },
+      { scheme: 'ticker', value: 'TCS00A10B4K3', id: 'TCS00A10B4K3' },
+      { scheme: 'ticker', value: 'TMON', id: 'TMON' },
+    ]);
+    // повторный запуск ничего не дублирует
+    applyMigrations(sqlite, FULL);
+    expect(sqlite.prepare(`SELECT COUNT(*) AS n FROM instrument_identifiers`).get()).toEqual({ n: 8 });
+  });
+
+  it('идентификаторы удаляются вместе с инструментом (cascade)', () => {
+    const sqlite = new Database(':memory:');
+    sqlite.pragma('foreign_keys = ON');
+    applyMigrations(sqlite, FULL);
+    sqlite.exec(`INSERT INTO instruments (id, ticker, type, currency, market_source) VALUES ('X','X','Stock','RUB','manual')`);
+    applyMigrations(sqlite, FULL);
+    sqlite.exec(`DELETE FROM instruments WHERE id='X'`);
+    expect(sqlite.prepare(`SELECT COUNT(*) AS n FROM instrument_identifiers`).get()).toEqual({ n: 0 });
+  });
+});

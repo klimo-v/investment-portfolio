@@ -216,3 +216,20 @@ describe('подсказки и возможные дубли', () => {
     expect(bond?.deterministic).toBe(false);
   });
 });
+
+describe('донаучивание отображаемых полей', () => {
+  it('пустые isin/name существующего инструмента заполняются, заполненные не трогаются', () => {
+    const idx = InstrumentIdentityIndex.from(
+      [inst('GAZP'), inst('SBER', { isin: 'RU0009029540', name: 'Сбербанк' })],
+      [entry('ticker', 'GAZP', 'GAZP'), entry('ticker', 'SBER', 'SBER')],
+    );
+    const plan = planInstrumentIdentities(
+      normalizeRawRows([
+        row({ ticker: 'GAZP', name: 'ГАЗПРОМ ао', identifiers: { isin: 'RU0007661625' } }),
+        row({ ticker: 'SBER', name: 'Другое имя', identifiers: { isin: 'RU000A10B4K3' } }),
+      ]),
+      idx,
+    );
+    expect(plan.patches).toEqual([{ instrumentId: 'GAZP', isin: 'RU0007661625', name: 'ГАЗПРОМ ао' }]);
+  });
+});

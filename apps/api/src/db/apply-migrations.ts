@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import type Database from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { readMigrationFiles } from 'drizzle-orm/migrator';
+import { backfillInstrumentIdentifiers } from './instrument-identifiers-store';
 import { copySnapshotsToPriceHistory } from './snapshot-to-price-history';
 
 /** Миграция, после которой переносим данные снимков (создаёт price_history) */
@@ -42,8 +43,15 @@ export function applyMigrations(sqlite: Database.Database, migrationsFolder: str
   const tableExists = (name: string): boolean =>
     sqlite.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?`).get(name) !== undefined;
 
+  // identifiers заполняются из инструментов после ВСЕХ миграций, при каждом запуске
+  // (идемпотентно): новые инструменты и поля, заведённые в обход сервиса, подхватятся
+  const finish = (): void => {
+    if (tableExists('instrument_identifiers')) backfillInstrumentIdentifiers(db);
+  };
+
   if (!split) {
     apply(migrations);
+    finish();
     return;
   }
 
@@ -53,4 +61,5 @@ export function applyMigrations(sqlite: Database.Database, migrationsFolder: str
   // перенос и миграция удаления потеряла бы историю. Перенос идемпотентен (recordPrice).
   if (tableExists('snapshot_positions')) copySnapshotsToPriceHistory(db);
   apply(migrations.filter((m) => m.folderMillis > split.when));
+  finish();
 }

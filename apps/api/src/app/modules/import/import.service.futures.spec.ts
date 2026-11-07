@@ -5,6 +5,7 @@ import { eq } from 'drizzle-orm';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { instruments, operations, portfolios, quotes, systems } from '../../../db/schema';
 import { ImportService } from './import.service';
+import { InstrumentIdentityService } from '../instruments/instrument-identity.service';
 
 /**
  * Импорт фьючерсов из HTML-отчёта брокера: инструмент Future, время сделки,
@@ -42,7 +43,7 @@ beforeEach(() => {
   db = drizzle(sqlite);
   db.insert(systems).values({ id: 'sys-1', name: 'Тест' }).run();
   db.insert(portfolios).values({ id: 'pf-1', name: 'ИИС' }).run();
-  service = new ImportService(db);
+  service = new ImportService(db, new InstrumentIdentityService(db));
 });
 
 describe('ImportService — фьючерсы', () => {

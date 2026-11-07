@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import type { RawRow } from '@core';
 import { futuresSettlements, operations, portfolios, systems } from '../../../db/schema';
 import { ImportService } from './import.service';
+import { InstrumentIdentityService } from '../instruments/instrument-identity.service';
 
 /**
  * Повторный импорт ОБНОВЛЯЕТ операцию, а не только пропускает: комиссия, пришедшая позже
@@ -39,7 +40,7 @@ beforeEach(() => {
     { id: 'sys-2', name: 'Другая' },
   ]).run();
   db.insert(portfolios).values({ id: 'pf-1', name: 'ИИС' }).run();
-  service = new ImportService(db);
+  service = new ImportService(db, new InstrumentIdentityService(db));
 });
 
 describe('ImportService — обновление операций при повторном импорте', () => {

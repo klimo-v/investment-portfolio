@@ -356,6 +356,13 @@ export interface NewInstrumentPlan {
   entries: IdentityEntry[];
 }
 
+/** Отображаемые поля существующего инструмента, которых не хватало (isin/name), — «донаучить» */
+export interface InstrumentPatch {
+  instrumentId: string;
+  isin?: string;
+  name?: string;
+}
+
 export interface IdentityPlan {
   /** Результат по каждой строке, в том же порядке, что и входные строки */
   rows: RowIdentity[];
@@ -363,6 +370,8 @@ export interface IdentityPlan {
   created: NewInstrumentPlan[];
   /** Идентификаторы, которые надо дописать существующим инструментам */
   links: IdentityEntry[];
+  /** Пустые isin/name существующих инструментов, которые строки отчёта могут заполнить */
+  patches: InstrumentPatch[];
 }
 
 const INSTRUMENT_TYPES = new Set(['Stock', 'Bond', 'ETF', 'Currency', 'Crypto', 'Cash', 'Future']);
@@ -392,12 +401,23 @@ export function planInstrumentIdentities(
   const work = index.clone();
   const links: IdentityEntry[] = [];
   const created: NewInstrumentPlan[] = [];
+  const patches: InstrumentPatch[] = [];
 
   const link = (entry: IdentityEntry): void => {
     if (work.add(entry)) links.push(entry);
   };
   const learnAll = (row: RawRow, instrumentId: string, origin: IdentifierOrigin): void => {
     for (const c of rowCodes(row)) link({ scheme: c.scheme, value: c.value, instrumentId, origin });
+    // существующие значения никогда не перезаписываем — только заполняем пустые
+    const inst = work.instrument(instrumentId);
+    if (!inst) return;
+    const patch: InstrumentPatch = { instrumentId };
+    if (!inst.isin && row.identifiers?.isin) patch.isin = row.identifiers.isin;
+    if (!inst.name && row.name?.trim()) patch.name = row.name.trim();
+    if (patch.isin || patch.name) {
+      patches.push(patch);
+      work.addInstrument({ ...inst, isin: patch.isin ?? inst.isin, name: patch.name ?? inst.name });
+    }
   };
   /** Попадания по сильным схемам (без названия) */
   const strongHits = (row: RawRow): Array<{ scheme: IdentifierScheme; value: string; id: string }> => {
@@ -501,5 +521,5 @@ export function planInstrumentIdentities(
     return { key, instrumentId: id, via: 'new', isNew: true, suggestions };
   });
 
-  return { rows: results, created, links };
+  return { rows: results, created, links, patches };
 }
