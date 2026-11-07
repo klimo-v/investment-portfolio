@@ -25,6 +25,8 @@ import {
   systems,
   portfolios,
   quotes,
+  strategyConfigs,
+  strategyDailyResults,
   type OperationRow,
 } from '../../../db/schema';
 import { DB } from '../../db/drizzle.module';
@@ -363,6 +365,30 @@ export class OperationsService {
    *   начала периода, сворачивается в синтетический отток датой `from` (иначе не с
    *   чем сравнить терминальный поток на buy-and-hold без операций в окне).
    */
+  /**
+   * Реализованный результат стратегий (лента `strategy_daily_results`) в срезе фильтра.
+   * Портфель берётся из конфига стратегии на момент чтения. Срочные стратегии не живут в
+   * `operations`, поэтому их net добавляется к результату отдельно (см. summary()).
+   */
+  private strategyResults(filter: SummaryFilter): StrategyNetRow[] {
+    return this.db
+      .select({
+        systemId: strategyDailyResults.systemId,
+        portfolioId: strategyConfigs.portfolioId,
+        date: strategyDailyResults.date,
+        netRub: strategyDailyResults.netRub,
+      })
+      .from(strategyDailyResults)
+      .innerJoin(strategyConfigs, eq(strategyConfigs.systemId, strategyDailyResults.systemId))
+      .all()
+      .filter(
+        (r) =>
+          (!filter.systemId || r.systemId === filter.systemId) &&
+          (!filter.portfolioId || r.portfolioId === filter.portfolioId) &&
+          (!filter.till || r.date <= filter.till),
+      );
+  }
+
   async summary(filter: SummaryFilter = {}): Promise<DashboardSummary> {
     const allOps = this.list();
     const opsUpTo = allOps.filter(
@@ -373,6 +399,7 @@ export class OperationsService {
     );
     const periodOps = opsUpTo.filter((o) => !filter.from || o.date >= filter.from);
     const positions = await this.positions(opsUpTo);
+    const strategyRows = this.strategyResults(filter);
     const systemRows = this.db.select().from(systems).all();
     const portfolioRows = this.db.select().from(portfolios).all();
     const systemName = new Map(systemRows.map((s) => [s.id, s.name]));
@@ -397,7 +424,7 @@ export class OperationsService {
       .map(([period, v]) => ({ period, flow: v.flow, income: v.income }));
 
     // эффективность по системам: срез операций/позиций/сделок по systemId
-    const systemIds = [...new Set(positions.map((p) => p.systemId))];
+    const systemIds = [...new Set([...positions.map((p) => p.systemId), ...strategyRows.map((r) => r.systemId)])];
     const bySystem = systemIds
       .map((systemId) => ({
         systemId,
@@ -407,12 +434,18 @@ export class OperationsService {
           positions.filter((p) => p.systemId === systemId),
           today,
           filter.from,
+          strategyNetInPeriod(strategyRows.filter((r) => r.systemId === systemId), filter.from),
         ),
       }))
       .sort((a, b) => b.pnlRub - a.pnlRub);
 
     // эффективность по портфелям/счетам
-    const portfolioIds = [...new Set(positions.map((p) => p.portfolioId))];
+    const portfolioIds = [
+      ...new Set([
+        ...positions.map((p) => p.portfolioId),
+        ...strategyRows.flatMap((r) => (r.portfolioId ? [r.portfolioId] : [])),
+      ]),
+    ];
     const byPortfolio = portfolioIds
       .map((portfolioId) => ({
         portfolioId,
@@ -422,6 +455,7 @@ export class OperationsService {
           positions.filter((p) => p.portfolioId === portfolioId),
           today,
           filter.from,
+          strategyNetInPeriod(strategyRows.filter((r) => r.portfolioId === portfolioId), filter.from),
         ),
       }))
       .sort((a, b) => b.pnlRub - a.pnlRub);
@@ -432,13 +466,20 @@ export class OperationsService {
       .map((p) => ({ ticker: p.ticker, pnlRub: Number(p.pnlRub) }))
       .sort((a, b) => b.pnlRub - a.pnlRub);
 
-    const totals = this.effectiveness(opsUpTo, positions, today, filter.from);
+    const totals = this.effectiveness(
+      opsUpTo,
+      positions,
+      today,
+      filter.from,
+      strategyNetInPeriod(strategyRows, filter.from),
+    );
 
     // Свободные деньги считаем по opsUpTo, т.е. по ВСЕЙ истории до `till` и намеренно
     // без `filter.from`: остаток на счёте — величина на момент, а не за период
     // (см. cash.ts). Фильтр по системе/портфелю при этом действует — он уже применён
     // к opsUpTo, и срез по портфелю даёт остаток именно этого счёта.
-    const cashRub = cashBalanceRub(opsUpTo).toNumber();
+    // Реализованный net срочных стратегий — тоже деньги на счёте: прибавляем весь net до `till`
+    const cashRub = cashBalanceRub(opsUpTo).plus(strategyNetInPeriod(strategyRows)).toNumber();
     const cash = { cashRub, totalValueRub: totals.currentValueRub + cashRub };
 
     return { timeline, bySystem, byPortfolio, breakdown, totals, cash };
@@ -492,6 +533,8 @@ export class OperationsService {
     positions: Position[],
     today: string,
     periodFrom?: string,
+    /** реализованный net срочных стратегий за период: входит в «Реализ.» и «P&L» (в XIRR не входит) */
+    strategyNet: Decimal = new Decimal(0),
   ): Effectiveness {
     const periodOps = periodFrom ? ops.filter((o) => o.date >= periodFrom) : ops;
 
@@ -501,10 +544,8 @@ export class OperationsService {
       if (op.operationType !== 'Dividend' && op.operationType !== 'Coupon') return s;
       return s + Number(op.quantity) * Number(op.price) * Number(op.fxRate);
     }, 0);
-    const realizedPnlRub = realizedPnlInRange(ops, periodFrom).reduce(
-      (s, r) => s + r.realizedPnlRub.toNumber(),
-      0,
-    );
+    const realizedPnlRub =
+      realizedPnlInRange(ops, periodFrom).reduce((s, r) => s + r.realizedPnlRub.toNumber(), 0) + strategyNet.toNumber();
     const unrealizedPnlRub = positions.reduce(
       (s, p) => (p.currentValueRub === null ? s : s + (Number(p.currentValueRub) - Number(p.investedRub))),
       0,
@@ -535,6 +576,19 @@ export class OperationsService {
 function trimZeros(value: string): string {
   if (!value.includes('.')) return value;
   return value.replace(/\.?0+$/, '') || '0';
+}
+
+/** Строка ленты результата стратегии с портфелем из её конфига */
+interface StrategyNetRow {
+  systemId: string;
+  portfolioId: string | null;
+  date: string;
+  netRub: string;
+}
+
+/** Сумма net стратегий за период (без `from` — вся история); Decimal, чтобы копейки не плыли */
+function strategyNetInPeriod(rows: StrategyNetRow[], from?: string): Decimal {
+  return rows.reduce((s, r) => (!from || r.date >= from ? s.plus(r.netRub) : s), new Decimal(0));
 }
 
 function rowToOperation(row: OperationRow): Operation {

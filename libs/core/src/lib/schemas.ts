@@ -330,6 +330,8 @@ export const SnapshotInvalidationKind = z.enum([
   'merge',
   'import-commit',
   'import-rollback',
+  /** пересчёт или удаление результата срочной стратегии (лента strategy_daily_results) */
+  'strategy-sync',
 ]);
 export type SnapshotInvalidationKind = z.infer<typeof SnapshotInvalidationKind>;
 

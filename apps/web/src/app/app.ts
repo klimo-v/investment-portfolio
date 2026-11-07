@@ -7,7 +7,9 @@ import { MatIconModule } from '@angular/material/icon';
 import { MatButtonModule } from '@angular/material/button';
 import { MatProgressBarModule } from '@angular/material/progress-bar';
 import { MatTooltipModule } from '@angular/material/tooltip';
+import { MatDialog } from '@angular/material/dialog';
 import { LoadingService, mediaQuery, ThemeService, type ThemeMode } from '@web-shared';
+import { StrategyListApi } from './entities/strategy/strategy-list.api';
 
 interface NavItem {
   readonly path: string;
@@ -71,7 +73,7 @@ const THEME_UI: Record<ThemeMode, { icon: string; label: string }> = {
     <mat-sidenav-container class="shell">
       <mat-sidenav [mode]="sidenavMode()" [opened]="opened()" (closedStart)="opened.set(false)">
         <mat-nav-list>
-          @for (item of nav; track item.path) {
+          @for (item of navItems(); track item.path) {
             <a
               mat-list-item
               [routerLink]="item.path"
@@ -84,6 +86,10 @@ const THEME_UI: Record<ThemeMode, { icon: string; label: string }> = {
               <span matListItemTitle>{{ item.label }}</span>
             </a>
           }
+          <button mat-list-item type="button" (click)="newStrategy()">
+            <mat-icon matListItemIcon>add_circle_outline</mat-icon>
+            <span matListItemTitle>Новая стратегия</span>
+          </button>
         </mat-nav-list>
       </mat-sidenav>
 
@@ -171,11 +177,30 @@ export class App {
     if (this.sidenavMode() === 'over') this.opened.set(false);
   }
 
-  protected readonly nav: readonly NavItem[] = [
-    { path: 'dashboard', label: 'Дашборд', icon: 'dashboard' },
-    { path: 'portfolio', label: 'Портфель', icon: 'account_balance_wallet' },
-    { path: 'operations', label: 'Операции', icon: 'edit_note' },
-    { path: 'trades', label: 'Сделки', icon: 'folder' },
-    { path: 'import', label: 'Импорт', icon: 'upload_file' },
-  ];
+  private readonly strategies = inject(StrategyListApi).list;
+  private readonly dialog = inject(MatDialog);
+
+  /** Диалог создания стратегии грузится лениво — в initial-бандл он не входит */
+  protected async newStrategy(): Promise<void> {
+    this.closeIfOverlay();
+    const { NewStrategyDialog } = await import('./features/new-strategy/new-strategy.dialog');
+    this.dialog.open(NewStrategyDialog, { autoFocus: false, width: '480px', maxWidth: '95vw' });
+  }
+
+  /** Меню: постоянные разделы + по пункту на каждую настроенную стратегию (из `systems`) */
+  protected readonly navItems = computed<readonly NavItem[]>(() => {
+    const strategyItems = (this.strategies.hasValue() ? this.strategies.value() : []).map((s) => ({
+      path: `strategies/${s.systemId}`,
+      label: s.name,
+      icon: 'show_chart',
+    }));
+    return [
+      { path: 'dashboard', label: 'Дашборд', icon: 'dashboard' },
+      { path: 'portfolio', label: 'Портфель', icon: 'account_balance_wallet' },
+      { path: 'operations', label: 'Операции', icon: 'edit_note' },
+      { path: 'trades', label: 'Сделки', icon: 'folder' },
+      ...strategyItems,
+      { path: 'import', label: 'Импорт', icon: 'upload_file' },
+    ];
+  });
 }

@@ -71,6 +71,27 @@
       "when": 1788814141005,
       "tag": "0009_lovely_silver_sable",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "6",
+      "when": 1794012037923,
+      "tag": "0010_fixed_terror",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "6",
+      "when": 1794040857958,
+      "tag": "0011_strategy_configs",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "6",
+      "when": 1794041349551,
+      "tag": "0012_strategy_daily_results",
+      "breakpoints": true
     }
   ]
 }
