@@ -42,9 +42,12 @@ export class ValuationService {
     const firstDate = traded.reduce((min, o) => (o.date < min ? o.date : min), traded[0].date);
     await this.priceHistory.ensureForInstruments(instrumentIds, firstDate, till);
 
-    // история + (если смотрим «до сегодня») текущие котировки и курсы как наблюдения на till:
-    // так последняя точка ряда совпадает с текущей сводкой, даже если «Обновить цены» сегодня
-    // ещё не нажимали. Добавляются ПОСЛЕ истории — при равной дате побеждает последняя
+    // история + текущие котировки и курсы как наблюдения: так итог ряда совпадает с текущей
+    // сводкой, даже если «Обновить цены» сегодня ещё не нажимали. Котировка ставится на СВОЮ
+    // дату (asOf, не позже till), а не на till: устаревшая котировка (например, расчётная цена
+    // фьючерса из отчёта брокера трёхдневной давности) не должна перебивать более свежую
+    // историю и рисовать скачок в последний день. Добавляются ПОСЛЕ истории — при равной
+    // дате побеждает последняя.
     const targets = this.priceHistory.targetsFor(instrumentIds);
     const observations: PriceObservation[] = this.priceHistory
       .list(targets.map((t) => t.instrumentId), undefined, till)
@@ -62,7 +65,7 @@ export class ValuationService {
         if (!ids.has(q.instrumentId)) continue;
         observations.push({
           instrumentId: q.instrumentId,
-          date: till,
+          date: q.asOf.slice(0, 10) < till ? q.asOf.slice(0, 10) : till,
           price: q.price,
           currency: q.currency,
           accruedInterest: q.accruedInterest,
