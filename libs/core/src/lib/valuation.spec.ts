@@ -274,6 +274,16 @@ describe('timeWeightedIndex: доходность без потоков', () => 
     expect(idx[3]).toBeCloseTo(90, 10);
   });
 
+  it('крупный ввод после почти нулевого остатка не даёт ложной просадки (ввод — в начале дня)', () => {
+    const idx = timeWeightedIndex([
+      { totalRub: 9214, netContributionsRub: -8016 }, // остаток 1 198 ₽ после вывода
+      { totalRub: 8238.49, netContributionsRub: 1991983.91 }, // внесли 2 млн ₽, за день −976 ₽ (комиссии)
+    ]);
+    // −976 ₽ на капитал ≈ 2 001 198 ₽, а не на вчерашние 1 198 ₽
+    expect(idx[1]).toBeCloseTo(99.95, 2);
+    expect(idx[1]).toBeGreaterThan(99.9);
+  });
+
   it('нулевое/отрицательное богатство не даёт деления на ноль', () => {
     const idx = timeWeightedIndex([
       { totalRub: -50, netContributionsRub: 0 },

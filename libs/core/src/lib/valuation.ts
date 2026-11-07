@@ -368,7 +368,8 @@ export function timeWeightedIndex(
     const wealth = p.netContributionsRub + p.totalRub;
     if (prevWealth !== null && prevWealth > 0) {
       const flow = p.netContributionsRub - prevContrib;
-      level *= 1 + (wealth - prevWealth - flow) / prevWealth;
+      const base = prevWealth + Math.max(flow, 0); // ввод — в начале дня, вывод — в конце
+      level *= 1 + (wealth - prevWealth - flow) / base;
     }
     index.push(level);
     prevWealth = wealth;
