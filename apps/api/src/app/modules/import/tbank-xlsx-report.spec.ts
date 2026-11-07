@@ -3,7 +3,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import ExcelJS from 'exceljs';
 import { parseTbankXlsx } from './tbank-xlsx-report';
-import type { RawRow } from '@core';
+import { normalizeRawRows, type RawRow } from '@core';
 
 /**
  * Тест парсера xlsx-отчёта Т-Банка на реальном отчёте пользователя
@@ -62,9 +62,11 @@ describe.skipIf(!hasFixture)('parseTbankXlsx — реальный отчёт Т-
     expect(row.fee).toBe('22.83');
   });
 
-  it('тикер денежного фонда без суффикса "@" (TMON@ → TMON)', () => {
-    expect(rows.some((r) => r.ticker === 'TMON')).toBe(true);
-    expect(rows.some((r) => r.ticker === 'TMON@')).toBe(false);
+  it('парсер отдаёт код как в отчёте (TMON@), а срезает «@» общий шаг нормализации импорта', () => {
+    expect(rows.some((r) => r.ticker === 'TMON@')).toBe(true);
+    const normalized = normalizeRawRows(rows);
+    expect(normalized.some((r) => r.ticker === 'TMON')).toBe(true);
+    expect(normalized.some((r) => r.ticker === 'TMON@')).toBe(false);
   });
 
   it('депозиты (Пополнение счета): 3 штуки, 605775 + 400000 + 25000', () => {
@@ -77,7 +79,8 @@ describe.skipIf(!hasFixture)('parseTbankXlsx — реальный отчёт Т-
   it('дивиденд сворачивается в одну нетто-операцию (брутто 11270 − налог 1466 = 9804)', () => {
     const dividends = rows.filter((r) => r.tradeType === 'Dividend');
     expect(dividends).toHaveLength(1); // не 2 (брутто+налог отдельно), а одна нетто
-    expect(dividends[0].ticker).toBe('RU000A108X38'); // ISIN — тикера у выплаты нет
+    expect(dividends[0].ticker).toBeUndefined(); // тикера у выплаты нет — только ISIN
+    expect(dividends[0].identifiers).toEqual({ isin: 'RU000A108X38' });
     expect(dividends[0].price).toBe('9804');
     // отдельной Tax-операции по этой выплате быть не должно (свёрнута внутрь)
     expect(rows.filter((r) => r.tradeType === 'Tax')).toHaveLength(0);
@@ -140,17 +143,18 @@ async function buildSyntheticWorkbook(): Promise<ExcelJS.Worksheet> {
 }
 
 describe('parseTbankXlsx — синтетический документ (купон, без реального файла)', () => {
-  it('купон брутто 1000 − налог 130 = 870, тип Coupon, тикер = ISIN', async () => {
+  it('купон брутто 1000 − налог 130 = 870, тип Coupon, ISIN отдельным идентификатором', async () => {
     const ws = await buildSyntheticWorkbook();
     const rows = parseTbankXlsx(ws);
 
-    const trade = rows.find((r) => r.ticker === 'TMON');
+    const trade = rows.find((r) => r.ticker === 'TMON@');
     expect(trade?.tradeType).toBe('Покупка');
     expect(trade?.price).toBe('100'); // 500 / 5
 
     const coupon = rows.find((r) => r.tradeType === 'Coupon');
     expect(coupon).toBeDefined();
-    expect(coupon?.ticker).toBe('RU000TEST001');
+    expect(coupon?.ticker).toBeUndefined();
+    expect(coupon?.identifiers).toEqual({ isin: 'RU000TEST001' });
     expect(coupon?.price).toBe('870');
     expect(rows.filter((r) => r.tradeType === 'Tax')).toHaveLength(0);
   });

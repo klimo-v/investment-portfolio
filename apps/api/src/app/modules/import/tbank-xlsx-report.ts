@@ -30,12 +30,12 @@ import type { RawRow } from '@core';
  *  - Дивиденд репортится ДВУМЯ строками (брутто + «Налог (дивиденды)»,
  *    привязанные к одной выплате по ISIN + дате исполнения) — сворачиваем в
  *    одну Dividend-операцию на нетто-сумму (решение пользователя).
- *  - У выплаты нет тикера, только ISIN в примечании — кладём ISIN в `ticker`,
- *    резолвер инструмента подхватит через фоллбэк по `instruments.isin`.
+ *  - У выплаты нет тикера, только ISIN в примечании — отдаём его как
+ *    `identifiers.isin`; инструмент находится по идентификатору (core: resolve).
  */
 
 const TRADE_KINDS = new Set(['Покупка', 'Продажа']);
-const ISIN_RE = /ISIN:\s*([A-Z0-9]{12})/;
+const ISIN_IN_NOTE_RE = /ISIN:\s*([A-Z0-9]{12})/;
 const KD_TYPE_RE = /Тип КД:\s*Выплата\s+(дивидендов|купон\w*)/i;
 const KD_REF_RE = /Референс КД:\s*(\d+)/;
 const NAME_RE = /Наименование:\s*([^,]+)/;
@@ -122,11 +122,6 @@ function findSectionMarkers(ws: ExcelJS.Worksheet): SectionMarker[] {
   return markers;
 }
 
-/** Убрать суффикс "@" у кодов вида "TMON@" (маркер денежных фондов у Т-Банка) */
-function normalizeTicker(code: string): string {
-  return code.replace(/@+$/, '');
-}
-
 /** Эвристика типа инструмента по названию/коду (аналог broker-html-report.ts) */
 function instrumentTypeFromName(name: string, ticker: string): string {
   const n = name.toLowerCase();
@@ -144,8 +139,9 @@ function parseTradesSection(ws: ExcelJS.Worksheet, from: number, to: number): Ra
     const kind = cellText(ws, r, TRADE_COL.kind);
     if (!TRADE_KINDS.has(kind)) continue; // пустые строки/разделители
 
-    const rawTicker = cellText(ws, r, TRADE_COL.ticker);
-    const ticker = normalizeTicker(rawTicker);
+    // код как в отчёте («TMON@» у денежных фондов): хвост «@» срезает общий шаг
+    // нормализации импорта (core: normalizeRawRows), одинаково для всех источников
+    const ticker = cellText(ws, r, TRADE_COL.ticker);
     const name = cellText(ws, r, TRADE_COL.name);
     const qty = cellNum(ws, r, TRADE_COL.qty);
     const amountExNkd = cellNum(ws, r, TRADE_COL.amountExNkd);
@@ -228,7 +224,7 @@ function parseCashSection(ws: ExcelJS.Worksheet, from: number, to: number): RawR
     } else if (opLower.includes('списание со счета') || opLower.includes('вывод')) {
       out.push(depositOrWithdrawRow(date, 'Withdraw', debit));
     } else if (op === 'Выплата доходов по корпоративным действиям') {
-      const isin = note.match(ISIN_RE)?.[1];
+      const isin = note.match(ISIN_IN_NOTE_RE)?.[1];
       if (isin) {
         const kdType = note.match(KD_TYPE_RE)?.[1]?.toLowerCase() ?? '';
         const reference = note.match(KD_REF_RE)?.[1];
@@ -243,7 +239,7 @@ function parseCashSection(ws: ExcelJS.Worksheet, from: number, to: number): RawR
         });
       }
     } else if (op.startsWith('Налог')) {
-      const isin = note.match(ISIN_RE)?.[1];
+      const isin = note.match(ISIN_IN_NOTE_RE)?.[1];
       if (isin) taxes.push({ date, isin, amount: debit });
     }
     // «Покупка/продажа», «Комиссия за сделки», «DFP/RFP» — денежный хвост сделок
@@ -256,7 +252,8 @@ function parseCashSection(ws: ExcelJS.Worksheet, from: number, to: number): RawR
     out.push({
       date: c.date,
       tradeType: c.kind,
-      ticker: c.isin, // тикера нет — резолвер попробует instruments.isin
+      // тикера у выплаты нет — только ISIN; идёт отдельным идентификатором
+      identifiers: { isin: c.isin },
       name: c.name,
       currency: 'RUB',
       quantity: '1',

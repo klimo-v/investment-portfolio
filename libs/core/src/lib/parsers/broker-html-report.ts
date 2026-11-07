@@ -1,5 +1,6 @@
 import { normalizeDate, type RawRow } from '../import';
 import { futuresMultiplier, scaleByPowerOfTen } from '../futures';
+import { isValidIsin } from '../isin';
 
 /**
  * Парсер HTML-отчёта брокера (формат «Отчет брокера», торговый код в шапке —
@@ -87,7 +88,6 @@ function feeSum(a: string | undefined, b: string | undefined): string {
 }
 
 const DATE_RE = /^\d{2}\.\d{2}\.\d{4}$/;
-const ISIN_RE = /^RU[0-9A-Z]{10}$/;
 const BUY_SELL = new Set(['Покупка', 'Продажа']);
 
 /** Тип инструмента из графы «Вид, Категория» Справочника ЦБ */
@@ -103,6 +103,8 @@ function instrumentTypeFromRef(kind: string): string {
 interface Reference {
   /** имя ЦБ → тикер (для резолва дивидендов, где нет кода) */
   nameToTicker: Map<string, string>;
+  /** тикер → ISIN из «Справочника ЦБ» (идёт в RawRow.identifiers) */
+  tickerToIsin: Map<string, string>;
   /** тикер → тип инструмента */
   tickerToType: Map<string, string>;
 }
@@ -111,18 +113,20 @@ interface Reference {
 function buildReference(tables: string[][][]): Reference {
   const nameToTicker = new Map<string, string>();
   const tickerToType = new Map<string, string>();
+  const tickerToIsin = new Map<string, string>();
   for (const table of tables) {
     for (const cells of table) {
       // строка справочника: name | code | ISIN | эмитент | вид,категория | выпуск
-      if (cells.length >= 5 && ISIN_RE.test(cells[2]) && /^[A-Z0-9]{1,12}$/.test(cells[1])) {
+      if (cells.length >= 5 && isValidIsin(cells[2]) && /^[A-Z0-9]{1,12}$/.test(cells[1])) {
         const name = cells[0];
         const ticker = cells[1];
         nameToTicker.set(name, ticker);
         tickerToType.set(ticker, instrumentTypeFromRef(cells[4]));
+        tickerToIsin.set(ticker, cells[2].toUpperCase());
       }
     }
   }
-  return { nameToTicker, tickerToType };
+  return { nameToTicker, tickerToType, tickerToIsin };
 }
 
 /** Найти тикер по вхождению названия ЦБ в описание операции (для дивидендов/купонов) */
@@ -464,6 +468,11 @@ export function parseBrokerHtmlReportWithMarks(html: string): BrokerReportParseR
     out.push(...cashFlowRows(seg.rows, ref, ctx));
     markCandidates.push(...futuresMarkCandidates(seg.rows, expiries));
     settlementCandidates.push(...futuresSettlementCandidates(seg.rows, ctx));
+  }
+  // ISIN бумаги из «Справочника ЦБ» — отдельным идентификатором строки
+  for (const r of out) {
+    const isin = r.ticker ? ref.tickerToIsin.get(r.ticker) : undefined;
+    if (isin) r.identifiers = { ...r.identifiers, isin };
   }
   // название фьючерса — с датой исполнения (она есть только в «Срочном рынке»)
   for (const r of out) {

@@ -238,11 +238,29 @@ describe('mapTbankOperations — фильтры и незнакомые типы
     expect((normalized as { confidence: string }).confidence).toBe('warn');
   });
 
-  it('без справочника инструментов подставляет figi — резолв пойдёт по нему', () => {
+  it('без справочника инструментов тикера нет, figi и uid — отдельные идентификаторы', () => {
     const rows = mapTbankOperations([buyWithTwoTrades()], '2000000001');
 
-    expect(rows[0].ticker).toBe('BBG004730N88');
+    expect(rows[0].ticker).toBeUndefined();
+    expect(rows[0].identifiers).toEqual({ figi: 'BBG004730N88', tbankUid: 'uid-sber' });
     expect(rows[0].name).toBeUndefined();
+  });
+
+  it('со справочником: тикер — биржевой, ISIN/figi/uid не теряются', () => {
+    const rows = mapTbankOperations([buyWithTwoTrades()], '2000000001', instruments);
+
+    expect(rows[0].ticker).toBe('SBER');
+    expect(rows[0].identifiers).toEqual({ isin: 'RU0009029540', figi: 'BBG004730N88', tbankUid: 'uid-sber' });
+  });
+
+  it('«ISIN» брокера, не прошедший проверку (TCS00A10B4K3), — brokerCode, а не isin', () => {
+    const tcs = new Map([
+      ['uid-sber', { ticker: 'TCS00A10B4K3', isin: 'TCS00A10B4K3', name: 'Норникель БО', instrumentType: 'bond' }],
+    ]);
+    const rows = mapTbankOperations([buyWithTwoTrades()], '2000000001', tcs);
+
+    expect(rows[0].identifiers?.isin).toBeUndefined();
+    expect(rows[0].identifiers?.brokerCode).toBe('TCS00A10B4K3');
   });
 });
 

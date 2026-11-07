@@ -1,5 +1,7 @@
 import Decimal from 'decimal.js';
 import type { RawRow } from '../import';
+import type { InstrumentIdentifiers } from '../instrument-identity';
+import { isValidIsin } from '../isin';
 
 /**
  * Маппер ответов T-Invest API (метод `OperationsService/GetOperationsByCursor`)
@@ -64,6 +66,8 @@ export interface TbankOperationItem {
 export interface TbankInstrumentRef {
   ticker?: string;
   isin?: string;
+  figi?: string;
+  uid?: string;
   name?: string;
   currency?: string;
   instrumentType?: string;
@@ -164,6 +168,24 @@ function allocateFee(commission: Decimal, weights: Decimal[]): Decimal[] {
   return allocated;
 }
 
+/** Идентификаторы инструмента из операции и справочной карточки брокера */
+function tbankIdentifiers(
+  item: TbankOperationItem,
+  instrument: TbankInstrumentRef | undefined,
+): InstrumentIdentifiers | undefined {
+  const ids: InstrumentIdentifiers = {};
+  const rawIsin = instrument?.isin?.trim();
+  if (rawIsin) {
+    if (isValidIsin(rawIsin)) ids.isin = rawIsin.toUpperCase();
+    else ids.brokerCode = rawIsin.toUpperCase();
+  }
+  const figi = item.figi || instrument?.figi;
+  if (figi) ids.figi = figi;
+  const uid = item.instrumentUid || instrument?.uid;
+  if (uid) ids.tbankUid = uid;
+  return Object.keys(ids).length > 0 ? ids : undefined;
+}
+
 /**
  * Ответы GetOperationsByCursor → строки импорта.
  *
@@ -217,15 +239,18 @@ export function mapTbankOperations(
     }
 
     const instrument = item.instrumentUid ? instruments.get(item.instrumentUid) : undefined;
-    // тикер — основной ключ резолва, ISIN и figi — запасные (resolveInstrument
-    // пробует и то, и другое, а `name` служит третьим ключом)
-    const ticker = instrument?.ticker || instrument?.isin || item.figi || undefined;
+    // тикер — только биржевой; ISIN, figi и uid идут отдельными идентификаторами
+    // (раньше всё складывалось в ticker и теряло смысл). «ISIN» брокера, не прошедший
+    // проверку (TCS00A10B4K3), — внутренний код брокера, а не ISIN.
+    const ticker = instrument?.ticker || undefined;
+    const identifiers = tbankIdentifiers(item, instrument);
     const currency = (item.payment?.currency ?? instrument?.currency ?? 'rub').toUpperCase();
     const tradeType = OPERATION_TYPE_MAP[item.type ?? ''] ?? item.type ?? '';
 
     const base = {
       date: toIsoDate(item.date),
       ticker,
+      ...(identifiers ? { identifiers } : {}),
       name: instrument?.name,
       instrumentType: INSTRUMENT_TYPE_MAP[instrument?.instrumentType ?? item.instrumentType ?? ''],
       currency,

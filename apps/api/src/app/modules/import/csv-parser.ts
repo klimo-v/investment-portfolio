@@ -6,7 +6,7 @@ import type { RawRow } from '@core';
  */
 
 /** Строковые поля RawRow, которые может задать колонка CSV (accountKind — не строка, из CSV не приходит) */
-type CsvField = Exclude<keyof RawRow, 'accountKind'>;
+type CsvField = Exclude<keyof RawRow, 'accountKind' | 'identifiers'>;
 
 /** Синонимы заголовков → канонический ключ RawRow */
 const HEADER_MAP: Record<string, CsvField> = {
@@ -41,6 +41,9 @@ const HEADER_MAP: Record<string, CsvField> = {
   note: 'note',
   комментарий: 'note',
 };
+
+/** Заголовки колонки ISIN → RawRow.identifiers.isin (необязательная колонка) */
+const ISIN_HEADERS = new Set(['isin', 'исин']);
 
 /** Разбивает строку CSV на ячейки, учитывая кавычки */
 function splitCsvLine(line: string, delimiter: string): string[] {
@@ -87,6 +90,7 @@ export function parseCsv(content: string): RawRow[] {
   const delimiter = detectDelimiter(lines[0]);
   const headers = splitCsvLine(lines[0], delimiter).map((h) => h.toLowerCase());
   const keys = headers.map((h) => HEADER_MAP[h] ?? null);
+  const isinIdx = headers.findIndex((h) => ISIN_HEADERS.has(h));
 
   const rows: RawRow[] = [];
   for (let i = 1; i < lines.length; i++) {
@@ -97,6 +101,8 @@ export function parseCsv(content: string): RawRow[] {
         row[key] = cells[idx];
       }
     });
+    const isin = isinIdx >= 0 ? cells[isinIdx]?.trim() : undefined;
+    if (isin) row.identifiers = { isin };
     if (row.date) rows.push(row);
   }
   return rows;
