@@ -13,6 +13,7 @@ import {
   type SystemPerformanceFilter,
 } from '../../entities/system-performance/system-performance.api';
 import { dashboardFilter } from '../../widgets/dashboard-filters/dashboard-filter.state';
+import { SystemExecution } from '../../widgets/system-execution/system-execution';
 import { SystemKpis } from '../../widgets/system-kpis/system-kpis';
 import { SystemEquityChart } from '../../widgets/system-equity-chart/system-equity-chart';
 import { SystemPnlBreakdown } from '../../widgets/system-pnl-breakdown/system-pnl-breakdown';
@@ -43,6 +44,7 @@ import { TradesTable } from '../../widgets/trades-table/trades-table';
     MatIconModule,
     StateMessage,
     SystemKpis,
+    SystemExecution,
     SystemEquityChart,
     SystemPnlBreakdown,
     SystemTradeDistribution,
@@ -146,6 +148,10 @@ import { TradesTable } from '../../widgets/trades-table/trades-table';
             <div class="chart-box"></div>
           }
         </div>
+
+        @if (p.execution; as execution) {
+          <app-system-execution [execution]="execution" />
+        }
 
         <h2 class="section-title">Сделки системы</h2>
         <app-trades-table [trades]="systemTrades()" [operations]="operationApi.operations.value() ?? []" />

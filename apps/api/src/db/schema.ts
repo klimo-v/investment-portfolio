@@ -225,3 +225,22 @@ export const futuresSettlements = sqliteTable(
   (t) => [primaryKey({ columns: [t.portfolioId, t.instrumentId, t.date] })],
 );
 export type FuturesSettlementRow = typeof futuresSettlements.$inferSelect;
+
+/**
+ * Аннотации исполнения 1:1 к операциям (libs/core/annotations.ts): тег (причина
+ * входа/выхода) и сигнальная цена, от которой считается проскальзывание. Отдельная
+ * таблица, чтобы журнал операций не засорялся полями одной системы. Комиссии здесь
+ * нет сознательно: факт комиссии — в отчёте брокера, а не в выгрузке терминала.
+ */
+export const operationAnnotations = sqliteTable('operation_annotations', {
+  operationId: text('operation_id')
+    .primaryKey()
+    .references(() => operations.id, { onDelete: 'cascade' }),
+  tag: text('tag'),
+  /** сигнальная цена, ₽ за контракт (десятичная строка); null — не задана */
+  signalPrice: text('signal_price'),
+  /** идентификатор парсера, из выгрузки которого пришла аннотация (quik-trades) */
+  source: text('source').notNull(),
+  importedAt: text('imported_at').notNull(),
+});
+export type OperationAnnotationRow = typeof operationAnnotations.$inferSelect;

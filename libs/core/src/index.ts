@@ -12,3 +12,4 @@ export * from './lib/parsers/broker-html-report';
 export * from './lib/parsers/tbank-invest-api';
 export * from './lib/performance';
 export * from './lib/futures-settlement';
+export * from './lib/annotations';

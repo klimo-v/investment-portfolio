@@ -9,6 +9,7 @@ import { MatSelectModule } from '@angular/material/select';
 import { MatDatepickerModule } from '@angular/material/datepicker';
 import { ImportApi, type PreviewResult, type ImportFormat } from '../../entities/import/import.api';
 import { ReferenceApi } from '../../entities/reference/reference.api';
+import { ImportAnnotations } from '../../features/import-annotations/import-annotations';
 import { parseIsoDate, toIsoDate } from '../../shared/iso-date';
 import { StatusChip, extractErrorMessage, type ChipTone } from '@web-shared';
 
@@ -62,6 +63,7 @@ export function defaultSyncRange(
     MatFormFieldModule,
     MatSelectModule,
     MatDatepickerModule,
+    ImportAnnotations,
     StatusChip,
   ],
   template: `
@@ -278,6 +280,8 @@ export function defaultSyncRange(
     @if (errorMessage()) {
       <p class="error">{{ errorMessage() }}</p>
     }
+
+    <app-import-annotations />
   `,
   styles: [
     `

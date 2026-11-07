@@ -348,7 +348,40 @@ const DirectionStatsSchema = z.object({
   winRatePct: z.number().nullable(),
   netPnlRub: decimalString,
 });
+/**
+ * Блок «Исполнение» — появляется только при наличии аннотаций (CSV исполнения).
+ * Проскальзывание считается в ядре от сигнальной цены: положительное = потеряли.
+ */
+const ExecutionSchema = z.object({
+  /** сколько исполнений системы имеют аннотацию */
+  fills: z.number(),
+  /** контрактов/штук, у которых есть сигнальная цена (знаменатель среднего) */
+  contractsWithSignal: decimalString,
+  totalSlippageRub: decimalString,
+  avgSlippagePerContractRub: decimalString.nullable(),
+  byTag: z.array(
+    z.object({
+      tag: z.string().nullable(),
+      fills: z.number(),
+      contracts: decimalString,
+      slippageRub: decimalString,
+    }),
+  ),
+  /** закрытые сделки по тегу входа (тег первого аннотированного исполнения сделки) */
+  byEntryTag: z.array(
+    z.object({
+      tag: z.string().nullable(),
+      trades: z.number(),
+      wins: z.number(),
+      winRatePct: z.number().nullable(),
+      netPnlRub: decimalString,
+    }),
+  ),
+});
+export type ExecutionStats = z.infer<typeof ExecutionSchema>;
+
 export const SystemPerformanceSchema = z.object({
+  execution: ExecutionSchema.nullable().default(null),
   systemId: z.string(),
   systemName: z.string(),
   /**

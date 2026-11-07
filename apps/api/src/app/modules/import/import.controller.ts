@@ -1,5 +1,6 @@
 import { BadRequestException, Body, Controller, Get, Post } from '@nestjs/common';
 import { z } from 'zod';
+import { AnnotationImportService } from './annotation-import.service';
 import { ImportService, type ImportFormat, type PreviewResult } from './import.service';
 import { TbankConfig } from './tbank/tbank.config';
 import { TbankSyncService } from './tbank/tbank-sync.service';
@@ -35,12 +36,18 @@ const TbankFetchSchema = z.object({
   to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Дата конца: ожидается YYYY-MM-DD'),
 });
 
+const AnnotationBodySchema = z.object({
+  content: z.string().min(1, 'Файл пуст'),
+  format: z.string().optional(),
+});
+
 @Controller('import')
 export class ImportController {
   constructor(
     private readonly service: ImportService,
     private readonly tbankConfig: TbankConfig,
     private readonly tbankSync: TbankSyncService,
+    private readonly annotations: AnnotationImportService,
   ) {}
 
   /** Предпросмотр: распознать строки без записи */
@@ -58,7 +65,7 @@ export class ImportController {
 
   /** Импортировать распознанные строки */
   @Post('commit')
-  commit(@Body() body: ImportBody): Promise<{ batchId: string; imported: number }> {
+  commit(@Body() body: ImportBody): Promise<{ batchId: string; imported: number; updated: number }> {
     return this.service.commit({
       content: body.content ?? body.csv,
       uploadId: body.uploadId,
@@ -67,6 +74,29 @@ export class ImportController {
       portfolioId: body.portfolioId,
       tickerSystemOverrides: body.tickerSystemOverrides,
     });
+  }
+
+  /**
+   * Аннотации исполнения (тег, сигнальная цена) из CSV терминала: предпросмотр без записи.
+   * Привязываются к уже импортированным операциям по номеру сделки.
+   */
+  @Post('annotations/preview')
+  annotationsPreview(@Body() body: unknown) {
+    return this.annotations.preview(this.parseAnnotationBody(body));
+  }
+
+  /** Сохранить аннотации сопоставленных строк; несопоставленные вернуть с причинами */
+  @Post('annotations/commit')
+  annotationsCommit(@Body() body: unknown) {
+    return this.annotations.commit(this.parseAnnotationBody(body));
+  }
+
+  private parseAnnotationBody(body: unknown) {
+    const parsed = AnnotationBodySchema.safeParse(body);
+    if (!parsed.success) {
+      throw new BadRequestException(parsed.error.issues.map((i) => i.message).join('; '));
+    }
+    return parsed.data;
   }
 
   /** Откатить загрузку по batchId */

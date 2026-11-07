@@ -1,5 +1,6 @@
 import Decimal from 'decimal.js';
-import type { SystemPerformance } from './schemas';
+import type { ExecutionStats, SystemPerformance } from './schemas';
+import { slippageRub } from './annotations';
 import type { TradeResult } from './engine';
 
 /**
@@ -22,7 +23,20 @@ export type SystemPerformanceBody = Omit<
   'systemId' | 'systemName' | 'reconciliation'
 >;
 
+/** Исполнение операции с аннотацией: тег и сигнальная цена (annotations.ts) */
+export interface ExecutionFill {
+  operationId: string;
+  tag: string | null;
+  side: 'Buy' | 'Sell';
+  quantity: Decimal;
+  price: Decimal;
+  /** ₽ за контракт; null — сигнальной цены нет, проскальзывание не считается */
+  signalPrice: Decimal | null;
+}
+
 export interface PerformanceOptions {
+  /** аннотации исполнения; без них (или без пересечения со сделками) блока «Исполнение» нет */
+  fills?: readonly ExecutionFill[];
   /**
    * Нереализованный результат открытой сделки в ₽ (по расчётной цене); null/не задан —
    * оценки нет. Считает вызывающий: у него котировки, у чистой функции их нет.
@@ -210,6 +224,68 @@ function buildHistogram(values: Decimal[]): SystemPerformanceBody['series']['his
   }));
 }
 
+/** Блок «Исполнение»: проскальзывание от сигнальной цены и результат по тегу входа */
+function executionStats(
+  trades: readonly TradeResult[],
+  closed: readonly TradeResult[],
+  allFills: readonly ExecutionFill[] | undefined,
+): ExecutionStats | null {
+  if (!allFills || allFills.length === 0) return null;
+  const mine = new Set(trades.flatMap((t) => t.operationIds));
+  const fills = allFills.filter((f) => mine.has(f.operationId));
+  if (fills.length === 0) return null;
+
+  const tagKey = (tag: string | null): string => tag ?? '';
+  const byTag = new Map<string, { tag: string | null; fills: number; contracts: Decimal; slip: Decimal }>();
+  let total = ZERO;
+  let contracts = ZERO;
+  for (const f of fills) {
+    const g = byTag.get(tagKey(f.tag)) ?? { tag: f.tag, fills: 0, contracts: ZERO, slip: ZERO };
+    g.fills++;
+    if (f.signalPrice) {
+      const slip = slippageRub(f.side, f.price, f.signalPrice, f.quantity);
+      g.slip = g.slip.plus(slip);
+      g.contracts = g.contracts.plus(f.quantity);
+      total = total.plus(slip);
+      contracts = contracts.plus(f.quantity);
+    }
+    byTag.set(tagKey(f.tag), g);
+  }
+
+  // тег входа сделки — тег первого аннотированного исполнения (operationIds идут в порядке сделок)
+  const tagOfOp = new Map(fills.map((f) => [f.operationId, f.tag]));
+  const entry = new Map<string, { tag: string | null; pnls: Decimal[] }>();
+  for (const t of closed) {
+    const firstTagged = t.operationIds.find((id) => tagOfOp.get(id));
+    const tag = firstTagged ? (tagOfOp.get(firstTagged) as string) : null;
+    const g = entry.get(tagKey(tag)) ?? { tag, pnls: [] };
+    g.pnls.push(t.realizedPnlRub);
+    entry.set(tagKey(tag), g);
+  }
+
+  return {
+    fills: fills.length,
+    contractsWithSignal: contracts.toString(),
+    totalSlippageRub: money(total),
+    avgSlippagePerContractRub: contracts.gt(0) ? money(total.div(contracts)) : null,
+    byTag: [...byTag.values()]
+      .sort((a, b) => tagKey(a.tag).localeCompare(tagKey(b.tag)))
+      .map((g) => ({ tag: g.tag, fills: g.fills, contracts: g.contracts.toString(), slippageRub: money(g.slip) })),
+    byEntryTag: [...entry.values()]
+      .sort((a, b) => tagKey(a.tag).localeCompare(tagKey(b.tag)))
+      .map((g) => {
+        const o = outcomeStats(g.pnls);
+        return {
+          tag: g.tag,
+          trades: o.count,
+          wins: o.wins,
+          winRatePct: o.winRatePct,
+          netPnlRub: money(g.pnls.reduce((s, x) => s.plus(x), ZERO)),
+        };
+      }),
+  };
+}
+
 export const RATIO_ASSUMPTIONS =
   'Sharpe и Sortino считаются по дневному результату в ₽ (капитала у системы нет), ' +
   'безрисковая ставка = 0, годовая нормировка × √252. Дни — все будни между первой и ' +
@@ -348,6 +424,7 @@ export function systemPerformance(
 
   const last = pnls[pnls.length - 1];
   return {
+    execution: executionStats(trades, closed, options.fills),
     summary: {
       netPnlRub: money(net),
       grossPnlRub: money(gross),

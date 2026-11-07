@@ -38,6 +38,26 @@ export interface PreviewResult {
   uploadId: string;
 }
 
+/** Строка предпросмотра загрузки данных исполнения: привязана к операции или отклонена с причиной */
+export interface AnnotationPreviewRow {
+  line: number;
+  status: 'matched' | 'error';
+  reason?: string;
+  brokerRef?: string;
+  date?: string;
+  ticker?: string;
+  side?: 'Buy' | 'Sell';
+  quantity?: string;
+  price?: string;
+  tag?: string | null;
+  signalPrice?: string | null;
+}
+
+export interface AnnotationPreview {
+  rows: AnnotationPreviewRow[];
+  summary: { total: number; matched: number; error: number };
+}
+
 export type ImportFormat = 'csv' | 'html' | 'xlsx';
 
 /**
@@ -125,6 +145,21 @@ export class ImportApi {
         '/api/import/commit',
         req,
         withToastSuccess('Импорт завершён'),
+      ),
+    );
+  }
+
+  /** Аннотации исполнения (тег, сигнальная цена) из CSV терминала — предпросмотр без записи */
+  annotationsPreview(content: string): Promise<AnnotationPreview> {
+    return firstValueFrom(this.http.post<AnnotationPreview>('/api/import/annotations/preview', { content }));
+  }
+
+  annotationsCommit(content: string): Promise<{ saved: number; skipped: AnnotationPreviewRow[] }> {
+    return firstValueFrom(
+      this.http.post<{ saved: number; skipped: AnnotationPreviewRow[] }>(
+        '/api/import/annotations/commit',
+        { content },
+        withToastSuccess('Данные исполнения сохранены'),
       ),
     );
   }

@@ -6,10 +6,32 @@
  * Количество остаётся в контрактах.
  */
 
-/** Серия фьючерса → множитель (₽ за пункт котировки). Только степени десяти. */
-export const FUTURES_SPECS: Readonly<Record<string, { multiplier: number }>> = {
-  CNY: { multiplier: 1000 },
+/**
+ * Серия фьючерса → параметры.
+ *  - `multiplier` — ₽ за пункт котировки (только степени десяти);
+ *  - `quikCode` — префикс кода контракта в терминале QUIK (CNY ↔ «CR»: CRZ6 = CNY-12.26).
+ *    Нужен только для сверки выгрузок исполнения с операциями журнала (annotations.ts).
+ */
+export const FUTURES_SPECS: Readonly<Record<string, { multiplier: number; quikCode: string }>> = {
+  CNY: { multiplier: 1000, quikCode: 'CR' },
 };
+
+/** Буква месяца экспирации фьючерса (стандарт биржи): F = январь … Z = декабрь */
+const MONTH_CODES = 'FGHJKMNQUVXZ';
+
+/**
+ * Код контракта QUIK → тикер отчёта брокера: «CRZ6» → «CNY-12.26». Год однозначный
+ * (последняя цифра), считаем его в текущем десятилетии 2020-х. null — серия неизвестна
+ * или код не распознан.
+ */
+export function quikCodeToTicker(code: string): string | null {
+  const m = code.trim().toUpperCase().match(/^([A-Z0-9]{1,3}?)([FGHJKMNQUVXZ])(\d)$/);
+  if (!m) return null;
+  const series = Object.entries(FUTURES_SPECS).find(([, spec]) => spec.quikCode === m[1])?.[0];
+  if (!series) return null;
+  const month = String(MONTH_CODES.indexOf(m[2]) + 1).padStart(2, '0');
+  return `${series}-${month}.2${m[3]}`;
+}
 
 /** Серия из кода контракта: «CNY-12.26» → «CNY» */
 export function futuresSeries(contractCode: string): string | null {

@@ -5,11 +5,12 @@ import Decimal from 'decimal.js';
 import {
   SystemPerformanceSchema,
   systemPerformance,
+  type ExecutionFill,
   type SystemPerformance,
   type SystemPerformanceQuery,
   type TradeResult,
 } from '@core';
-import { systems } from '../../../db/schema';
+import { operationAnnotations, operations, systems } from '../../../db/schema';
 import { DB } from '../../db/drizzle.module';
 import { OperationsService } from '../operations/operations.service';
 
@@ -41,7 +42,7 @@ export class SystemPerformanceService {
 
     const body = systemPerformance(
       valued.map((v) => v.trade),
-      { unrealizedOf: (t) => unrealized.get(t) ?? null },
+      { unrealizedOf: (t) => unrealized.get(t) ?? null, fills: this.executionFills(valued.map((v) => v.trade)) },
     );
     // ВМ брокера привязана к счёту и инструменту, а не к системе: показываем сверку
     // только там, где весь инструмент в портфеле принадлежит этой системе
@@ -55,5 +56,32 @@ export class SystemPerformanceService {
       .map(({ systemIds: _systemIds, ...check }) => check);
 
     return SystemPerformanceSchema.parse({ systemId, systemName: system.name, ...body, reconciliation });
+  }
+
+  /** Аннотации исполнения операций этих сделок: тег и сигнальная цена (необязательное обогащение) */
+  private executionFills(trades: readonly TradeResult[]): ExecutionFill[] {
+    const ids = new Set(trades.flatMap((t) => t.operationIds));
+    if (ids.size === 0) return [];
+    const ops = new Map(
+      this.db.select().from(operations).all().filter((o) => ids.has(o.id)).map((o) => [o.id, o]),
+    );
+    return this.db
+      .select()
+      .from(operationAnnotations)
+      .all()
+      .flatMap((a): ExecutionFill[] => {
+        const op = ops.get(a.operationId);
+        if (!op || (op.operationType !== 'Buy' && op.operationType !== 'Sell')) return [];
+        return [
+          {
+            operationId: a.operationId,
+            tag: a.tag,
+            side: op.operationType,
+            quantity: new Decimal(op.quantity),
+            price: new Decimal(op.price),
+            signalPrice: a.signalPrice ? new Decimal(a.signalPrice) : null,
+          },
+        ];
+      });
   }
 }
