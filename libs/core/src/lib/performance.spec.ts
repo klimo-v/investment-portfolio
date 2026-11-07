@@ -241,7 +241,7 @@ describe('systemPerformance: краевые случаи', () => {
       couponsRub: new Decimal(20),
     });
     const p = systemPerformance([open], { unrealizedOf: () => new Decimal(-50) });
-    expect(p.summary).toMatchObject({ netPnlRub: '0.00', unrealizedRub: '-50.00', incomeRub: '120.00', totalRub: '70.00' });
+    expect(p.summary).toMatchObject({ netPnlRub: '0.00', unrealizedRub: '-50.00', incomeRub: '120.00', openIncomeRub: '120.00', openResultRub: '70.00', totalRub: '70.00' });
   });
 
   it('открытая без оценки: нереализованный = 0, не падает', () => {

@@ -90,16 +90,19 @@ export class SystemKpis {
           },
           {
             label: 'Открытые позиции',
-            value: rub(s.unrealizedRub),
-            tone: toneOfStr(s.unrealizedRub),
-            sub: s.openCount > 0 ? `открытых сделок: ${s.openCount}` : 'открытых нет',
-            hint: 'Только изменение цены относительно средней покупки. Дивиденды и купоны не входят — см. «Дивиденды и купоны».',
+            value: rub(s.openResultRub),
+            tone: toneOfStr(s.openResultRub),
+            sub:
+              s.openCount > 0
+                ? `цена ${rub(s.unrealizedRub)} · выплаты ${rub(s.openIncomeRub)}`
+                : 'открытых нет',
+            hint: 'Изменение цены относительно средней покупки плюс дивиденды и купоны, полученные по открытым сделкам.',
           },
           {
             label: 'Дивиденды и купоны',
             value: rub(s.incomeRub),
             tone: toneOfStr(s.incomeRub),
-            hint: 'Выплаты по всем сделкам системы (за вычетом удержанного налога). В результат закрытых сделок и в кривую капитала не входят.',
+            hint: 'Выплаты по всем сделкам системы, включая закрытые. Часть по открытым уже входит в «Открытые позиции».',
           },
           {
             label: 'Всего',

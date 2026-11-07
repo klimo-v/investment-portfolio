@@ -312,6 +312,7 @@ export function systemPerformance(
   const feesTotal = trades.reduce((s, t) => s.plus(t.feesRub), ZERO);
   const openRealized = open.reduce((s, t) => s.plus(t.realizedPnlRub), ZERO);
   const income = trades.reduce((s, t) => s.plus(t.dividendsRub).plus(t.couponsRub), ZERO);
+  const openIncome = open.reduce((s, t) => s.plus(t.dividendsRub).plus(t.couponsRub), ZERO);
   const unrealized = open.reduce(
     (s, t) => s.plus(options.unrealizedOf?.(t) ?? ZERO),
     ZERO,
@@ -435,6 +436,8 @@ export function systemPerformance(
       openRealizedRub: money(openRealized),
       unrealizedRub: money(unrealized),
       incomeRub: money(income),
+      openIncomeRub: money(openIncome),
+      openResultRub: money(unrealized.plus(openIncome)),
       totalRub: money(net.plus(openRealized).plus(unrealized).plus(income)),
       openCount: open.length,
     },
