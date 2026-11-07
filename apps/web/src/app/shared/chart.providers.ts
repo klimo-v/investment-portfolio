@@ -6,6 +6,7 @@ import {
   CategoryScale,
   Chart,
   DoughnutController,
+  Filler,
   Legend,
   LinearScale,
   LineController,
@@ -50,7 +51,8 @@ export const provideAppCharts = () =>
       // Оси: категориальная (даты/тикеры) и числовая (рубли/проценты)
       CategoryScale,
       LinearScale,
-      // Плагины: подсказка при наведении и легенда
+      // Плагины: подсказка при наведении, легенда и заливка под линией (просадка эквити)
+      Filler,
       Tooltip,
       Legend,
     ],

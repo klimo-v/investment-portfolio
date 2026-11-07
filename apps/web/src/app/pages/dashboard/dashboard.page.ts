@@ -90,6 +90,7 @@ import {
         [groupBy]="groupBy()"
         (groupByChange)="groupBy.set($event)"
         [pnlHint]="pnlHint"
+        [portfolioId]="filter.portfolio()"
       />
 
       <div class="charts">

@@ -7,6 +7,7 @@ import { MatFormFieldModule } from '@angular/material/form-field';
 import { MatSelectModule } from '@angular/material/select';
 import { MatTooltipModule } from '@angular/material/tooltip';
 import { MatDialog } from '@angular/material/dialog';
+import { RouterLink } from '@angular/router';
 import type { InstrumentType, Position } from '@core';
 import { firstValueFrom } from 'rxjs';
 import { OperationApi } from '../../entities/operation/operation.api';
@@ -118,6 +119,7 @@ interface Group {
     MatFormFieldModule,
     MatSelectModule,
     MatTooltipModule,
+    RouterLink,
     KpiCard,
     StateMessage,
     AllocationChart,
@@ -169,6 +171,17 @@ interface Group {
           }
         </mat-select>
       </mat-form-field>
+      <!-- Статистика есть только у конкретной системы; текущий портфель едет в query -->
+      @if (systemFilter(); as systemId) {
+        <a
+          mat-stroked-button
+          [routerLink]="['/systems', systemId]"
+          [queryParams]="portfolioFilter() ? { portfolio: portfolioFilter() } : null"
+        >
+          <mat-icon>query_stats</mat-icon>
+          Статистика системы
+        </a>
+      }
     </div>
 
     <div class="kpi-grid">

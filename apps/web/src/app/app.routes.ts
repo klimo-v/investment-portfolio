@@ -30,6 +30,11 @@ export const appRoutes: Route[] = [
     title: 'Сделки',
   },
   {
+    path: 'systems/:systemId',
+    loadComponent: () => import('./pages/system/system.page').then((m) => m.SystemPage),
+    title: 'Система',
+  },
+  {
     path: 'import',
     loadComponent: () => import('./pages/import/import.page').then((m) => m.ImportPage),
     title: 'Импорт',

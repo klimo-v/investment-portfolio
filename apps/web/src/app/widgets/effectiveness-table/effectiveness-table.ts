@@ -3,6 +3,7 @@ import { MatCardModule } from '@angular/material/card';
 import { MatTableModule } from '@angular/material/table';
 import { MatButtonToggleModule } from '@angular/material/button-toggle';
 import { MatSortModule } from '@angular/material/sort';
+import { RouterLink } from '@angular/router';
 import type { Effectiveness } from '@core';
 import {
   formatPercentOrDash,
@@ -36,7 +37,7 @@ export type EffGroupBy = 'system' | 'portfolio';
 @Component({
   selector: 'app-effectiveness-table',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [MatCardModule, MatTableModule, MatButtonToggleModule, MatSortModule, Hint],
+  imports: [MatCardModule, MatTableModule, MatButtonToggleModule, MatSortModule, RouterLink, Hint],
   template: `
     <mat-card class="eff">
       <div class="eff-head">
@@ -63,7 +64,13 @@ export type EffGroupBy = 'system' | 'portfolio';
         >
           <ng-container matColumnDef="name">
             <th mat-header-cell *matHeaderCellDef mat-sort-header>Название</th>
-            <td mat-cell *matCellDef="let r">{{ r.name }}</td>
+            <td mat-cell *matCellDef="let r">
+              @if (groupBy() === 'system') {
+                <a [routerLink]="['/systems', r.id]" [queryParams]="portfolioId() ? { portfolio: portfolioId() } : null">{{ r.name }}</a>
+              } @else {
+                {{ r.name }}
+              }
+            </td>
           </ng-container>
           <ng-container matColumnDef="invested">
             <th mat-header-cell *matHeaderCellDef mat-sort-header
@@ -156,6 +163,8 @@ export class EffectivenessTable {
   readonly groupByChange = output<EffGroupBy>();
   /** Текст подсказки к P&L — общий со страницей, поэтому вход, а не константа */
   readonly pnlHint = input('');
+  /** Выбранный портфель — уходит в ссылку на страницу системы, чтобы срез сохранился */
+  readonly portfolioId = input<string | null>(null);
 
   protected readonly columns = [
     'name',

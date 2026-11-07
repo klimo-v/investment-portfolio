@@ -9,6 +9,7 @@ import {
   type WritableSignal,
 } from '@angular/core';
 import { NgTemplateOutlet } from '@angular/common';
+import { RouterLink } from '@angular/router';
 import { MatCardModule } from '@angular/material/card';
 import { MatTableModule } from '@angular/material/table';
 import { MatTabsModule } from '@angular/material/tabs';
@@ -68,6 +69,7 @@ interface StatsRow extends TradeStats {
     MatPaginatorModule,
     MatSortModule,
     NgTemplateOutlet,
+    RouterLink,
     KpiCard,
     StateMessage,
     StatusChip,
@@ -212,7 +214,13 @@ interface StatsRow extends TradeStats {
       <table mat-table [dataSource]="rows" class="stats-table">
         <ng-container matColumnDef="name">
           <th mat-header-cell *matHeaderCellDef>{{ nameLabel }}</th>
-          <td mat-cell *matCellDef="let r">{{ r.name }}</td>
+          <td mat-cell *matCellDef="let r">
+            @if (nameLabel === 'Система') {
+              <a [routerLink]="['/systems', r.id]" [queryParams]="portfolioFilter() ? { portfolio: portfolioFilter() } : null">{{ r.name }}</a>
+            } @else {
+              {{ r.name }}
+            }
+          </td>
         </ng-container>
         <ng-container matColumnDef="count">
           <th mat-header-cell *matHeaderCellDef>Сделок</th>
