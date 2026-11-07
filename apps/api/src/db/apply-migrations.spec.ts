@@ -7,14 +7,14 @@ import { applyMigrations } from './apply-migrations';
 
 const FULL = join(__dirname, 'migrations');
 
-/** Копия папки миграций, обрезанная ДО price_history: это «БД пользователя до обновления» */
-function oldMigrationsFolder(): string {
+/** Копия папки миграций, обрезанная ДО price_history (или ПОСЛЕ неё: `through`) — «БД пользователя до обновления» */
+function oldMigrationsFolder(through = false): string {
   const dir = mkdtempSync(join(tmpdir(), 'migrations-'));
   cpSync(FULL, dir, { recursive: true });
   const journalPath = join(dir, 'meta', '_journal.json');
   const journal = JSON.parse(readFileSync(journalPath, 'utf8')) as { entries: { tag: string }[] };
   const idx = journal.entries.findIndex((e) => e.tag.endsWith('_price_history'));
-  journal.entries = journal.entries.slice(0, idx);
+  journal.entries = journal.entries.slice(0, through ? idx + 1 : idx);
   writeFileSync(journalPath, JSON.stringify(journal));
   return dir;
 }
@@ -55,5 +55,22 @@ describe('перенос снимков в price_history при обновлен
     `);
     applyMigrations(sqlite, FULL);
     expect(sqlite.prepare(`SELECT COUNT(*) AS n FROM price_history`).get()).toEqual({ n: 1 });
+  });
+});
+
+describe('обрыв между созданием price_history и переносом', () => {
+  it('БД уже на 0017, снимки есть, 0018 не применена: перенос всё равно выполняется до удаления таблиц', () => {
+    const sqlite = new Database(':memory:');
+    applyMigrations(sqlite, oldMigrationsFolder(true)); // создана price_history, перенос «не успел»
+    expect(sqlite.prepare(`SELECT name FROM sqlite_master WHERE name='price_history'`).get()).toBeDefined();
+    sqlite.exec(`
+      INSERT INTO instruments (id, ticker, type, currency, market_source) VALUES ('FUND','FUND','ETF','RUB','manual');
+      INSERT INTO snapshot_positions (date, instrument_id, value_rub, quantity) VALUES ('2026-10-01','FUND','1000.00','4');
+    `);
+
+    applyMigrations(sqlite, FULL);
+
+    expect(sqlite.prepare(`SELECT name FROM sqlite_master WHERE name='snapshot_positions'`).get()).toBeUndefined();
+    expect(sqlite.prepare(`SELECT price, source FROM price_history`).all()).toEqual([{ price: '250', source: 'snapshot' }]);
   });
 });

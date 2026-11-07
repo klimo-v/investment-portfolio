@@ -23,8 +23,8 @@ interface DrizzleInternals {
  * Миграции применяются в два захода, между которыми — перенос данных снимков в
  * price_history (copySnapshotsToPriceHistory). Это нужно, потому что таблицы снимков
  * удаляет более поздняя миграция: если применить всё одним вызовом, переносить будет
- * уже не из чего. Перенос выполняется ровно один раз — в тот запуск, когда price_history
- * только что создана.
+ * уже не из чего. Перенос идемпотентен и выполняется при каждом запуске, пока таблица
+ * снимков существует (в том числе после аварийного прерывания между шагами).
  */
 export function applyMigrations(sqlite: Database.Database, migrationsFolder: string): void {
   const db = drizzle(sqlite);
@@ -47,8 +47,10 @@ export function applyMigrations(sqlite: Database.Database, migrationsFolder: str
     return;
   }
 
-  const firstRun = !tableExists('price_history');
   apply(migrations.filter((m) => m.folderMillis <= split.when));
-  if (firstRun && tableExists('snapshot_positions')) copySnapshotsToPriceHistory(db);
+  // Переносим всегда, пока таблица снимков есть, а не только «в первый запуск»: если процесс
+  // убили между созданием price_history и переносом, следующий запуск иначе пропустил бы
+  // перенос и миграция удаления потеряла бы историю. Перенос идемпотентен (recordPrice).
+  if (tableExists('snapshot_positions')) copySnapshotsToPriceHistory(db);
   apply(migrations.filter((m) => m.folderMillis > split.when));
 }
