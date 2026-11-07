@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { Inject, Injectable } from '@nestjs/common';
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import Decimal from 'decimal.js';
 import {
   calculatePositions,
@@ -31,6 +31,7 @@ import {
   quotes,
   futuresSettlements,
   type OperationRow,
+  type QuoteRow,
 } from '../../../db/schema';
 import { DB } from '../../db/drizzle.module';
 import { QuotesService } from '../quotes/quotes.service';
@@ -188,6 +189,45 @@ export class OperationsService {
   }
 
   /**
+   * Текущая цена по инструментам — ЕДИНЫЙ источник для оценки позиций, сделок и итогов
+   * системы. Берётся котировка (quotes), но если в истории цен есть ЗАМЕТНО более свежая
+   * точка (дата строго позже даты котировки), побеждает она: иначе устаревшая котировка
+   * (например, расчётная цена фьючерса из отчёта брокера трёхдневной давности) расходилась
+   * бы с дневным рядом, у которого последний день — по свежей истории. При равной дате
+   * выигрывает котировка (она не старше).
+   */
+  private currentQuotes(): Map<string, QuoteRow> {
+    const result = new Map<string, QuoteRow>(this.db.select().from(quotes).all().map((q) => [q.instrumentId, q]));
+    const latest = this.db.all<{
+      instrument_id: string;
+      date: string;
+      price: string;
+      currency: string;
+      accrued_interest: string | null;
+      accrued_currency: string | null;
+    }>(sql`
+      SELECT p.instrument_id, p.date, p.price, p.currency, p.accrued_interest, p.accrued_currency
+      FROM price_history p
+      JOIN (SELECT instrument_id, MAX(date) AS d FROM price_history WHERE instrument_id NOT LIKE 'fx:%' GROUP BY instrument_id) m
+        ON m.instrument_id = p.instrument_id AND m.d = p.date
+    `);
+    for (const h of latest) {
+      const q = result.get(h.instrument_id);
+      if (q && q.asOf.slice(0, 10) >= h.date) continue;
+      result.set(h.instrument_id, {
+        instrumentId: h.instrument_id,
+        price: h.price,
+        currency: h.currency,
+        accruedInterest: h.accrued_interest,
+        accruedCurrency: h.accrued_currency,
+        source: q?.source ?? 'manual',
+        asOf: `${h.date}T00:00:00.000Z`,
+      });
+    }
+    return result;
+  }
+
+  /**
    * Позиции считает общий движок из libs/core (DRY: одна логика фронт+бэк),
    * затем обогащаем текущей ценой из кэша котировок и пересчётом стоимости/P&L в RUB.
    * Принимает список операций (по умолчанию — весь журнал), чтобы `summary()` мог
@@ -196,9 +236,8 @@ export class OperationsService {
   async positions(ops: Operation[] = this.list()): Promise<Position[]> {
     const futureIds = this.futureIds();
     const instrumentRows = this.db.select().from(instruments).all();
-    const quoteRows = this.db.select().from(quotes).all();
     const instrumentById = new Map(instrumentRows.map((i) => [i.id, i]));
-    const quoteByInstrument = new Map(quoteRows.map((q) => [q.instrumentId, q]));
+    const quoteByInstrument = this.currentQuotes();
 
     const checks = this.settlementChecks();
     const result: Position[] = [];
@@ -374,7 +413,7 @@ export class OperationsService {
     );
     const futureIds = this.futureIds();
     const instrumentById = new Map(this.db.select().from(instruments).all().map((i) => [i.id, i]));
-    const quoteByInstrument = new Map(this.db.select().from(quotes).all().map((q) => [q.instrumentId, q]));
+    const quoteByInstrument = this.currentQuotes();
 
     // Котировки только текущие. Если `till` в прошлом, сделки «открытые на till» нельзя
     // честно оценить сегодняшней ценой (смесь прошлого и настоящего) — оценку не даём
