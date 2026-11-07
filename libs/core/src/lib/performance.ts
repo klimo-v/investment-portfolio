@@ -49,6 +49,11 @@ export interface PerformanceOptions {
    * Без него кривая пустая, а equityMetrics нулевые — статистика сделок от него не зависит.
    */
   daily?: readonly ValuationPoint[];
+  /**
+   * Дивиденды/купоны без инструмента (к сделке не относятся, но деньги получены): входят в
+   * общий доход и в итог, учитываются как выплаты по закрытым (closedIncomeRub).
+   */
+  unattributedIncomeRub?: Decimal.Value;
 }
 
 // ───────────────────────── общие классификация и счётчики ─────────────────────────
@@ -379,7 +384,8 @@ export function systemPerformance(
   const gross = net.plus(feesClosed);
   const feesTotal = trades.reduce((s, t) => s.plus(t.feesRub), ZERO);
   const openRealized = open.reduce((s, t) => s.plus(t.realizedPnlRub), ZERO);
-  const income = trades.reduce((s, t) => s.plus(t.dividendsRub).plus(t.couponsRub), ZERO);
+  const unattributed = new Decimal(options.unattributedIncomeRub ?? 0);
+  const income = trades.reduce((s, t) => s.plus(t.dividendsRub).plus(t.couponsRub), unattributed);
   const openIncome = open.reduce((s, t) => s.plus(t.dividendsRub).plus(t.couponsRub), ZERO);
   const unrealized = open.reduce(
     (s, t) => s.plus(options.unrealizedOf?.(t) ?? ZERO),

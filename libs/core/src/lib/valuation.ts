@@ -100,6 +100,23 @@ export interface ValuationSeries {
   netContributionsRub: string[];
 }
 
+/** Ключ группы для выплат без инструмента при группировке по инструментам */
+export const NO_INSTRUMENT_GROUP = 'no-instrument';
+
+/**
+ * Дивиденд/купон без инструмента (в журнале бывают операции «Выплата дивидендов …» без
+ * привязки к бумаге): к сделке их не отнести, но деньги получены и в сводке дашборда они
+ * есть, поэтому в итог системы они входят отдельным потоком.
+ */
+export function isUnattributedIncome(op: Operation): boolean {
+  return !op.instrumentId && (op.operationType === 'Dividend' || op.operationType === 'Coupon');
+}
+
+/** Сумма выплаты в рублях */
+export function incomeAmountRub(op: Operation): Decimal {
+  return new Decimal(op.quantity).mul(op.price).mul(op.fxRate ?? '1');
+}
+
 const ZERO = new Decimal(0);
 const DAY_MS = 86_400_000;
 
@@ -168,7 +185,18 @@ export function valuationSeries(
     )
     .sort(compareOperations);
 
-  const keys = [...new Set(ops.map(keyOf))].sort();
+  const incomeOps = operations
+    .filter(
+      (o) =>
+        isUnattributedIncome(o) &&
+        o.date <= options.till &&
+        (!options.systemId || o.systemId === options.systemId) &&
+        (!options.portfolioId || o.portfolioId === options.portfolioId),
+    )
+    .sort((a, b) => a.date.localeCompare(b.date));
+  const incomeKeyOf = (o: Operation): string => (options.groupBy === 'instrument' ? NO_INSTRUMENT_GROUP : keyOf(o));
+
+  const keys = [...new Set([...ops.map(keyOf), ...incomeOps.map(incomeKeyOf)])].sort();
   if (ops.length === 0) {
     return { from: options.from ?? null, till: options.till, groupBy: options.groupBy, groups: [], netContributionsRub: [] };
   }
@@ -194,13 +222,19 @@ export function valuationSeries(
   });
 
   const cursor = new PriceCursor(prices);
-  const firstDay = ops[0].date;
+  const firstDay = incomeOps.length > 0 && incomeOps[0].date < ops[0].date ? incomeOps[0].date : ops[0].date;
   const outFrom = options.from && options.from > firstDay ? options.from : firstDay;
   const points = new Map<string, ValuationPoint[]>(keys.map((k) => [k, []]));
 
   let next = 0;
+  let nextIncome = 0;
   for (let day = firstDay; day <= options.till; day = addDays(day, 1)) {
     while (next < ops.length && ops[next].date <= day) ledger.apply(ops[next++]);
+    while (nextIncome < incomeOps.length && incomeOps[nextIncome].date <= day) {
+      const o = incomeOps[nextIncome++];
+      const k = incomeKeyOf(o);
+      fixedByKey.set(k, (fixedByKey.get(k) ?? ZERO).plus(incomeAmountRub(o)));
+    }
     while (nextCash < cashOps.length && cashOps[nextCash].date <= day) {
       const o = cashOps[nextCash++];
       const amount = new Decimal(o.quantity).mul(o.price).mul(o.fxRate ?? '1');

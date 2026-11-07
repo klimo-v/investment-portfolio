@@ -281,3 +281,29 @@ describe('timeWeightedIndex: доходность без потоков', () => 
     expect(idx.every(Number.isFinite)).toBe(true);
   });
 });
+
+describe('выплаты без инструмента', () => {
+  const ops: Operation[] = [
+    op({ date: '2026-03-02', operationType: 'Buy', instrumentId: 'SBER', quantity: '10', price: '100' }),
+    op({ date: '2026-03-10', operationType: 'Dividend', instrumentId: null as never, quantity: '1', price: '500', note: 'КЦ ИКС 5' } as never),
+    op({ date: '2026-03-12', operationType: 'Coupon', instrumentId: null as never, quantity: '1', price: '200', portfolioId: 'p2', systemId: 's2' }),
+  ];
+
+  it('входят в зафиксированное по дате выплаты и в итог для любой группировки; суммы групп сходятся', () => {
+    for (const groupBy of ['system', 'portfolio', 'instrument'] as const) {
+      const s = valuationSeries(ops, [], { till: '2026-03-14', groupBy });
+      const lastTotal = s.groups.reduce((acc, g) => acc.plus(g.points[g.points.length - 1].totalRub), new Decimal(0));
+      expect(lastTotal.toFixed(2)).toBe('700.00');
+      const dayBefore = s.groups.reduce((acc, g) => acc.plus(g.points.find((p) => p.date === '2026-03-09')!.fixedRub), new Decimal(0));
+      expect(dayBefore.toFixed(2)).toBe('0.00');
+    }
+    const byInstrument = valuationSeries(ops, [], { till: '2026-03-14', groupBy: 'instrument' });
+    expect(byInstrument.groups.map((g) => g.key)).toEqual(['SBER', 'no-instrument']);
+  });
+
+  it('итог системы: перечисленные в option выплаты входят в «Всего» и в «Результат (закрытые)»', () => {
+    const trades = calculateTrades(ops.filter((o) => o.instrumentId));
+    const p = systemPerformance(trades, { unrealizedOf: () => new Decimal(30), unattributedIncomeRub: '500' });
+    expect(p.summary).toMatchObject({ incomeRub: '500.00', closedIncomeRub: '500.00', closedResultRub: '500.00', openResultRub: '30.00', totalRub: '530.00' });
+  });
+});

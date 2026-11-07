@@ -1,6 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
-import { fxInstrumentId, isFxInstrumentId, ValuationSeriesSchema, valuationSeries, type PriceObservation, type ValuationQuery, type ValuationSeriesDto } from '@core';
+import { fxInstrumentId, isFxInstrumentId, NO_INSTRUMENT_GROUP, ValuationSeriesSchema, valuationSeries, type PriceObservation, type ValuationQuery, type ValuationSeriesDto } from '@core';
 import { instruments, portfolios, quotes, systems } from '../../../db/schema';
 import { DB } from '../../db/drizzle.module';
 import { OperationsService } from '../operations/operations.service';
@@ -103,6 +103,9 @@ export class ValuationService {
   private nameOf(groupBy: ValuationQuery['groupBy']): Map<string, string> {
     if (groupBy === 'system') return new Map(this.db.select().from(systems).all().map((s) => [s.id, s.name]));
     if (groupBy === 'portfolio') return new Map(this.db.select().from(portfolios).all().map((p) => [p.id, p.name]));
-    return new Map(this.db.select().from(instruments).all().map((i) => [i.id, i.ticker]));
+    return new Map([
+      ...this.db.select().from(instruments).all().map((i): [string, string] => [i.id, i.ticker]),
+      [NO_INSTRUMENT_GROUP, 'Без инструмента'],
+    ]);
   }
 }

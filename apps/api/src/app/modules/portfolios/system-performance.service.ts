@@ -3,6 +3,8 @@ import { eq } from 'drizzle-orm';
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
 import Decimal from 'decimal.js';
 import {
+  incomeAmountRub,
+  isUnattributedIncome,
   SystemPerformanceSchema,
   systemPerformance,
   type ExecutionFill,
@@ -51,9 +53,22 @@ export class SystemPerformanceService {
       till: query.till,
     });
     const daily = curve.groups.find((g) => g.key === systemId)?.points ?? [];
+    // выплаты без инструмента: к сделкам не относятся, но в сводке дашборда они есть
+    const unattributedIncomeRub = this.operations
+      .list()
+      .filter(
+        (o) =>
+          isUnattributedIncome(o) &&
+          o.systemId === systemId &&
+          (!query.portfolioId || o.portfolioId === query.portfolioId) &&
+          (!query.from || o.date >= query.from) &&
+          (!query.till || o.date <= query.till),
+      )
+      .reduce((sum, o) => sum.plus(incomeAmountRub(o)), new Decimal(0));
+
     const body = systemPerformance(
       valued.map((v) => v.trade),
-      { unrealizedOf: (t) => unrealized.get(t) ?? null, daily, fills: this.executionFills(valued.map((v) => v.trade)) },
+      { unrealizedOf: (t) => unrealized.get(t) ?? null, daily, unattributedIncomeRub, fills: this.executionFills(valued.map((v) => v.trade)) },
     );
     // ВМ брокера привязана к счёту и инструменту, а не к системе: показываем сверку
     // только там, где весь инструмент в портфеле принадлежит этой системе

@@ -4,6 +4,7 @@ import Database from 'better-sqlite3';
 import { drizzle, type BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
 import { migrate } from 'drizzle-orm/better-sqlite3/migrator';
 import { eq } from 'drizzle-orm';
+import Decimal from 'decimal.js';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { SystemPerformanceQuerySchema } from '@core';
 import { futuresSettlements, instruments, operations, portfolios, quotes, systems } from '../../../db/schema';
@@ -112,6 +113,20 @@ describe('SystemPerformanceService', () => {
     expect(last.totalRub).toBe('-11875.91');
     expect(last.unrealizedRub).toBe(p.summary.unrealizedRub);
     expect(p.equityMetrics.basis).toBeTruthy();
+  });
+
+  it('дивиденд без инструмента входит в итог системы и в кривую; итог = последняя точка', async () => {
+    db.insert(operations)
+      .values({ id: randomUUID(), date: '2026-11-03', systemId: 'sys', portfolioId: 'pf', instrumentId: null, operationType: 'Dividend', quantity: '1', price: '500', currency: 'RUB' })
+      .run();
+    const p = await service.performance('sys', {});
+    expect(p.summary.incomeRub).toBe('500.00');
+    expect(p.summary.totalRub).toBe('-11375.91'); // −11 875,91 + 500
+    expect(p.series.result.at(-1)!.totalRub).toBe(p.summary.totalRub);
+    expect(new Decimal(p.summary.closedResultRub).plus(p.summary.openResultRub).toFixed(2)).toBe(p.summary.totalRub);
+    // другой портфель этой выплаты не видит
+    const other = await service.performance('sys', { portfolioId: 'pf2' });
+    expect(other.summary.incomeRub).toBe('0.00');
   });
 
   it('без котировки последняя точка кривой совпадает с «Всего» (оценки нет: переоценка 0)', async () => {
