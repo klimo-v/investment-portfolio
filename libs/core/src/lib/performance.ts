@@ -2,6 +2,7 @@ import Decimal from 'decimal.js';
 import type { ExecutionStats, SystemPerformance } from './schemas';
 import { slippageRub } from './annotations';
 import type { TradeResult } from './engine';
+import type { ValuationPoint } from './valuation';
 
 /**
  * Статистика результатов торговой системы — чистая функция над сделками движка
@@ -42,8 +43,12 @@ export interface PerformanceOptions {
    * оценки нет. Считает вызывающий: у него котировки, у чистой функции их нет.
    */
   unrealizedOf?: (trade: TradeResult) => Decimal | null;
-  /** «сегодня» (YYYY-MM-DD) для точки текущего результата; без него точки нет */
-  asOf?: string;
+  /**
+   * Дневной ряд оценки системы (valuationSeries по одной системе): из него строятся кривая
+   * «Результат системы» и метрики кривой (просадка, Sharpe, Sortino, recovery factor).
+   * Без него кривая пустая, а equityMetrics нулевые — статистика сделок от него не зависит.
+   */
+  daily?: readonly ValuationPoint[];
 }
 
 // ───────────────────────── общие классификация и счётчики ─────────────────────────
@@ -289,10 +294,71 @@ function executionStats(
 }
 
 export const RATIO_ASSUMPTIONS =
-  'Sharpe и Sortino считаются по дневному результату в ₽ (капитала у системы нет), ' +
-  'безрисковая ставка = 0, годовая нормировка × √252. Дни — все будни между первой и ' +
-  'последней датой закрытия (дни без сделок = 0) плюс выходные с результатом. Sharpe: ' +
-  'среднее / выборочное σ; Sortino: среднее / нижнее отклонение от 0.';
+  'Sharpe и Sortino считаются по дневному изменению результата системы в ₽ (капитала у системы ' +
+  'нет), безрисковая ставка = 0, годовая нормировка × √252. Дни — все будни ряда плюс выходные, ' +
+  'в которые результат менялся. Sharpe: среднее / выборочное σ; Sortino: среднее / нижнее ' +
+  'отклонение от 0.';
+
+/** Подпись базиса метрик сделок: видно, по какой величине они посчитаны */
+export const TRADE_METRICS_BASIS =
+  'Закрытые сделки: результат каждой сделки после комиссий на дату закрытия. Без дивидендов и открытых позиций.';
+
+/** Подпись базиса метрик кривой */
+export const EQUITY_METRICS_BASIS =
+  'Дневная кривая «Результат системы»: зафиксированное (продажи, в т.ч. частичные; дивиденды и купоны; комиссии) плюс переоценка остатка по цене дня.';
+
+type EquityMetrics = SystemPerformanceBody['equityMetrics'];
+
+/**
+ * Метрики дневной кривой результата: просадка от пика, recovery factor, Sharpe, Sortino.
+ * Кривая — totalRub по дням (зафиксированное + переоценка), поэтому просадка видит и
+ * бумажные потери по открытым позициям — в отличие от кривой по закрытым сделкам.
+ */
+export function equityCurveMetrics(daily: readonly ValuationPoint[]): {
+  metrics: EquityMetrics;
+  drawdownRub: string[];
+} {
+  const totals = daily.map((p) => new Decimal(p.totalRub));
+  const dd = absoluteDrawdown(totals);
+  const dates = daily.map((p) => p.date);
+  const recoveryDate = dd.recoveryIndex === null ? null : dates[dd.recoveryIndex];
+  const lastDate = dates[dates.length - 1];
+
+  // дневное изменение результата; выходные берём, только если результат менялся
+  const changes: number[] = [];
+  for (let i = 1; i < totals.length; i++) {
+    const change = totals[i].minus(totals[i - 1]);
+    if (isoWeekday(dates[i]) <= 5 || !change.isZero()) changes.push(change.toNumber());
+  }
+  const mu = mean(changes);
+  let sharpe: number | null = null;
+  let sortino: number | null = null;
+  if (mu !== null && changes.length >= 2) {
+    const variance = changes.reduce((s, x) => s + (x - mu) ** 2, 0) / (changes.length - 1);
+    const sigma = Math.sqrt(variance);
+    if (sigma > 0) sharpe = (mu / sigma) * Math.sqrt(252);
+    const downside = Math.sqrt(changes.reduce((s, x) => s + Math.min(x, 0) ** 2, 0) / changes.length);
+    if (downside > 0) sortino = (mu / downside) * Math.sqrt(252);
+  }
+  const net = totals.length > 0 ? totals[totals.length - 1].minus(totals[0]) : ZERO;
+
+  return {
+    drawdownRub: dd.series.map(money),
+    metrics: {
+      basis: EQUITY_METRICS_BASIS,
+      days: changes.length,
+      maxDrawdownRub: money(dd.maxDrawdown),
+      peakDate: dd.peakIndex === null ? null : dates[dd.peakIndex],
+      troughDate: dd.troughIndex === null ? null : dates[dd.troughIndex],
+      recoveryDate,
+      drawdownDays: dd.peakIndex === null ? 0 : daysBetween(dates[dd.peakIndex], recoveryDate ?? lastDate),
+      recoveryFactor: dd.maxDrawdown.gt(0) ? net.div(dd.maxDrawdown).toNumber() : null,
+      sharpe,
+      sortino,
+      assumptions: RATIO_ASSUMPTIONS,
+    },
+  };
+}
 
 /**
  * Статистика системы по её сделкам. `trades` — сделки ОДНОЙ системы (срез по системе,
@@ -376,72 +442,17 @@ export function systemPerformance(
       equityValues.push(acc);
     }
   }
-  // ── результат системы: зафиксированное по дате события (продажи, в т.ч. частичные,
-  // выплаты, комиссии) нарастающим итогом + точка «сегодня» с переоценкой остатка
-  const dailyFixed = new Map<string, Decimal>();
-  for (const t of trades) {
-    for (const e of t.events) dailyFixed.set(e.date, (dailyFixed.get(e.date) ?? ZERO).plus(e.rub));
-  }
-  const fixedDays = [...dailyFixed.keys()].sort();
-  const resultSeries: { date: string; fixedRub: string }[] = [];
-  let fixedAcc = ZERO;
-  if (fixedDays.length > 0) {
-    const firstOpened = trades.map((t) => t.openedAt).sort()[0];
-    resultSeries.push({
-      date: firstOpened < fixedDays[0] ? firstOpened : addDays(fixedDays[0], -1),
-      fixedRub: money(ZERO),
-    });
-    for (const day of fixedDays) {
-      fixedAcc = fixedAcc.plus(dailyFixed.get(day) as Decimal);
-      resultSeries.push({ date: day, fixedRub: money(fixedAcc) });
-    }
-  }
-  const today = options.asOf
-    ? {
-        date: options.asOf,
-        fixedRub: money(fixedAcc),
-        unrealizedRub: money(unrealized),
-        totalRub: money(fixedAcc.plus(unrealized)),
-      }
-    : null;
-
   const dd = absoluteDrawdown(equityValues);
   const equity = equityDates.map((date, i) => ({
     date,
     equityRub: money(equityValues[i]),
     drawdownRub: money(dd.series[i]),
   }));
-  const recoveryDate = dd.recoveryIndex === null ? null : equityDates[dd.recoveryIndex];
-  const lastDate = equityDates[equityDates.length - 1];
-  const drawdownDays =
-    dd.peakIndex === null
-      ? 0
-      : daysBetween(equityDates[dd.peakIndex], recoveryDate ?? lastDate);
 
   // ── срок удержания
   const hold = closed.map((t) => ({ ...holdingHours(t), pnl: t.realizedPnlRub }));
   const holdOf = (pred: (pnl: Decimal) => boolean): number | null =>
     mean(hold.filter((h) => pred(h.pnl)).map((h) => h.hours));
-
-  // ── Sharpe / Sortino по дневному P&L
-  const daily: number[] = [];
-  if (days.length > 0) {
-    for (let d = days[0]; d <= days[days.length - 1]; d = addDays(d, 1)) {
-      const wd = isoWeekday(d);
-      const pnl = dailyPnl.get(d);
-      if (wd <= 5 || pnl) daily.push(pnl ? pnl.toNumber() : 0);
-    }
-  }
-  const mu = mean(daily);
-  let sharpe: number | null = null;
-  let sortino: number | null = null;
-  if (mu !== null && daily.length >= 2) {
-    const variance = daily.reduce((s, x) => s + (x - mu) ** 2, 0) / (daily.length - 1);
-    const sigma = Math.sqrt(variance);
-    if (sigma > 0) sharpe = (mu / sigma) * Math.sqrt(252);
-    const downside = Math.sqrt(daily.reduce((s, x) => s + Math.min(x, 0) ** 2, 0) / daily.length);
-    if (downside > 0) sortino = (mu / downside) * Math.sqrt(252);
-  }
 
   // ── разрезы
   const monthly = new Map<string, { pnl: Decimal; n: number }>();
@@ -455,6 +466,7 @@ export function systemPerformance(
     weekly.set(w, { pnl: wb.pnl.plus(t.realizedPnlRub), n: wb.n + 1 });
   }
 
+  const curve = equityCurveMetrics(options.daily ?? []);
   const last = pnls[pnls.length - 1];
   return {
     execution: executionStats(trades, closed, options.fills),
@@ -474,51 +486,52 @@ export function systemPerformance(
       totalRub: money(net.plus(openRealized).plus(unrealized).plus(income)),
       openCount: open.length,
     },
-    trades: {
-      closed: out.count,
-      wins: out.wins,
-      losses: out.losses,
-      breakeven: out.breakeven,
-      winRatePct: out.winRatePct,
-      long: byDirection('Long'),
-      short: byDirection('Short'),
-    },
-    quality: {
-      avgWinRub: money(avgWin),
-      avgLossRub: money(avgLoss),
-      payoffRatio: out.losses > 0 && out.wins > 0 ? avgWin.div(avgLoss.abs()).toNumber() : null,
-      profitFactor: out.profitFactor,
-      expectancyRub: money(out.count > 0 ? net.div(out.count) : ZERO),
-      largestWinRub: money(wins.length ? Decimal.max(...wins) : ZERO),
-      largestLossRub: money(losses.length ? Decimal.min(...losses) : ZERO),
-    },
-    streaks: {
-      maxWins,
-      maxLosses,
-      current: {
-        kind: last === undefined ? null : last.gt(0) ? 'win' : last.lt(0) ? 'loss' : null,
-        length: runKind === null ? 0 : runLen,
+    tradeMetrics: {
+      basis: TRADE_METRICS_BASIS,
+      trades: {
+        closed: out.count,
+        wins: out.wins,
+        losses: out.losses,
+        breakeven: out.breakeven,
+        winRatePct: out.winRatePct,
+        long: byDirection('Long'),
+        short: byDirection('Short'),
+      },
+      quality: {
+        avgWinRub: money(avgWin),
+        avgLossRub: money(avgLoss),
+        payoffRatio: out.losses > 0 && out.wins > 0 ? avgWin.div(avgLoss.abs()).toNumber() : null,
+        profitFactor: out.profitFactor,
+        expectancyRub: money(out.count > 0 ? net.div(out.count) : ZERO),
+        largestWinRub: money(wins.length ? Decimal.max(...wins) : ZERO),
+        largestLossRub: money(losses.length ? Decimal.min(...losses) : ZERO),
+      },
+      streaks: {
+        maxWins,
+        maxLosses,
+        current: {
+          kind: last === undefined ? null : last.gt(0) ? 'win' : last.lt(0) ? 'loss' : null,
+          length: runKind === null ? 0 : runLen,
+        },
+      },
+      holding: {
+        hasTime: hold.length > 0 && hold.every((h) => h.timed),
+        avgHours: holdOf(() => true),
+        avgWinHours: holdOf((p) => p.gt(0)),
+        avgLossHours: holdOf((p) => p.lt(0)),
       },
     },
-    risk: {
-      maxDrawdownRub: money(dd.maxDrawdown),
-      peakDate: dd.peakIndex === null ? null : equityDates[dd.peakIndex],
-      troughDate: dd.troughIndex === null ? null : equityDates[dd.troughIndex],
-      recoveryDate,
-      drawdownDays,
-      recoveryFactor: dd.maxDrawdown.gt(0) ? net.div(dd.maxDrawdown).toNumber() : null,
-    },
-    holding: {
-      hasTime: hold.length > 0 && hold.every((h) => h.timed),
-      avgHours: holdOf(() => true),
-      avgWinHours: holdOf((p) => p.gt(0)),
-      avgLossHours: holdOf((p) => p.lt(0)),
-    },
-    ratios: { sharpe, sortino, days: daily.length, assumptions: RATIO_ASSUMPTIONS },
+    equityMetrics: curve.metrics,
     series: {
       equity,
-      result: resultSeries,
-      today,
+      result: (options.daily ?? []).map((p, i) => ({
+        date: p.date,
+        fixedRub: p.fixedRub,
+        unrealizedRub: p.unrealizedRub,
+        totalRub: p.totalRub,
+        drawdownRub: curve.drawdownRub[i],
+        carried: p.carried,
+      })),
       byMonth: [...monthly.entries()]
         .sort((a, b) => a[0].localeCompare(b[0]))
         .map(([period, v]) => ({ period, pnlRub: money(v.pnl), trades: v.n })),

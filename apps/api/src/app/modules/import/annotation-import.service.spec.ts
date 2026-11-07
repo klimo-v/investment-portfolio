@@ -6,6 +6,8 @@ import { eq } from 'drizzle-orm';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { instruments, operationAnnotations, operations, portfolios, quotes, systems } from '../../../db/schema';
 import { OperationsService } from '../operations/operations.service';
+import { PriceHistoryService } from '../quotes/price-history.service';
+import { ValuationService } from '../valuation/valuation.service';
 import { SystemPerformanceService } from '../portfolios/system-performance.service';
 import type { QuotesService } from '../quotes/quotes.service';
 import { AnnotationImportService } from './annotation-import.service';
@@ -14,7 +16,7 @@ import { AnnotationImportService } from './annotation-import.service';
  * Аннотации исполнения из CSV QUIK на эталонных сделках CNY-12.26 (номер сделки в
  * отчёте = trade_num в выгрузке). Комиссии выгрузки в журнал не попадают никогда.
  */
-const quotesStub = { getFxRate: async () => 1 } as unknown as QuotesService;
+const quotesStub = { getFxRate: async () => 1, getFxRateOrNull: async () => 1 } as unknown as QuotesService;
 
 type T = [date: string, time: string, side: 'Buy' | 'Sell', qty: string, price: string, fee: string, ref: string];
 const TRADES: T[] = [
@@ -127,7 +129,9 @@ describe('AnnotationImportService', () => {
   });
 
   it('статистика системы: блок «Исполнение» появляется только после загрузки аннотаций', async () => {
-    const perf = new SystemPerformanceService(db, new OperationsService(db, quotesStub));
+    const operationsService = new OperationsService(db, quotesStub);
+    const valuation = new ValuationService(db, operationsService, new PriceHistoryService(db, []), quotesStub);
+    const perf = new SystemPerformanceService(db, operationsService, valuation);
     expect((await perf.performance('sys', {})).execution).toBeNull();
 
     service.commit({ content: csv(ROW_1012, ROW_1001) });

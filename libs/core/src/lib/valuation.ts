@@ -244,7 +244,9 @@ function valueOpenTrade(
 
   if (isFuture) {
     // у фьючерса «стоимость» — нереализованный результат, вложено 0 (цена — ₽ за контракт)
-    acc.value = acc.value.plus(futureUnrealizedPnl({ quantity: trade.quantity, avgBuyPrice: trade.avgBuyPrice }, obs.price));
+    acc.value = acc.value.plus(
+      futureUnrealizedPnl({ quantity: trade.quantity, avgBuyPrice: trade.avgBuyPrice }, obs.price).toDecimalPlaces(2),
+    );
   } else {
     if (!trade.quantity.gt(0)) return; // спот с нулём/минусом — некорректные данные, как в текущей оценке
     const fx = fxRateAt(obs.currency, day, cursor);
@@ -254,6 +256,8 @@ function valueOpenTrade(
         : fxRateAt(obs.accruedCurrency || obs.currency, day, cursor);
     if (fx === null || accruedFx === null) return fallback('no-fx');
     acc.invested = acc.invested.plus(trade.investedRub);
+    // стоимость позиции округляется до копеек на уровне сделки — как в текущей оценке
+    // (OperationsService.valuedTrades), иначе итоги расходились бы на копейки по числу позиций
     acc.value = acc.value.plus(
       marketValueRub({
         quantity: trade.quantity,
@@ -261,7 +265,7 @@ function valueOpenTrade(
         fxRate: fx,
         accruedInterest: obs.accruedInterest ?? null,
         accruedFxRate: accruedFx,
-      }),
+      }).toDecimalPlaces(2),
     );
   }
   if (obs.date < day && !isWeekend(day)) note('carried');

@@ -44,6 +44,11 @@ export class QuotesService {
     return this.cbr.getRate(currency);
   }
 
+  /** Курс валюты или null, если ЦЕНТРОБАНК недоступен/валюты нет (без подмены единицей) */
+  async getFxRateOrNull(currency: string): Promise<number | null> {
+    return this.cbr.getRateOrNull(currency);
+  }
+
   /**
    * История индекса-бенчмарка (IMOEX по умолчанию) за период — прокси к MOEX ISS,
    * чтобы фронт не ходил на внешний источник напрямую (CORS + единая точка).

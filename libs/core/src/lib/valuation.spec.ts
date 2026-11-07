@@ -201,3 +201,29 @@ describe('valuationSeries: фильтры и операции задним чи�
     expect(valuationSeries([], PRICES, opts('system')).groups).toEqual([]);
   });
 });
+
+describe('выплата после закрытия позиции', () => {
+  const ops: Operation[] = [
+    op({ date: '2026-03-02', operationType: 'Buy', instrumentId: 'SBER', quantity: '10', price: '100' }),
+    op({ date: '2026-03-09', operationType: 'Sell', instrumentId: 'SBER', quantity: '10', price: '110' }), // +100
+    op({ date: '2026-03-16', operationType: 'Dividend', instrumentId: 'SBER', quantity: '1', price: '70' }), // после закрытия
+  ];
+
+  it('дивиденд, зачисленный после продажи, относится к закрытой сделке и входит в итог и в кривую', () => {
+    const [t] = calculateTrades(ops);
+    expect(t.status).toBe('Closed');
+    expect(t.dividendsRub.toString()).toBe('70');
+    const perf = systemPerformance([t]);
+    expect(perf.summary).toMatchObject({ netPnlRub: '100.00', closedIncomeRub: '70.00', closedResultRub: '170.00', totalRub: '170.00' });
+
+    const series = valuationSeries(ops, [], { till: '2026-03-20', groupBy: 'system' });
+    const pts = series.groups[0].points;
+    expect(pts.find((p) => p.date === '2026-03-15')!.fixedRub).toBe('100.00');
+    expect(pts[pts.length - 1].totalRub).toBe('170.00'); // = summary.totalRub
+  });
+
+  it('выплата по позиции, которой не было вовсе, пропускается', () => {
+    const orphan = [op({ date: '2026-03-16', operationType: 'Dividend', instrumentId: 'X', quantity: '1', price: '70' })];
+    expect(calculateTrades(orphan)).toEqual([]);
+  });
+});

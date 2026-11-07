@@ -8,6 +8,8 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { SystemPerformanceQuerySchema } from '@core';
 import { futuresSettlements, instruments, operations, portfolios, quotes, systems } from '../../../db/schema';
 import { OperationsService } from '../operations/operations.service';
+import { PriceHistoryService } from '../quotes/price-history.service';
+import { ValuationService } from '../valuation/valuation.service';
 import type { QuotesService } from '../quotes/quotes.service';
 import { SystemPerformanceService } from './system-performance.service';
 
@@ -16,7 +18,7 @@ import { SystemPerformanceService } from './system-performance.service';
  * operations.futures.spec.ts. Проверяем сборку: фильтры, оценку открытой сделки по
  * расчётной цене 12 387, 404 и пустую систему. Математика метрик — в core/performance.spec.ts.
  */
-const quotesStub = { getFxRate: async () => 1 } as unknown as QuotesService;
+const quotesStub = { getFxRate: async () => 1, getFxRateOrNull: async () => 1 } as unknown as QuotesService;
 
 type T = [date: string, time: string, side: 'Buy' | 'Sell', qty: string, price: string, fee: string, ref: string];
 const TRADES: T[] = [
@@ -79,7 +81,11 @@ describe('SystemPerformanceService', () => {
       )
       .run();
     ops = new OperationsService(db, quotesStub);
-    service = new SystemPerformanceService(db, ops);
+    service = new SystemPerformanceService(
+      db,
+      ops,
+      new ValuationService(db, ops, new PriceHistoryService(db, []), quotesStub),
+    );
   });
 
   it('эталон: net закрытых −15 852,46, комиссии 962,91, нереализованный +4 288, сверка с ВМ −10 913', async () => {
@@ -95,7 +101,25 @@ describe('SystemPerformanceService', () => {
     // валовый результат по ценам сделок + нереализованный = вариационная маржа отчёта
     const gross = Number(p.summary.netPnlRub) + Number(p.summary.openRealizedRub) + Number(p.summary.feesTotalRub) + Number(p.summary.unrealizedRub);
     expect(gross).toBeCloseTo(-10913, 6);
-    expect(p.trades).toMatchObject({ closed: 2, winRatePct: 50 });
+    expect(p.tradeMetrics.trades).toMatchObject({ closed: 2, winRatePct: 50 });
+  });
+
+  it('инвариант: последняя точка кривой «Результат системы» = «Всего» (котировка 12 387 подставлена на сегодня)', async () => {
+    const p = await service.performance('sys', {});
+    const last = p.series.result[p.series.result.length - 1];
+    expect(p.series.result[0].date).toBe('2026-10-29');
+    expect(last.totalRub).toBe(p.summary.totalRub);
+    expect(last.totalRub).toBe('-11875.91');
+    expect(last.unrealizedRub).toBe(p.summary.unrealizedRub);
+    expect(p.equityMetrics.basis).toBeTruthy();
+  });
+
+  it('без котировки последняя точка кривой совпадает с «Всего» (оценки нет: переоценка 0)', async () => {
+    db.delete(quotes).run();
+    const p = await service.performance('sys', {});
+    const last = p.series.result[p.series.result.length - 1];
+    expect(last.totalRub).toBe(p.summary.totalRub);
+    expect(last.carried).toEqual([{ instrumentId: 'CNY-12.26', reason: 'no-price', priceDate: null }]);
   });
 
   it('без расчётной цены нереализованный = 0, остальное считается', async () => {
@@ -107,20 +131,20 @@ describe('SystemPerformanceService', () => {
 
   it('фильтр портфеля: чужой портфель даёт пустую статистику', async () => {
     const p = await service.performance('sys', { portfolioId: 'pf2' });
-    expect(p.trades.closed).toBe(0);
+    expect(p.tradeMetrics.trades.closed).toBe(0);
     expect(p.series.equity).toEqual([]);
   });
 
   it('фильтр периода: from=05.11 оставляет только сделку, закрытую 05.11 (и открытую)', async () => {
     const p = await service.performance('sys', { from: '2026-11-05' });
-    expect(p.trades.closed).toBe(1);
+    expect(p.tradeMetrics.trades.closed).toBe(1);
     expect(p.summary.netPnlRub).toBe('-16037.16');
     expect(p.summary.openCount).toBe(1);
   });
 
   it('till=30.10: видна только первая сделка, шортов ещё нет', async () => {
     const p = await service.performance('sys', { till: '2026-10-30' });
-    expect(p.trades.closed).toBe(1);
+    expect(p.tradeMetrics.trades.closed).toBe(1);
     expect(p.summary.netPnlRub).toBe('184.70');
     expect(p.summary.openCount).toBe(0);
   });

@@ -380,6 +380,34 @@ const ExecutionSchema = z.object({
 });
 export type ExecutionStats = z.infer<typeof ExecutionSchema>;
 
+/** Что мешает оценке инструмента на день (см. CarriedReason в valuation.ts) */
+export const CarriedPriceSchema = z.object({
+  instrumentId: z.string(),
+  reason: z.enum(['no-price', 'no-fx', 'carried']),
+  /** дата цены, которой воспользовались; null — цены не было */
+  priceDate: z.string().nullable(),
+});
+
+/** Точка дневного ряда оценки (valuationSeries): деньги — decimal-строки */
+export const ValuationPointSchema = z.object({
+  date: z.string(),
+  investedRub: decimalString,
+  marketValueRub: decimalString,
+  fixedRub: decimalString,
+  unrealizedRub: decimalString,
+  totalRub: decimalString,
+  carried: z.array(CarriedPriceSchema),
+});
+
+const ResultPointSchema = z.object({
+  date: z.string(),
+  fixedRub: decimalString,
+  unrealizedRub: decimalString,
+  totalRub: decimalString,
+  drawdownRub: decimalString,
+  carried: z.array(CarriedPriceSchema),
+});
+
 export const SystemPerformanceSchema = z.object({
   execution: ExecutionSchema.nullable().default(null),
   systemId: z.string(),
@@ -421,32 +449,47 @@ export const SystemPerformanceSchema = z.object({
     totalRub: decimalString,
     openCount: z.number(),
   }),
-  trades: z.object({
-    closed: z.number(),
-    wins: z.number(),
-    losses: z.number(),
-    breakeven: z.number(),
-    winRatePct: z.number().nullable(),
-    long: DirectionStatsSchema,
-    short: DirectionStatsSchema,
+  /** Метрики по закрытым сделкам: качество входов и выходов; базис подписан */
+  tradeMetrics: z.object({
+    basis: z.string(),
+    trades: z.object({
+      closed: z.number(),
+      wins: z.number(),
+      losses: z.number(),
+      breakeven: z.number(),
+      winRatePct: z.number().nullable(),
+      long: DirectionStatsSchema,
+      short: DirectionStatsSchema,
+    }),
+    quality: z.object({
+      avgWinRub: decimalString,
+      avgLossRub: decimalString,
+      /** ср. выигрыш / |ср. убыток| */
+      payoffRatio: z.number().nullable(),
+      /** сумма прибылей / сумма убытков */
+      profitFactor: z.number().nullable(),
+      expectancyRub: decimalString,
+      largestWinRub: decimalString,
+      largestLossRub: decimalString,
+    }),
+    streaks: z.object({
+      maxWins: z.number(),
+      maxLosses: z.number(),
+      current: z.object({ kind: z.enum(['win', 'loss']).nullable(), length: z.number() }),
+    }),
+    holding: z.object({
+      /** true — у всех закрытых сделок есть время, срок точный; иначе считан по датам */
+      hasTime: z.boolean(),
+      avgHours: z.number().nullable(),
+      avgWinHours: z.number().nullable(),
+      avgLossHours: z.number().nullable(),
+    }),
   }),
-  quality: z.object({
-    avgWinRub: decimalString,
-    avgLossRub: decimalString,
-    /** ср. выигрыш / |ср. убыток| */
-    payoffRatio: z.number().nullable(),
-    /** сумма прибылей / сумма убытков */
-    profitFactor: z.number().nullable(),
-    expectancyRub: decimalString,
-    largestWinRub: decimalString,
-    largestLossRub: decimalString,
-  }),
-  streaks: z.object({
-    maxWins: z.number(),
-    maxLosses: z.number(),
-    current: z.object({ kind: z.enum(['win', 'loss']).nullable(), length: z.number() }),
-  }),
-  risk: z.object({
+  /** Метрики дневной кривой «Результат системы»: просадка, recovery factor, Sharpe, Sortino */
+  equityMetrics: z.object({
+    basis: z.string(),
+    /** сколько дневных изменений вошло в Sharpe/Sortino */
+    days: z.number(),
     maxDrawdownRub: decimalString,
     peakDate: z.string().nullable(),
     troughDate: z.string().nullable(),
@@ -454,19 +497,8 @@ export const SystemPerformanceSchema = z.object({
     /** от пика до восстановления (или до последней точки, если не восстановилась) */
     drawdownDays: z.number(),
     recoveryFactor: z.number().nullable(),
-  }),
-  holding: z.object({
-    /** true — у всех закрытых сделок есть время, срок точный; иначе считан по датам */
-    hasTime: z.boolean(),
-    avgHours: z.number().nullable(),
-    avgWinHours: z.number().nullable(),
-    avgLossHours: z.number().nullable(),
-  }),
-  ratios: z.object({
     sharpe: z.number().nullable(),
     sortino: z.number().nullable(),
-    /** сколько дневных значений вошло в расчёт */
-    days: z.number(),
     /** допущения расчёта словами — показываются в подсказке */
     assumptions: z.string(),
   }),
@@ -475,20 +507,8 @@ export const SystemPerformanceSchema = z.object({
     equity: z.array(
       z.object({ date: z.string(), equityRub: decimalString, drawdownRub: decimalString }),
     ),
-    /**
-     * «Результат системы»: зафиксированное нарастающим итогом на дату каждого события
-     * (продажи, в т.ч. частичные; дивиденды/купоны; комиссии) + стартовый ноль
-     */
-    result: z.array(z.object({ date: z.string(), fixedRub: decimalString })),
-    /** точка «сегодня»: зафиксированное + переоценка остатка по текущим котировкам = summary.totalRub */
-    today: z
-      .object({
-        date: z.string(),
-        fixedRub: decimalString,
-        unrealizedRub: decimalString,
-        totalRub: decimalString,
-      })
-      .nullable(),
+    /** Кривая «Результат системы»: точка на каждый день, зафиксированное + переоценка (valuationSeries) */
+    result: z.array(ResultPointSchema),
     byMonth: z.array(z.object({ period: z.string(), pnlRub: decimalString, trades: z.number() })),
     /** weekday: 1 = понедельник … 7 = воскресенье (по дате закрытия) */
     byWeekday: z.array(z.object({ weekday: z.number(), pnlRub: decimalString, trades: z.number() })),
@@ -509,6 +529,39 @@ export const SystemPerformanceQuerySchema = z
     message: '`from` не может быть позже `till`',
   });
 export type SystemPerformanceQuery = z.infer<typeof SystemPerformanceQuerySchema>;
+
+/**
+ * Дневной ряд оценки (GET /api/valuation/series): из него строятся ВСЕ графики динамики —
+ * стоимость портфеля, стоимость инструментов, кривая системы. Ряд считается из журнала и
+ * истории цен на каждый запрос (valuationSeries), в БД не хранится.
+ */
+export const ValuationSeriesSchema = z.object({
+  from: z.string().nullable(),
+  till: z.string(),
+  groupBy: z.enum(['portfolio', 'system', 'instrument']),
+  groups: z.array(
+    z.object({
+      key: z.string(),
+      /** человекочитаемое имя группы: система, портфель или тикер */
+      name: z.string(),
+      points: z.array(ValuationPointSchema),
+    }),
+  ),
+});
+export type ValuationSeriesDto = z.infer<typeof ValuationSeriesSchema>;
+
+export const ValuationQuerySchema = z
+  .object({
+    groupBy: z.enum(['portfolio', 'system', 'instrument']).default('system'),
+    systemId: z.string().min(1).optional(),
+    portfolioId: z.string().min(1).optional(),
+    from: isoDate.optional(),
+    till: isoDate.optional(),
+  })
+  .refine((q) => !q.from || !q.till || q.from <= q.till, {
+    message: '`from` не может быть позже `till`',
+  });
+export type ValuationQuery = z.infer<typeof ValuationQuerySchema>;
 
 /**
  * Снимок стоимости портфеля на дату (docs/04-roadmap.md, Фаза 5) — один снимок

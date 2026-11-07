@@ -13,6 +13,7 @@ import {
 import { operationAnnotations, operations, systems } from '../../../db/schema';
 import { DB } from '../../db/drizzle.module';
 import { OperationsService } from '../operations/operations.service';
+import { ValuationService } from '../valuation/valuation.service';
 
 /**
  * Статистика торговой системы. Сервис только собирает вход: сделки и их оценку берёт
@@ -24,6 +25,7 @@ export class SystemPerformanceService {
   constructor(
     @Inject(DB) private readonly db: BetterSQLite3Database,
     private readonly operations: OperationsService,
+    private readonly valuation: ValuationService,
   ) {}
 
   /** @throws NotFoundException если системы нет в справочнике */
@@ -40,11 +42,18 @@ export class SystemPerformanceService {
         .map((v) => [v.trade, new Decimal(v.currentValueRub as string).minus(v.trade.investedRub)]),
     );
 
-    const todayIso = new Date().toISOString().slice(0, 10);
-    const asOf = query.till && query.till < todayIso ? query.till : todayIso;
+    // дневная кривая той же системы и того же среза — из единого valuationSeries
+    const curve = await this.valuation.series({
+      groupBy: 'system',
+      systemId,
+      portfolioId: query.portfolioId,
+      from: query.from,
+      till: query.till,
+    });
+    const daily = curve.groups.find((g) => g.key === systemId)?.points ?? [];
     const body = systemPerformance(
       valued.map((v) => v.trade),
-      { unrealizedOf: (t) => unrealized.get(t) ?? null, asOf, fills: this.executionFills(valued.map((v) => v.trade)) },
+      { unrealizedOf: (t) => unrealized.get(t) ?? null, daily, fills: this.executionFills(valued.map((v) => v.trade)) },
     );
     // ВМ брокера привязана к счёту и инструменту, а не к системе: показываем сверку
     // только там, где весь инструмент в портфеле принадлежит этой системе

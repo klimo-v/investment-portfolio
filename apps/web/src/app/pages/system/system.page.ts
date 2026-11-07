@@ -95,7 +95,7 @@ import { TradesTable } from '../../widgets/trades-table/trades-table';
     } @else if (performance.hasValue()) {
       <!-- hasValue(), а не !isLoading(): при смене фильтра прежние цифры остаются на экране -->
       @let p = performance.value();
-      @if (p.trades.closed === 0 && p.summary.openCount === 0) {
+      @if (p.tradeMetrics.trades.closed === 0 && p.summary.openCount === 0) {
         <app-state-message
           kind="empty"
           icon="query_stats"
@@ -103,7 +103,7 @@ import { TradesTable } from '../../widgets/trades-table/trades-table';
           hint="По этой системе за выбранный срез нет ни закрытых, ни открытых сделок. Импортируйте отчёт брокера или расширьте период."
         />
       } @else {
-        @if (p.trades.closed === 0) {
+        @if (p.tradeMetrics.trades.closed === 0) {
           <app-state-message
             kind="empty"
             icon="query_stats"

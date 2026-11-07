@@ -26,6 +26,8 @@ interface Kpi {
 
 interface KpiGroup {
   title: string;
+  /** по какой величине посчитаны метрики группы (базис из DTO) */
+  basis?: string;
   items: Kpi[];
 }
 
@@ -41,6 +43,9 @@ interface KpiGroup {
   template: `
     @for (group of groups(); track group.title) {
       <h2 class="group-title">{{ group.title }}</h2>
+      @if (group.basis) {
+        <p class="group-basis">{{ group.basis }}</p>
+      }
       <div class="kpi-grid">
         @for (kpi of group.items; track kpi.label) {
           <app-kpi-card
@@ -56,6 +61,11 @@ interface KpiGroup {
   `,
   styles: [
     `
+      .group-basis {
+        margin: -4px 0 8px;
+        font-size: 12px;
+        color: var(--app-text-muted);
+      }
       .group-title {
         margin: 8px 0;
         font-size: 14px;
@@ -71,13 +81,14 @@ export class SystemKpis {
   protected readonly groups = computed<KpiGroup[]>(() => {
     const p = this.performance();
     const s = p.summary;
-    const t = p.trades;
-    const q = p.quality;
-    const r = p.risk;
-    const h = p.holding;
+    const tm = p.tradeMetrics;
+    const t = tm.trades;
+    const q = tm.quality;
+    const h = tm.holding;
+    const r = p.equityMetrics;
     // на нескольких днях отношение среднего к σ — шум: не показываем
-    const enough = p.ratios.days >= MIN_RATIO_DAYS;
-    const sparse = enough ? undefined : `мало данных: ${p.ratios.days} дн. из ${MIN_RATIO_DAYS}`;
+    const enough = r.days >= MIN_RATIO_DAYS;
+    const sparse = enough ? undefined : `мало данных: ${r.days} дн. из ${MIN_RATIO_DAYS}`;
     return [
       {
         title: 'Итог',
@@ -124,6 +135,7 @@ export class SystemKpis {
       },
       {
         title: 'Сделки',
+        basis: tm.basis,
         items: [
           { label: 'Закрытых сделок', value: String(t.closed), sub: `прибыльных ${t.wins} · убыточных ${t.losses}` },
           { label: 'Win rate', value: pct(t.winRatePct) },
@@ -143,6 +155,7 @@ export class SystemKpis {
       },
       {
         title: 'Качество',
+        basis: tm.basis,
         items: [
           { label: 'Profit factor', value: ratio(q.profitFactor), hint: 'Сумма прибылей / сумма убытков. «—» — убытков не было.' },
           { label: 'Payoff ratio', value: ratio(q.payoffRatio), hint: 'Средний выигрыш / |средний убыток|.' },
@@ -153,9 +166,9 @@ export class SystemKpis {
           { label: 'Худшая сделка', value: rub(q.largestLossRub), tone: toneOfStr(q.largestLossRub) },
           {
             label: 'Серии',
-            value: `${p.streaks.maxWins} / ${p.streaks.maxLosses}`,
-            sub: p.streaks.current.kind
-              ? `сейчас: ${p.streaks.current.length} ${p.streaks.current.kind === 'win' ? 'прибыльн.' : 'убыточн.'}`
+            value: `${tm.streaks.maxWins} / ${tm.streaks.maxLosses}`,
+            sub: tm.streaks.current.kind
+              ? `сейчас: ${tm.streaks.current.length} ${tm.streaks.current.kind === 'win' ? 'прибыльн.' : 'убыточн.'}`
               : 'сейчас: —',
             hint: 'Максимум подряд прибыльных / убыточных сделок.',
           },
@@ -163,22 +176,24 @@ export class SystemKpis {
       },
       {
         title: 'Риск',
+        basis: r.basis,
         items: [
           {
             label: 'Макс. просадка',
             value: rub(r.maxDrawdownRub),
             tone: Number(r.maxDrawdownRub) > 0 ? 'negative' : 'neutral',
             sub: r.peakDate ? `${r.peakDate} → ${r.recoveryDate ?? 'не восстановлена'}` : undefined,
-            hint: 'Наибольшее падение накопленного результата от пика до дна, в ₽. Стартовый ноль считается пиком.',
+            hint: 'Наибольшее падение дневного результата системы (с переоценкой открытых позиций) от пика до дна, в ₽.',
           },
           { label: 'Длительность просадки', value: `${r.drawdownDays} дн.`, hint: 'От пика до восстановления (или до последней точки, если не восстановилась).' },
-          { label: 'Recovery factor', value: ratio(r.recoveryFactor), hint: 'Результат закрытых / макс. просадка.' },
-          { label: 'Sharpe', value: enough ? ratio(p.ratios.sharpe) : '—', sub: sparse, hint: p.ratios.assumptions },
-          { label: 'Sortino', value: enough ? ratio(p.ratios.sortino) : '—', sub: sparse, hint: p.ratios.assumptions },
+          { label: 'Recovery factor', value: ratio(r.recoveryFactor), hint: 'Результат за период кривой / макс. просадка.' },
+          { label: 'Sharpe', value: enough ? ratio(r.sharpe) : '—', sub: sparse, hint: r.assumptions },
+          { label: 'Sortino', value: enough ? ratio(r.sortino) : '—', sub: sparse, hint: r.assumptions },
         ],
       },
       {
         title: 'Время',
+        basis: tm.basis,
         items: [
           { label: 'Ср. срок', value: formatHolding(h.avgHours, h.hasTime) },
           { label: 'Ср. срок прибыльных', value: formatHolding(h.avgWinHours, h.hasTime) },

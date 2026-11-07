@@ -413,6 +413,8 @@ export type TradeEventSink = (trade: TradeResult, event: TradeEvent) => void;
 export class TradeLedger {
   private readonly closed: TradeResult[] = [];
   private readonly open = new Map<string, TradeResult>();
+  /** последняя закрытая сделка по ключу позиции: ей принадлежат выплаты, пришедшие после закрытия */
+  private readonly lastClosed = new Map<string, TradeResult>();
   /** позиция фьючерса по ключу (нужна, чтобы применять сделки по порядку) */
   private readonly futurePos = new Map<string, FuturePosition>();
 
@@ -501,6 +503,7 @@ export class TradeLedger {
         trade.closedTime = op.executedAt ?? null;
         open.delete(key);
         this.closed.push(trade);
+        this.lastClosed.set(key, trade);
       } else {
         trade.status = 'Partial';
       }
@@ -508,8 +511,12 @@ export class TradeLedger {
     }
 
     if (op.operationType === 'Dividend' || op.operationType === 'Coupon') {
-      const trade = open.get(key);
-      if (!trade) return; // выплата по уже закрытой сделке — не относим никуда
+      // Выплата приходит со сдвигом: дивиденд/купон по бумаге, которую держали на дату
+      // фиксации, зачисляется уже после её продажи. Деньги получены — относим к последней
+      // закрытой сделке этой позиции (иначе они пропали бы из итога системы, хотя в сводке
+      // дашборда есть). Выплаты без единой сделки по позиции — некорректные данные, пропускаем.
+      const trade = open.get(key) ?? this.lastClosed.get(key);
+      if (!trade) return;
       const amount = qty.mul(price).mul(fxRate);
       if (op.operationType === 'Dividend') trade.dividendsRub = trade.dividendsRub.plus(amount);
       else trade.couponsRub = trade.couponsRub.plus(amount);

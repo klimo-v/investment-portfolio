@@ -3,6 +3,7 @@ import { DrizzleModule } from './db/drizzle.module';
 import { OperationsModule } from './modules/operations/operations.module';
 import { PortfoliosModule } from './modules/portfolios/portfolios.module';
 import { ImportModule } from './modules/import/import.module';
+import { ValuationModule } from './modules/valuation/valuation.module';
 import { SnapshotsModule } from './modules/snapshots/snapshots.module';
 
 /**
@@ -10,6 +11,6 @@ import { SnapshotsModule } from './modules/snapshots/snapshots.module';
  * (см. docs/04-roadmap.md и CLAUDE.md §2).
  */
 @Module({
-  imports: [DrizzleModule, OperationsModule, PortfoliosModule, ImportModule, SnapshotsModule],
+  imports: [DrizzleModule, OperationsModule, PortfoliosModule, ImportModule, SnapshotsModule, ValuationModule],
 })
 export class AppModule {}

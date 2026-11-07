@@ -71,7 +71,7 @@ export class SystemEquityChart {
 
   protected readonly note = computed(() =>
     this.curve() === 'result'
-      ? 'Зафиксированное (все продажи, в т.ч. частичные; дивиденды и купоны; за вычетом комиссий) нарастающим итогом. Пунктир — сегодня: плюс переоценка остатка по текущим котировкам.'
+      ? 'Зафиксированное (все продажи, в т.ч. частичные; дивиденды и купоны; за вычетом комиссий) плюс переоценка остатка по цене дня. Янтарные точки — дни, где цена не найдена или взята от более ранней даты. Просадка — от пика кривой.'
       : 'Накопленный результат по дате закрытия каждой сделки. Показывает качество входов и выходов, без дивидендов и открытых позиций.',
   );
   protected readonly emptyHint = computed(() =>
@@ -85,16 +85,21 @@ export class SystemEquityChart {
     this.curve() === 'result' ? this.resultConfig() : this.tradesConfig(),
   );
 
-  /** Результат системы: сплошная линия — зафиксированное, пунктирный хвост — «сегодня» */
+  /**
+   * Результат системы: точка на каждый день (зафиксированное + переоценка остатка по цене дня).
+   * Дни, где цена не найдена или взята от более ранней даты, отмечены янтарным маркером с
+   * пояснением в подсказке: линия на них — не оценка по рынку этого дня.
+   */
   private readonly resultConfig = computed<ChartConfiguration<'line'> | null>(() => {
-    const { result, today } = this.performance().series;
-    const points = [
-      ...result.map((p) => ({ date: p.date, value: Number(p.fixedRub) })),
-      ...(today && result.length > 0 ? [{ date: today.date, value: Number(today.totalRub) }] : []),
-    ];
+    const points = this.performance().series.result;
     if (points.length < 2) return null;
     const cc = this.cc();
-    const lastIdx = points.length - 1;
+    const flagged = (i: number): boolean => points[i].carried.length > 0;
+    const describe = (c: SystemPerformance['series']['result'][number]['carried'][number]): string => {
+      if (c.reason === 'no-price') return `${c.instrumentId}: цена на дату не найдена, остаток оценён по себестоимости`;
+      if (c.reason === 'no-fx') return `${c.instrumentId}: нет курса валюты цены, остаток оценён по себестоимости`;
+      return `${c.instrumentId}: цена на дату не найдена, взята от ${c.priceDate}`;
+    };
     return {
       type: 'line',
       data: {
@@ -102,15 +107,23 @@ export class SystemEquityChart {
         datasets: [
           {
             label: 'Результат, ₽',
-            data: points.map((p) => p.value),
+            data: points.map((p) => Number(p.totalRub)),
             borderColor: cc.total,
             backgroundColor: cc.total,
-            pointRadius: (c) => (c.dataIndex === lastIdx && today ? 4 : 2),
+            pointRadius: (c) => (flagged(c.dataIndex) ? 3 : 0),
+            pointHoverRadius: 4,
+            pointBackgroundColor: (c) => (flagged(c.dataIndex) ? cc.benchmark : cc.total),
+            pointBorderColor: (c) => (flagged(c.dataIndex) ? cc.benchmark : cc.total),
             tension: 0,
-            // последний отрезок до «сегодня» — пунктиром: там есть бумажная переоценка
-            segment: {
-              borderDash: (c) => (today && c.p1DataIndex === lastIdx ? [6, 4] : undefined),
-            },
+          },
+          {
+            label: 'Просадка, ₽',
+            data: points.map((p) => Number(p.drawdownRub)),
+            borderColor: cc.negative,
+            backgroundColor: cc.negative + '55',
+            fill: 'origin',
+            pointRadius: 0,
+            tension: 0,
           },
         ],
       },
@@ -122,10 +135,12 @@ export class SystemEquityChart {
           tooltip: {
             callbacks: {
               label: (c) => `${c.dataset.label}: ${formatRub(c.parsed.y)}`,
-              afterLabel: (c) =>
-                today && c.dataIndex === lastIdx
-                  ? `зафиксировано ${formatRub(Number(today.fixedRub))}, переоценка ${formatRub(Number(today.unrealizedRub))}`
-                  : '',
+              afterBody: (items) => {
+                const p = items.length > 0 ? points[items[0].dataIndex] : undefined;
+                if (!p) return [];
+                const lines = [`зафиксировано ${formatRub(Number(p.fixedRub))}, переоценка ${formatRub(Number(p.unrealizedRub))}`];
+                return [...lines, ...p.carried.map(describe)];
+              },
             },
           },
         },
