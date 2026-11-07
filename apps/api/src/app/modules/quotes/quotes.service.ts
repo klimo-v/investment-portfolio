@@ -75,7 +75,9 @@ export class QuotesService {
       currency: row.currency,
       accruedInterest: row.accruedInterest,
       accruedCurrency: row.accruedCurrency,
-      source: row.source,
+      // цена от провайдера в момент нажатия — не официальное закрытие дня (внутридневная LAST,
+      // частичная свеча): помечаем 'quote', чтобы официальное значение заменило её при догрузке
+      source: row.source === 'manual' ? 'manual' : 'quote',
     });
   }
 
@@ -92,7 +94,8 @@ export class QuotesService {
         currency: 'RUB',
         accruedInterest: null,
         accruedCurrency: null,
-        source: 'cbr',
+        // daily_json в пятницу после ~15:00 уже даёт курс на понедельник — не официальный курс дня
+        source: 'quote',
       });
     }
   }

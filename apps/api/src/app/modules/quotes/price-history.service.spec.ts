@@ -163,3 +163,22 @@ describe('слияние инструментов: история цен пер�
     ]);
   });
 });
+
+describe('цена момента нажатия «Обновить цены» не замораживает день', () => {
+  it('точка quote не закрывает диапазон: официальное закрытие того же дня догружается и заменяет её', async () => {
+    const svc0 = new PriceHistoryService(db, []);
+    svc0.record('SBER', point('2026-10-05', '101', 'moex'));
+    svc0.record('SBER', point('2026-10-06', '999', 'quote')); // внутридневная цена в день D
+    const official = [point('2026-10-05', '101'), point('2026-10-06', '105')];
+    const { provider, calls } = fakeProvider(official);
+    await new PriceHistoryService(db, [provider]).ensure([sber], '2026-10-05', '2026-10-06');
+    expect(calls).toEqual([['SBER', '2026-10-06', '2026-10-06']]); // покрыто по 05.10, день 06.10 — нет
+    expect(rows().find((r) => r.date === '2026-10-06')).toMatchObject({ price: '105', source: 'moex' });
+  });
+
+  it('и обратно: котировка не затирает официальное закрытие', () => {
+    const svc = new PriceHistoryService(db, []);
+    svc.record('SBER', point('2026-10-06', '105', 'moex'));
+    expect(svc.record('SBER', point('2026-10-06', '999', 'quote'))).toBe(false);
+  });
+});

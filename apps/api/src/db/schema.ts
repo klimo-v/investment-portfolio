@@ -136,7 +136,7 @@ export const priceHistory = sqliteTable(
     accruedInterest: text('accrued_interest'),
     accruedCurrency: text('accrued_currency'),
     source: text('source', {
-      enum: ['moex', 'cbr', 'binance', 'broker-report', 'snapshot', 'manual'],
+      enum: ['moex', 'cbr', 'binance', 'broker-report', 'quote', 'snapshot', 'manual'],
     }).notNull(),
   },
   (t) => [primaryKey({ columns: [t.instrumentId, t.date] })],
