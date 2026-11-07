@@ -303,12 +303,116 @@ export const TradeSchema = z.object({
   /** рыночная стоимость остатка с учётом НКД */
   currentValueRub: decimalString.nullable(),
   pnlRub: decimalString.nullable(), // реализованный + нереализованный + выплаты
+  /** направление: у не-фьючерсов всегда Long, у фьючерса — по знаку позиции при открытии */
+  direction: z.enum(['Long', 'Short']),
   openedAt: z.string(),
   closedAt: z.string().nullable(),
+  /** время открытия «ЧЧ:ММ:СС»; null — у операций нет времени (старые данные) */
+  openedTime: z.string().nullable(),
+  closedTime: z.string().nullable(),
+  /** комиссии всех операций сделки в рублях (уже учтены в realizedPnlRub) */
+  feesRub: decimalString,
   /** id операций, из которых собрана сделка — для раскрытия строки в UI */
   operationIds: z.array(z.string()),
 });
 export type Trade = z.infer<typeof TradeSchema>;
+
+/**
+ * Статистика результатов торговой системы (страница «Система», libs/core/performance.ts).
+ * Деньги — decimal-строки, безразмерные коэффициенты — number, null — «не определено»
+ * (нет данных, деление на ноль). Считается ТОЛЬКО по закрытым сделкам; открытая
+ * позиция отражена отдельно (summary.openRealizedRub / unrealizedRub) и в реализованный
+ * результат не подмешивается.
+ */
+const DirectionStatsSchema = z.object({
+  count: z.number(),
+  wins: z.number(),
+  winRatePct: z.number().nullable(),
+  netPnlRub: decimalString,
+});
+export const SystemPerformanceSchema = z.object({
+  systemId: z.string(),
+  systemName: z.string(),
+  summary: z.object({
+    /** реализованный результат закрытых сделок, после комиссий */
+    netPnlRub: decimalString,
+    /** до комиссий: net + комиссии закрытых сделок */
+    grossPnlRub: decimalString,
+    /** комиссии закрытых сделок */
+    feesRub: decimalString,
+    /** комиссии всех сделок, включая открытые */
+    feesTotalRub: decimalString,
+    /** комиссии закрытых / gross, %; null — gross ≤ 0 */
+    feeSharePct: z.number().nullable(),
+    /** уже зафиксированное по открытым сделкам (комиссии входа, частичные закрытия) */
+    openRealizedRub: decimalString,
+    /** нереализованный результат открытых сделок по расчётной цене */
+    unrealizedRub: decimalString,
+    /** net закрытых + openRealized + unrealized */
+    totalRub: decimalString,
+    openCount: z.number(),
+  }),
+  trades: z.object({
+    closed: z.number(),
+    wins: z.number(),
+    losses: z.number(),
+    breakeven: z.number(),
+    winRatePct: z.number().nullable(),
+    long: DirectionStatsSchema,
+    short: DirectionStatsSchema,
+  }),
+  quality: z.object({
+    avgWinRub: decimalString,
+    avgLossRub: decimalString,
+    /** ср. выигрыш / |ср. убыток| */
+    payoffRatio: z.number().nullable(),
+    /** сумма прибылей / сумма убытков */
+    profitFactor: z.number().nullable(),
+    expectancyRub: decimalString,
+    largestWinRub: decimalString,
+    largestLossRub: decimalString,
+  }),
+  streaks: z.object({
+    maxWins: z.number(),
+    maxLosses: z.number(),
+    current: z.object({ kind: z.enum(['win', 'loss']).nullable(), length: z.number() }),
+  }),
+  risk: z.object({
+    maxDrawdownRub: decimalString,
+    peakDate: z.string().nullable(),
+    troughDate: z.string().nullable(),
+    recoveryDate: z.string().nullable(),
+    /** от пика до восстановления (или до последней точки, если не восстановилась) */
+    drawdownDays: z.number(),
+    recoveryFactor: z.number().nullable(),
+  }),
+  holding: z.object({
+    /** true — у всех закрытых сделок есть время, срок точный; иначе считан по датам */
+    hasTime: z.boolean(),
+    avgHours: z.number().nullable(),
+    avgWinHours: z.number().nullable(),
+    avgLossHours: z.number().nullable(),
+  }),
+  ratios: z.object({
+    sharpe: z.number().nullable(),
+    sortino: z.number().nullable(),
+    /** сколько дневных значений вошло в расчёт */
+    days: z.number(),
+    /** допущения расчёта словами — показываются в подсказке */
+    assumptions: z.string(),
+  }),
+  series: z.object({
+    /** кривая эквити: точка на день по дате закрытия + стартовый ноль */
+    equity: z.array(
+      z.object({ date: z.string(), equityRub: decimalString, drawdownRub: decimalString }),
+    ),
+    byMonth: z.array(z.object({ period: z.string(), pnlRub: decimalString, trades: z.number() })),
+    /** weekday: 1 = понедельник … 7 = воскресенье (по дате закрытия) */
+    byWeekday: z.array(z.object({ weekday: z.number(), pnlRub: decimalString, trades: z.number() })),
+    histogram: z.array(z.object({ fromRub: decimalString, toRub: decimalString, count: z.number() })),
+  }),
+});
+export type SystemPerformance = z.infer<typeof SystemPerformanceSchema>;
 
 /**
  * Снимок стоимости портфеля на дату (docs/04-roadmap.md, Фаза 5) — один снимок

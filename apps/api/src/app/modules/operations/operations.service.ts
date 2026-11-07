@@ -364,8 +364,12 @@ export class OperationsService {
         priceCurrency,
         currentValueRub,
         pnlRub,
+        direction: t.direction,
         openedAt: t.openedAt,
         closedAt: t.closedAt,
+        openedTime: t.openedTime,
+        closedTime: t.closedTime,
+        feesRub: t.feesRub.toFixed(2),
         operationIds: t.operationIds,
       });
     }

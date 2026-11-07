@@ -337,10 +337,53 @@ export interface TradeResult {
   couponsRub: Decimal;
   /** валюта сделок — в ней выражены avgBuyPrice/investedCcy (см. PositionResult.tradeCurrency) */
   tradeCurrency: string;
+  /** направление: у не-фьючерсов всегда Long; у фьючерса — по знаку позиции при открытии */
+  direction: 'Long' | 'Short';
   openedAt: string;
   closedAt: string | null;
+  /** время открытия «ЧЧ:ММ:СС» (executedAt первой операции); null у старых операций без времени */
+  openedTime: string | null;
+  /** время закрытия «ЧЧ:ММ:СС»; null — сделка открыта или у операции нет времени */
+  closedTime: string | null;
+  /**
+   * Комиссии всех операций сделки в рублях (для «доли комиссий»). Уже учтены в
+   * realizedPnlRub: gross = realizedPnlRub + feesRub (у закрытой сделки).
+   */
+  feesRub: Decimal;
   /** id операций, из которых собрана сделка */
   operationIds: string[];
+}
+
+function newTrade(
+  op: Operation,
+  direction: 'Long' | 'Short',
+): TradeResult {
+  return {
+    instrumentId: op.instrumentId as string,
+    systemId: op.systemId,
+    portfolioId: op.portfolioId,
+    status: 'Open',
+    quantity: new Decimal(0),
+    qtyBought: new Decimal(0),
+    qtySold: new Decimal(0),
+    avgBuyPrice: new Decimal(0),
+    investedCcy: new Decimal(0),
+    investedRub: new Decimal(0),
+    proceedsCcy: new Decimal(0),
+    proceedsRub: new Decimal(0),
+    realizedPnlCcy: new Decimal(0),
+    realizedPnlRub: new Decimal(0),
+    dividendsRub: new Decimal(0),
+    couponsRub: new Decimal(0),
+    tradeCurrency: op.currency,
+    direction,
+    openedAt: op.date,
+    closedAt: null,
+    openedTime: op.executedAt ?? null,
+    closedTime: null,
+    feesRub: new Decimal(0),
+    operationIds: [],
+  };
 }
 
 /**
@@ -380,34 +423,14 @@ export function calculateTrades(
     if (op.operationType === 'Buy') {
       let trade = open.get(key);
       if (!trade) {
-        trade = {
-          instrumentId: op.instrumentId,
-          systemId: op.systemId,
-          portfolioId: op.portfolioId,
-          status: 'Open',
-          quantity: new Decimal(0),
-          qtyBought: new Decimal(0),
-          qtySold: new Decimal(0),
-          avgBuyPrice: new Decimal(0),
-          investedCcy: new Decimal(0),
-          investedRub: new Decimal(0),
-          proceedsCcy: new Decimal(0),
-          proceedsRub: new Decimal(0),
-          realizedPnlCcy: new Decimal(0),
-          realizedPnlRub: new Decimal(0),
-          dividendsRub: new Decimal(0),
-          couponsRub: new Decimal(0),
-          tradeCurrency: op.currency,
-          openedAt: op.date,
-          closedAt: null,
-          operationIds: [],
-        };
+        trade = newTrade(op, 'Long');
         open.set(key, trade);
       }
       trade.tradeCurrency = op.currency;
       const cost = qty.mul(price).plus(fee);
       trade.investedCcy = trade.investedCcy.plus(cost);
       trade.investedRub = trade.investedRub.plus(cost.mul(fxRate));
+      trade.feesRub = trade.feesRub.plus(fee.mul(fxRate));
       trade.quantity = trade.quantity.plus(qty);
       trade.qtyBought = trade.qtyBought.plus(qty);
       trade.avgBuyPrice = trade.quantity.isZero()
@@ -431,6 +454,7 @@ export function calculateTrades(
       trade.investedRub = trade.investedRub.minus(costOfSold.mul(fxRate));
       trade.quantity = trade.quantity.minus(qty);
       trade.qtySold = trade.qtySold.plus(qty);
+      trade.feesRub = trade.feesRub.plus(fee.mul(fxRate));
       if (op.id) trade.operationIds.push(op.id);
 
       if (trade.quantity.lte(0)) {
@@ -439,6 +463,7 @@ export function calculateTrades(
         trade.investedRub = new Decimal(0);
         trade.status = 'Closed';
         trade.closedAt = op.date;
+        trade.closedTime = op.executedAt ?? null;
         open.delete(key);
         closed.push(trade);
       } else {
@@ -498,6 +523,7 @@ function applyFutureTrade(
     const net = pnl.minus(partFee);
     trade.realizedPnlCcy = trade.realizedPnlCcy.plus(net);
     trade.realizedPnlRub = trade.realizedPnlRub.plus(net.mul(fxRate));
+    trade.feesRub = trade.feesRub.plus(partFee.mul(fxRate));
     if (side === 'Buy') trade.qtyBought = trade.qtyBought.plus(partQty);
     else trade.qtySold = trade.qtySold.plus(partQty);
     if (op.id && !trade.operationIds.includes(op.id)) trade.operationIds.push(op.id);
@@ -514,6 +540,7 @@ function applyFutureTrade(
       if (pos.quantity.isZero() || fill.openedQty.gt(0)) {
         trade.status = 'Closed';
         trade.closedAt = op.date;
+        trade.closedTime = op.executedAt ?? null;
         open.delete(key);
         closed.push(trade);
       } else {
@@ -530,28 +557,8 @@ function applyFutureTrade(
   if (fill.openedQty.gt(0)) {
     let trade = open.get(key);
     if (!trade) {
-      trade = {
-        instrumentId: op.instrumentId as string,
-        systemId: op.systemId,
-        portfolioId: op.portfolioId,
-        status: 'Open',
-        quantity: new Decimal(0),
-        qtyBought: new Decimal(0),
-        qtySold: new Decimal(0),
-        avgBuyPrice: new Decimal(0),
-        investedCcy: new Decimal(0),
-        investedRub: new Decimal(0),
-        proceedsCcy: new Decimal(0),
-        proceedsRub: new Decimal(0),
-        realizedPnlCcy: new Decimal(0),
-        realizedPnlRub: new Decimal(0),
-        dividendsRub: new Decimal(0),
-        couponsRub: new Decimal(0),
-        tradeCurrency: op.currency,
-        openedAt: op.date,
-        closedAt: null,
-        operationIds: [],
-      };
+      // направление — по стороне открывающей части: Buy открывает лонг, Sell — шорт
+      trade = newTrade(op, side === 'Buy' ? 'Long' : 'Short');
       open.set(key, trade);
     }
     record(trade, fill.openedQty, feeOpen, new Decimal(0));

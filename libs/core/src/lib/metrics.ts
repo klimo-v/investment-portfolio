@@ -1,6 +1,7 @@
 import Decimal from 'decimal.js';
 import type { Operation } from './schemas';
 import { compareOperations } from './operation-order';
+import { outcomeStats } from './performance';
 
 /**
  * Метрики эффективности портфеля/системы (docs/05-review-usability.md §1).
@@ -341,23 +342,13 @@ export interface TradeStats {
  */
 export function tradeStats(trades: TradeStatInput[]): TradeStats {
   const closed = trades.filter((t) => t.status === 'Closed');
-  const closedCount = closed.length;
+  // классификация win/loss и profit factor — единая реализация в performance.ts
+  const o = outcomeStats(closed.map((t) => new Decimal(t.realizedPnlRub)));
+  const grossProfit = o.grossProfit.toNumber();
+  const grossLoss = o.grossLoss.toNumber();
 
-  let grossProfit = 0;
-  let grossLoss = 0; // положительная величина суммарного убытка
-  let winCount = 0;
-  let lossCount = 0;
   let holdingDaysSum = 0;
-
   for (const t of closed) {
-    const pnl = t.realizedPnlRub;
-    if (pnl > 0) {
-      grossProfit += pnl;
-      winCount++;
-    } else if (pnl < 0) {
-      grossLoss += -pnl;
-      lossCount++;
-    }
     if (t.closedAt) {
       const days = (toTime(t.closedAt) - toTime(t.openedAt)) / (24 * 60 * 60 * 1000);
       holdingDaysSum += Math.max(0, days);
@@ -365,14 +356,14 @@ export function tradeStats(trades: TradeStatInput[]): TradeStats {
   }
 
   return {
-    closedCount,
-    winCount,
-    lossCount,
-    winRatePct: closedCount > 0 ? (winCount / closedCount) * 100 : 0,
-    profitFactor: grossLoss > 0 ? grossProfit / grossLoss : null,
-    avgWinRub: winCount > 0 ? grossProfit / winCount : 0,
-    avgLossRub: lossCount > 0 ? -grossLoss / lossCount : 0,
-    expectancyRub: closedCount > 0 ? (grossProfit - grossLoss) / closedCount : 0,
-    avgHoldingDays: closedCount > 0 ? holdingDaysSum / closedCount : 0,
+    closedCount: o.count,
+    winCount: o.wins,
+    lossCount: o.losses,
+    winRatePct: o.winRatePct ?? 0,
+    profitFactor: o.profitFactor,
+    avgWinRub: o.wins > 0 ? grossProfit / o.wins : 0,
+    avgLossRub: o.losses > 0 ? -grossLoss / o.losses : 0,
+    expectancyRub: o.count > 0 ? (grossProfit - grossLoss) / o.count : 0,
+    avgHoldingDays: o.count > 0 ? holdingDaysSum / o.count : 0,
   };
 }

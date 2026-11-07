@@ -10,3 +10,4 @@ export * from './lib/futures-engine';
 export * from './lib/operation-order';
 export * from './lib/parsers/broker-html-report';
 export * from './lib/parsers/tbank-invest-api';
+export * from './lib/performance';
