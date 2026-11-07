@@ -37,7 +37,15 @@ export type EquityCurve = 'trades' | 'result';
         <p class="note">{{ periodNote() }}</p>
       }
       @if (config(); as cfg) {
-        <app-chart-canvas [config]="cfg" />
+        <!--
+          Холст пересоздаётся при смене кривой (track по режиму). ng2-charts при смене
+          конфигурации обновляет график «на месте» (Object.assign поверх старого
+          config.options/data): у двух режимов разные оси и подсказки, и остатки прежнего
+          режима оставляли на экране старую кривую после переключения обратно.
+        -->
+        @for (mode of [curve()]; track mode) {
+          <app-chart-canvas [config]="cfg" />
+        }
       } @else {
         <app-state-message kind="empty" icon="show_chart" title="Нет данных" [hint]="emptyHint()" />
       }
