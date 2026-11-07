@@ -233,6 +233,17 @@ describe('systemPerformance: краевые случаи', () => {
     expect(p.summary).toMatchObject({ netPnlRub: '0.00', openRealizedRub: '-10.00', unrealizedRub: '35.00', totalRub: '25.00', openCount: 1 });
   });
 
+  it('дивиденды и купоны входят в «Всего», но не в результат закрытых и не в нереализованный', () => {
+    const open = trade('0', '2026-01-05', {
+      status: 'Open',
+      closedAt: null,
+      dividendsRub: new Decimal(100),
+      couponsRub: new Decimal(20),
+    });
+    const p = systemPerformance([open], { unrealizedOf: () => new Decimal(-50) });
+    expect(p.summary).toMatchObject({ netPnlRub: '0.00', unrealizedRub: '-50.00', incomeRub: '120.00', totalRub: '70.00' });
+  });
+
   it('открытая без оценки: нереализованный = 0, не падает', () => {
     const open = trade('0', '2026-01-05', { status: 'Partial', closedAt: null });
     expect(systemPerformance([open]).summary.unrealizedRub).toBe('0.00');

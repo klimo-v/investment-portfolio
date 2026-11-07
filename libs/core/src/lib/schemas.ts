@@ -407,7 +407,9 @@ export const SystemPerformanceSchema = z.object({
     openRealizedRub: decimalString,
     /** нереализованный результат открытых сделок по расчётной цене */
     unrealizedRub: decimalString,
-    /** net закрытых + openRealized + unrealized */
+    /** дивиденды и купоны по всем сделкам (налог уже удержан брокером) */
+    incomeRub: decimalString,
+    /** net закрытых + openRealized + unrealized + income */
     totalRub: decimalString,
     openCount: z.number(),
   }),
