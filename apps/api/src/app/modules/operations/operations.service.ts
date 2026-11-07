@@ -33,11 +33,6 @@ import {
   type OperationRow,
 } from '../../../db/schema';
 import { DB } from '../../db/drizzle.module';
-import {
-  recordSnapshotInvalidation,
-  type SnapshotInvalidationEntry,
-  type SnapshotInvalidationKind,
-} from '../../../db/snapshot-invalidations';
 import { QuotesService } from '../quotes/quotes.service';
 
 /** Фильтр сводки дашборда (docs/05-review-usability.md §2/§3 — глобальный фильтр) */
@@ -140,10 +135,8 @@ export class OperationsService {
 
   /**
    * Валидация тела через Zod (CLAUDE.md §8 — не доверяем клиенту), затем запись в БД.
-   * Операция, датированная ЗАДНИМ ЧИСЛОМ (раньше последнего снимка), меняет то, что
-   * должно было быть посчитано на прошлые даты захвата — помечаем снимки
-   * недостоверными (recordSnapshotInvalidation сам решит, есть ли что портить:
-   * обычное добавление сегодняшним числом ничего не пишет).
+   * Операция задним числом ничего не портит: ряды динамики считаются из журнала на
+   * каждый запрос (valuationSeries), готовых итогов в БД нет.
    */
   add(raw: unknown): Operation {
     const parsed = OperationSchema.parse(raw);
@@ -172,26 +165,15 @@ export class OperationsService {
       })
       .run();
 
-    recordSnapshotInvalidation(this.db, this.changeEntry(parsed, 'add'));
-
     return { ...parsed, id };
   }
 
   /**
    * Удалить операцию по id (безвозвратно — пересчёт позиций/сделок исключит её).
-   * Задним числом меняется то, что должно было быть посчитано на каждую прошлую дату
-   * захвата, а пересчитать старые снимки не из чего — дневных цен по бумагам нет.
-   * Историю снимков не стираем, а помечаем недостоверной (см.
-   * recordSnapshotInvalidation): пользователь увидит на дашборде, что именно изменилось.
-   *
-   * Строку читаем ДО удаления — после неё описания уже не собрать.
+   * Ряды динамики пересчитаются из журнала при следующем запросе.
    */
   delete(id: string): void {
-    const [row] = this.db.select().from(operations).where(eq(operations.id, id)).all();
     this.db.delete(operations).where(eq(operations.id, id)).run();
-    if (!row) return;
-
-    recordSnapshotInvalidation(this.db, this.changeEntry(rowToOperation(row), 'delete'));
   }
 
   /**
@@ -199,41 +181,10 @@ export class OperationsService {
    * например, при разборе отчёта, где сделки лежат в разных системах/на разных счетах
    * брокера (обычный ↔ ИИС), а батч-разметки при импорте оказалось недостаточно.
    * Валидация через Zod (CLAUDE.md §8); существование id проверяет FK-констрейнт БД.
-   * Помечает историю снимков недостоверной — то же обоснование, что у delete().
    */
   reassign(id: string, raw: unknown): void {
     const patch = OperationReassignSchema.parse(raw);
-    const [row] = this.db.select().from(operations).where(eq(operations.id, id)).all();
     this.db.update(operations).set(patch).where(eq(operations.id, id)).run();
-    if (!row) return;
-
-    recordSnapshotInvalidation(this.db, this.changeEntry(rowToOperation(row), 'reassign'));
-  }
-
-  /**
-   * Запись «что изменилось» для таблицы в модалке дашборда.
-   *
-   * Тип операции не переводим — в журнале на странице «Операции» он тоже показан
-   * как есть (Buy/Sell/Deposit…), и расхождение сбивало бы с толку. Тикер ищем
-   * ровно один раз: он нужен и в описании, и отдельной колонкой.
-   */
-  private changeEntry(op: Operation, kind: SnapshotInvalidationKind): SnapshotInvalidationEntry {
-    const ticker = this.tickerOf(op.instrumentId);
-    const qty = trimZeros(op.quantity);
-
-    return {
-      kind,
-      operationDate: op.date,
-      description: ticker ? `${op.operationType} ${qty} ${ticker}` : `${op.operationType} ${qty}`,
-      ticker,
-    };
-  }
-
-  /** Тикер инструмента; null — кэш-операция (Deposit/Withdraw) без инструмента */
-  private tickerOf(instrumentId: string | null | undefined): string | null {
-    if (!instrumentId) return null;
-    const [row] = this.db.select().from(instruments).where(eq(instruments.id, instrumentId)).all();
-    return row?.ticker ?? null;
   }
 
   /**
@@ -676,15 +627,6 @@ export class OperationsService {
       xirrPct: rate === null ? null : rate * 100,
     };
   }
-}
-
-/**
- * Хвостовые нули десятичной строки для человекочитаемого описания: количество в БД
- * лежит как «10.000000», а в таблице изменений хочется видеть «10».
- */
-function trimZeros(value: string): string {
-  if (!value.includes('.')) return value;
-  return value.replace(/\.?0+$/, '') || '0';
 }
 
 function rowToOperation(row: OperationRow): Operation {

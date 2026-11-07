@@ -4,7 +4,7 @@ import { migrate } from 'drizzle-orm/better-sqlite3/migrator';
 import { eq } from 'drizzle-orm';
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { RawRow } from '@core';
-import { futuresSettlements, operations, portfolios, portfolioSnapshots, snapshotInvalidations, systems } from '../../../db/schema';
+import { futuresSettlements, operations, portfolios, systems } from '../../../db/schema';
 import { ImportService } from './import.service';
 
 /**
@@ -72,17 +72,6 @@ describe('ImportService — обновление операций при пов�
     await service.commit({ ...opts, content: report('7.40') });
     const [op] = db.select().from(operations).all();
     expect(op).toMatchObject({ fee: '8.52', systemId: 'sys-2', note: 'моя заметка' });
-  });
-
-  it('обновление при уже снятых снимках пишет запись в журнал инвалидаций (не новый механизм)', async () => {
-    await service.commit({ ...opts, content: report('3.69') });
-    db.insert(portfolioSnapshots)
-      .values({ date: '2026-11-06', investedRub: '0', currentValueRub: '0', pnlRub: '0', dividendsRub: '0' })
-      .run();
-    await service.commit({ ...opts, content: report('7.40') });
-    const [entry] = db.select().from(snapshotInvalidations).all();
-    expect(entry).toMatchObject({ kind: 'import-commit', operationDate: '2026-10-29', affectedCount: 1 });
-    expect(entry.description).toContain('обновлено 1');
   });
 
   it('та же операция в другом портфеле — не обновление, а дубль (как раньше)', async () => {

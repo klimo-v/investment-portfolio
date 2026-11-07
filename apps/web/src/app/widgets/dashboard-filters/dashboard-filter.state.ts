@@ -57,8 +57,6 @@ export interface DashboardFilter {
   readonly customTill: Signal<Date | null>;
   readonly range: Signal<PeriodRange>;
   readonly label: Signal<string | null>;
-  /** Выбран конкретный система/портфель — снимки стоимости их не различают */
-  readonly segmented: Signal<boolean>;
   setSystem(id: string | null): void;
   setPortfolio(id: string | null): void;
   setPeriod(period: Period): void;
@@ -95,7 +93,6 @@ export function dashboardFilter(): DashboardFilter {
     customTill,
     range,
     label: computed(() => formatRangeLabel(range())),
-    segmented: computed(() => system() !== null || portfolio() !== null),
     setSystem: (id) => params.patch({ system: id }),
     setPortfolio: (id) => params.patch({ portfolio: id }),
     setPeriod: (next) =>

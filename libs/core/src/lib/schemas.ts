@@ -256,33 +256,6 @@ export const BenchmarkPointSchema = z.object({
 });
 export type BenchmarkPoint = z.infer<typeof BenchmarkPointSchema>;
 
-/**
- * Ряд стоимости во времени по одному инструменту (для мульти-линейного графика
- * «Стоимость инструментов во времени» на дашборде). Значение — рыночная стоимость
- * держимого остатка в RUB на соответствующую дату из PositionSeries.dates; null —
- * инструмент в эту дату не удерживался или на него не было цены.
- */
-export const InstrumentValueSeriesSchema = z.object({
-  instrumentId: z.string(),
-  ticker: z.string(),
-  values: z.array(z.number().nullable()),
-});
-export type InstrumentValueSeries = z.infer<typeof InstrumentValueSeriesSchema>;
-
-/**
- * Колоночный ряд «стоимость инструментов во времени» (docs/05-review-usability.md).
- * dates — общая ось; instruments — по линии на инструмент; total — сумма стоимостей
- * показанных инструментов; netContributions — накопленный чистый ввод средств
- * (депозиты − выводы) на каждую дату, чтобы отделить рост от довнесения капитала.
- */
-export const PositionSeriesSchema = z.object({
-  dates: z.array(z.string()), // YYYY-MM-DD, по возрастанию
-  instruments: z.array(InstrumentValueSeriesSchema),
-  total: z.array(z.number()),
-  netContributions: z.array(z.number()),
-});
-export type PositionSeries = z.infer<typeof PositionSeriesSchema>;
-
 /** Статус сделки: открыта / частично закрыта / закрыта по остатку количества */
 export const TradeStatus = z.enum(['Open', 'Partial', 'Closed']);
 export type TradeStatus = z.infer<typeof TradeStatus>;
@@ -564,65 +537,3 @@ export const ValuationQuerySchema = z
     message: '`from` не может быть позже `till`',
   });
 export type ValuationQuery = z.infer<typeof ValuationQuerySchema>;
-
-/**
- * Снимок стоимости портфеля на дату (docs/04-roadmap.md, Фаза 5) — один снимок
- * в день, пишется при обновлении котировок («Обновить цены»). Даёт линию
- * динамики стоимости во времени, которой не хватает при разовом взгляде на
- * «Вложено/Текущая стоимость/P&L» (см. дашборд).
- */
-export const SnapshotSchema = z.object({
-  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Дата в формате YYYY-MM-DD'),
-  investedRub: z.number(),
-  currentValueRub: z.number(),
-  pnlRub: z.number(),
-  dividendsRub: z.number(),
-});
-export type Snapshot = z.infer<typeof SnapshotSchema>;
-
-/** Вид ретро-изменения журнала операций, портящего уже снятые снимки */
-export const SnapshotInvalidationKind = z.enum([
-  'add',
-  'delete',
-  'reassign',
-  'merge',
-  'import-commit',
-  'import-rollback',
-]);
-export type SnapshotInvalidationKind = z.infer<typeof SnapshotInvalidationKind>;
-
-/**
- * Запись журнала «что изменилось после того, как снимки были сняты». Снимок
- * кумулятивен (весь журнал операций на дату захвата), поэтому правка операции задним
- * числом делает недостоверными все снимки с date >= operationDate, а пересчитать их
- * не из чего — дневных цен по каждой бумаге нет. Вместо стирания истории показываем
- * пользователю, что именно изменилось.
- */
-export const SnapshotInvalidationSchema = z.object({
-  id: z.string(),
-  /** когда произошло изменение журнала (datetime, UTC) */
-  at: z.string(),
-  kind: SnapshotInvalidationKind,
-  /** дата затронутой операции — с неё снимки под вопросом */
-  operationDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Дата в формате YYYY-MM-DD'),
-  description: z.string(),
-  /** тикер, если изменение про один инструмент; null у батчей (импорт, откат) */
-  ticker: z.string().nullable(),
-  affectedCount: z.number(),
-  /** пользователь уже видел это предупреждение */
-  acknowledged: z.boolean(),
-});
-export type SnapshotInvalidation = z.infer<typeof SnapshotInvalidationSchema>;
-
-/**
- * Достоверность накопленной истории снимков для дашборда. `stale` выводится из
- * наличия НЕпросмотренных записей журнала, `staleSince` — дата первого реально
- * испорченного снимка («снимкам с этой даты доверять нельзя»).
- */
-export const SnapshotStalenessSchema = z.object({
-  stale: z.boolean(),
-  staleSince: z.string().nullable(), // YYYY-MM-DD
-  /** все записи журнала, свежие сверху */
-  entries: z.array(SnapshotInvalidationSchema),
-});
-export type SnapshotStaleness = z.infer<typeof SnapshotStalenessSchema>;

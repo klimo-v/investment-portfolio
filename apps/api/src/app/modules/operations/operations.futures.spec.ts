@@ -3,9 +3,10 @@ import Database from 'better-sqlite3';
 import { drizzle, type BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
 import { migrate } from 'drizzle-orm/better-sqlite3/migrator';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { instruments, operations, portfolios, portfolioSnapshots, quotes, snapshotPositions, systems } from '../../../db/schema';
+import { instruments, operations, portfolios, quotes, systems } from '../../../db/schema';
 import type { QuotesService } from '../quotes/quotes.service';
-import { SnapshotsService } from '../snapshots/snapshots.service';
+import { PriceHistoryService } from '../quotes/price-history.service';
+import { ValuationService } from '../valuation/valuation.service';
 import { OperationsService } from './operations.service';
 
 /**
@@ -13,7 +14,7 @@ import { OperationsService } from './operations.service';
  * брокер+биржа). Эталон — вариационная маржа отчёта: 204,00 − 11 117,00 = −10 913 ₽
  * (по цене сделок и расчётной 12 387), плюс комиссии 962,91 ₽ учтены отдельно.
  */
-const quotesStub = { getFxRate: async () => 1 } as unknown as QuotesService;
+const quotesStub = { getFxRate: async () => 1, getFxRateOrNull: async () => 1 } as unknown as QuotesService;
 
 type T = [date: string, time: string, side: 'Buy' | 'Sell', qty: string, price: string, fee: string, ref: string];
 const TRADES: T[] = [
@@ -140,22 +141,15 @@ describe('OperationsService — фьючерсы', () => {
     expect(day.totals.realizedPnlRub + before.totals.realizedPnlRub).toBeCloseTo(all.totals.realizedPnlRub, 2);
   });
 
-  it('capture(): шорт не попадает в разбивку «стоимость инструментов», агрегат включает фьючерс', async () => {
-    const snapshots = new SnapshotsService(db, service);
-    const snap = await snapshots.capture();
-    expect(db.select().from(snapshotPositions).all()).toHaveLength(0);
-    expect(snap.currentValueRub).toBeCloseTo(4288, 0);
-    expect(db.select().from(portfolioSnapshots).all()).toHaveLength(1);
-  });
-
-  it('capture(): обычная позиция попадает в разбивку, фьючерс рядом с ней — нет', async () => {
+  it('дневной ряд: фьючерс оценён нереализованным результатом (вложено 0), обычная позиция — рыночной стоимостью', async () => {
     db.insert(operations)
       .values({ id: randomUUID(), date: '2026-10-02', systemId: 'sys', portfolioId: 'pf', instrumentId: 'SBER', operationType: 'Buy', quantity: '10', price: '100', currency: 'RUB' })
       .run();
     db.insert(quotes).values({ instrumentId: 'SBER', price: '110', currency: 'RUB', source: 'moex', asOf: '2026-11-05T00:00:00.000Z' }).run();
-    await new SnapshotsService(db, service).capture();
-    const rows = db.select().from(snapshotPositions).all();
-    expect(rows.map((r) => r.instrumentId)).toEqual(['SBER']);
-    expect(rows[0].valueRub).toBe('1100.00');
+    const valuation = new ValuationService(db, service, new PriceHistoryService(db, []), quotesStub);
+    const series = await valuation.series({ groupBy: 'instrument' });
+    const last = (key: string) => series.groups.find((g) => g.key === key)!.points.at(-1)!;
+    expect(last('SBER')).toMatchObject({ marketValueRub: '1100.00', investedRub: '1000.00', unrealizedRub: '100.00' });
+    expect(last('CNY-12.26')).toMatchObject({ marketValueRub: '4288.00', investedRub: '0.00' });
   });
 });

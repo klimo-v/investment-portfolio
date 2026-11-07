@@ -16,7 +16,6 @@ import {
 } from '../../../db/schema';
 import { recordPrice } from '../../../db/price-history-store';
 import { DB } from '../../db/drizzle.module';
-import { recordSnapshotInvalidation } from '../../../db/snapshot-invalidations';
 
 /**
  * Справочники: системы, портфели, инструменты (docs/02-data-model.md §2.2–2.4).
@@ -125,9 +124,8 @@ export class PortfoliosService {
    * такое слияние делает пользователь вручную, а не эвристика при импорте.
    *
    * Котировка source (если есть) удаляется вместе с ним — она обычно для другой
-   * валюты/цены и была бы неверной под чужим instrumentId. История снимков помечается
-   * недостоверной тем же приёмом, что и при правке журнала задним числом
-   * (см. recordSnapshotInvalidation) — но больше не стирается.
+   * валюты/цены и была бы неверной под чужим instrumentId. История цен переезжает к
+   * целевому инструменту по общей политике источников.
    */
   mergeInstruments(sourceId: string, targetId: string): { merged: true; movedOperations: number } {
     if (sourceId === targetId) {
@@ -143,18 +141,6 @@ export class PortfoliosService {
       );
     }
 
-    // самую раннюю дату переносимых операций читаем ДО update — после него
-    // отличить перенесённые от исходных операций target уже нельзя
-    const moved = this.db
-      .select({ date: operations.date })
-      .from(operations)
-      .where(eq(operations.instrumentId, sourceId))
-      .all();
-    const earliestDate = moved.reduce<string | null>(
-      (min, r) => (min === null || r.date < min ? r.date : min),
-      null,
-    );
-
     const { changes: movedOperations } = this.db
       .update(operations)
       .set({ instrumentId: targetId })
@@ -169,16 +155,6 @@ export class PortfoliosService {
     this.db.delete(priceHistory).where(eq(priceHistory.instrumentId, sourceId)).run();
     this.db.delete(quotes).where(eq(quotes.instrumentId, sourceId)).run();
     this.db.delete(instruments).where(eq(instruments.id, sourceId)).run();
-
-    if (earliestDate !== null) {
-      recordSnapshotInvalidation(this.db, {
-        kind: 'merge',
-        operationDate: earliestDate,
-        description: `Слияние «${source.ticker}» → «${target.ticker}»`,
-        ticker: target.ticker,
-        affectedCount: movedOperations,
-      });
-    }
 
     return { merged: true, movedOperations };
   }

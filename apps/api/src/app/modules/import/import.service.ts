@@ -27,7 +27,6 @@ import {
 } from '../../../db/schema';
 import { DB } from '../../db/drizzle.module';
 import { recordPrice } from '../../../db/price-history-store';
-import { recordSnapshotInvalidation } from '../../../db/snapshot-invalidations';
 import { parseCsv } from './csv-parser';
 import { parseTbankXlsx } from './tbank-xlsx-report';
 
@@ -587,29 +586,6 @@ export class ImportService {
     this.saveSettlements(settlements, input);
     this.uploads.delete(preview.uploadId);
 
-    // обновление комиссии/цены задним числом портит снимки так же, как правка операции;
-    // тот же механизм журнала инвалидаций, что и у импорта (новый не заводим)
-    if (earliestUpdateDate !== null) {
-      recordSnapshotInvalidation(this.db, {
-        kind: 'import-commit',
-        operationDate: earliestUpdateDate,
-        description: `Импорт: обновлено ${updated} ${pluralOperations(updated)}`,
-        affectedCount: updated,
-      });
-    }
-
-    // Импорт задним числом меняет то, что должно было быть посчитано на прошлые даты
-    // захвата, ровно как правка одной операции — помечаем снимки недостоверными.
-    // recordSnapshotInvalidation сам промолчит, если импортированы только свежие даты.
-    if (earliestDate !== null) {
-      recordSnapshotInvalidation(this.db, {
-        kind: 'import-commit',
-        operationDate: earliestDate,
-        description: `Импорт ${imported} ${pluralOperations(imported)}`,
-        affectedCount: imported,
-      });
-    }
-
     return { batchId, imported, updated };
   }
 
@@ -692,9 +668,8 @@ export class ImportService {
   }
 
   /**
-   * Откат импорта: удаляет все операции указанной загрузки. Это массовое удаление
-   * задним числом (как и OperationsService.delete()) — помечает историю снимков
-   * недостоверной, см. recordSnapshotInvalidation.
+   * Откат импорта: удаляет все операции указанной загрузки. Ряды динамики пересчитаются
+   * из журнала при следующем запросе.
    */
   rollback(batchId: string): { deleted: number } {
     const toDelete = this.db
@@ -704,38 +679,6 @@ export class ImportService {
       .all();
     this.db.delete(operations).where(eq(operations.importBatchId, batchId)).run();
 
-    const earliestDate = toDelete.reduce<string | null>(
-      (min, r) => (min === null || r.date < min ? r.date : min),
-      null,
-    );
-    if (earliestDate !== null) {
-      recordSnapshotInvalidation(this.db, {
-        kind: 'import-rollback',
-        operationDate: earliestDate,
-        description: `Откат импорта: ${toDelete.length} ${pluralOperations(toDelete.length)}`,
-        affectedCount: toDelete.length,
-      });
-    }
-
     return { deleted: toDelete.length };
-  }
-}
-
-/**
- * Склонение «операция» для описания батча в таблице изменений на дашборде:
- * 1 операция / 2 операции / 5 операций.
- */
-function pluralOperations(count: number): string {
-  const mod100 = count % 100;
-  if (mod100 >= 11 && mod100 <= 14) return 'операций';
-  switch (count % 10) {
-    case 1:
-      return 'операция';
-    case 2:
-    case 3:
-    case 4:
-      return 'операции';
-    default:
-      return 'операций';
   }
 }
