@@ -14,3 +14,4 @@ export * from './lib/performance';
 export * from './lib/futures-settlement';
 export * from './lib/annotations';
 export * from './lib/price-history';
+export * from './lib/valuation';

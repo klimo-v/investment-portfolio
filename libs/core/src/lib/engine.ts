@@ -401,38 +401,57 @@ function newTrade(
   };
 }
 
+/** Приёмник денежных событий сделок (см. TradeLedger) */
+export type TradeEventSink = (trade: TradeResult, event: TradeEvent) => void;
+
 /**
- * Группирует операции одного инструмента (в рамках системы/портфеля) в сделки
- * (docs/02-data-model.md §2.5): сделка открывается первой покупкой и закрывается,
- * когда остаток уходит в ноль. Если позиция открывается заново после закрытия —
- * это уже новая сделка (реальный кейс: купил-продал-купил снова).
+ * Пошаговый учёт сделок: операции подаются по одной в порядке compareOperations, состояние
+ * открытых сделок доступно после каждой — это позволяет строить дневные ряды одним проходом
+ * по журналу (valuation.ts), не пересчитывая весь журнал на каждый день. calculateTrades —
+ * тот же учёт «сразу до конца», поэтому итоги сделок и дневной ряд не могут разойтись.
  */
-export function calculateTrades(
-  operations: Operation[],
-  options: EngineOptions = {},
-): TradeResult[] {
-  const closed: TradeResult[] = [];
-  const open = new Map<string, TradeResult>();
+export class TradeLedger {
+  private readonly closed: TradeResult[] = [];
+  private readonly open = new Map<string, TradeResult>();
+  /** позиция фьючерса по ключу (нужна, чтобы применять сделки по порядку) */
+  private readonly futurePos = new Map<string, FuturePosition>();
 
-  const sorted = [...operations].sort(compareOperations);
-  // позиция фьючерса по ключу (нужна, чтобы применять сделки по порядку)
-  const futurePos = new Map<string, FuturePosition>();
+  constructor(
+    private readonly options: EngineOptions = {},
+    private readonly onEvent?: TradeEventSink,
+  ) {}
 
-  for (const op of sorted) {
-    if (!op.instrumentId) continue;
-    if (op.operationType === 'Transfer') continue;
+  /** Открытые сделки (Open/Partial) на текущий момент; объекты живые, мутируются дальше */
+  openTrades(): IterableIterator<TradeResult> {
+    return this.open.values();
+  }
+
+  /** Все сделки: закрытые в порядке закрытия, затем открытые */
+  trades(): TradeResult[] {
+    return [...this.closed, ...this.open.values()];
+  }
+
+  private readonly emit: TradeEventSink = (trade, event) => {
+    trade.events.push(event);
+    this.onEvent?.(trade, event);
+  };
+
+  apply(op: Operation): void {
+    if (!op.instrumentId) return;
+    if (op.operationType === 'Transfer') return;
 
     const key = positionKey(op);
     const qty = d(op.quantity);
     const price = d(op.price);
     const fee = d(op.fee ?? '0');
     const fxRate = d(op.fxRate ?? '1');
+    const { open } = this;
 
-    if (options.futureIds?.has(op.instrumentId)) {
+    if (this.options.futureIds?.has(op.instrumentId)) {
       if (op.operationType === 'Buy' || op.operationType === 'Sell') {
-        applyFutureTrade(op, op.operationType, qty, price, fee, fxRate, key, futurePos, open, closed);
+        applyFutureTrade(op, op.operationType, qty, price, fee, fxRate, key, this.futurePos, open, this.closed, this.emit);
       }
-      continue;
+      return;
     }
 
     if (op.operationType === 'Buy') {
@@ -452,18 +471,18 @@ export function calculateTrades(
         ? new Decimal(0)
         : trade.investedCcy.div(trade.quantity);
       if (op.id) trade.operationIds.push(op.id);
-      continue;
+      return;
     }
 
     if (op.operationType === 'Sell') {
       const trade = open.get(key);
-      if (!trade) continue; // продажа без открытой сделки — некорректные данные, пропускаем
+      if (!trade) return; // продажа без открытой сделки — некорректные данные, пропускаем
 
       const costOfSold = trade.avgBuyPrice.mul(qty);
       const proceeds = qty.mul(price).minus(fee);
       trade.realizedPnlCcy = trade.realizedPnlCcy.plus(proceeds.minus(costOfSold));
       trade.realizedPnlRub = trade.realizedPnlRub.plus(proceeds.minus(costOfSold).mul(fxRate));
-      trade.events.push({ date: op.date, kind: 'realized', rub: proceeds.minus(costOfSold).mul(fxRate) });
+      this.emit(trade, { date: op.date, kind: 'realized', rub: proceeds.minus(costOfSold).mul(fxRate) });
       trade.proceedsCcy = trade.proceedsCcy.plus(proceeds);
       trade.proceedsRub = trade.proceedsRub.plus(proceeds.mul(fxRate));
       trade.investedCcy = trade.investedCcy.minus(costOfSold);
@@ -481,25 +500,38 @@ export function calculateTrades(
         trade.closedAt = op.date;
         trade.closedTime = op.executedAt ?? null;
         open.delete(key);
-        closed.push(trade);
+        this.closed.push(trade);
       } else {
         trade.status = 'Partial';
       }
-      continue;
+      return;
     }
 
     if (op.operationType === 'Dividend' || op.operationType === 'Coupon') {
       const trade = open.get(key);
-      if (!trade) continue; // выплата по уже закрытой сделке — не относим никуда
+      if (!trade) return; // выплата по уже закрытой сделке — не относим никуда
       const amount = qty.mul(price).mul(fxRate);
       if (op.operationType === 'Dividend') trade.dividendsRub = trade.dividendsRub.plus(amount);
       else trade.couponsRub = trade.couponsRub.plus(amount);
-      trade.events.push({ date: op.date, kind: 'income', rub: amount });
+      this.emit(trade, { date: op.date, kind: 'income', rub: amount });
       if (op.id) trade.operationIds.push(op.id);
     }
   }
+}
 
-  return [...closed, ...open.values()];
+/**
+ * Группирует операции одного инструмента (в рамках системы/портфеля) в сделки
+ * (docs/02-data-model.md §2.5): сделка открывается первой покупкой и закрывается,
+ * когда остаток уходит в ноль. Если позиция открывается заново после закрытия —
+ * это уже новая сделка (реальный кейс: купил-продал-купил снова).
+ */
+export function calculateTrades(
+  operations: Operation[],
+  options: EngineOptions = {},
+): TradeResult[] {
+  const ledger = new TradeLedger(options);
+  for (const op of [...operations].sort(compareOperations)) ledger.apply(op);
+  return ledger.trades();
 }
 
 /**
@@ -519,6 +551,7 @@ function applyFutureTrade(
   futurePos: Map<string, FuturePosition>,
   open: Map<string, TradeResult>,
   closed: TradeResult[],
+  emit: TradeEventSink,
 ): void {
   let pos = futurePos.get(key);
   if (!pos) {
@@ -540,7 +573,7 @@ function applyFutureTrade(
     const net = pnl.minus(partFee);
     trade.realizedPnlCcy = trade.realizedPnlCcy.plus(net);
     trade.realizedPnlRub = trade.realizedPnlRub.plus(net.mul(fxRate));
-    if (!net.isZero()) trade.events.push({ date: op.date, kind: 'realized', rub: net.mul(fxRate) });
+    if (!net.isZero()) emit(trade, { date: op.date, kind: 'realized', rub: net.mul(fxRate) });
     trade.feesRub = trade.feesRub.plus(partFee.mul(fxRate));
     if (side === 'Buy') trade.qtyBought = trade.qtyBought.plus(partQty);
     else trade.qtySold = trade.qtySold.plus(partQty);

@@ -1,0 +1,276 @@
+import Decimal from 'decimal.js';
+import type { Operation } from './schemas';
+import { marketValueRub, TradeLedger, type TradeResult } from './engine';
+import { futureUnrealizedPnl } from './futures-engine';
+import { compareOperations } from './operation-order';
+import { fxInstrumentId } from './price-history';
+
+/**
+ * Дневной ряд оценки — единственный источник всех графиков динамики (стоимость портфеля,
+ * стоимость инструментов, кривая «Результат системы»). Чистая функция над ФАКТАМИ: журнал
+ * операций + история цен и курсов. Ничего не знает ни о БД, ни о сети, готовых рядов не
+ * хранит — правка операции задним числом меняет только дни ≥ её даты просто потому, что
+ * ряд каждый раз считается из журнала заново.
+ *
+ * Одна арифметика с текущими итогами: позиции ведёт тот же TradeLedger, что и calculateTrades
+ * (итоги сделок), оценка остатка — тот же marketValueRub (НКД, валюта цены и валюта НКД),
+ * фьючерс — futureUnrealizedPnl. Поэтому точка «сегодня» при текущих ценах совпадает с
+ * итогом по сделкам, а не «похожа» на него.
+ *
+ * Определения точки (на день D, по группе):
+ *  - fixedRub        — зафиксированное нарастающим итогом: продажи (в т.ч. частичные),
+ *                      выплаты на дату выплаты, комиссии фьючерсов (события TradeLedger);
+ *  - investedRub     — себестоимость открытого остатка спота («вложено», у фьючерса 0);
+ *  - marketValueRub  — рыночная стоимость остатка по цене дня (у фьючерса — нереализованный
+ *                      результат, как и в текущей оценке);
+ *  - unrealizedRub   — marketValueRub − investedRub (переоценка);
+ *  - totalRub        — fixedRub + unrealizedRub.
+ *
+ * Цена дня D — последняя известная на дату ≤ D (forward-fill). Если цены нет вовсе (или нет
+ * курса валюты цены), остаток оценивается по себестоимости (переоценка 0; у фьючерса 0), а
+ * инструмент попадает в `carried` с причиной — график честно показывает дыру, а не рисует
+ * провал. Перенос цены через будний день без торгов тоже помечается; выходные — нет.
+ */
+
+Decimal.set({ precision: 40 });
+
+/** Цена (или курс) на дату, как она хранится в price_history */
+export interface PriceObservation {
+  /** id инструмента или `fx:USD` (см. fxInstrumentId) */
+  instrumentId: string;
+  date: string;
+  price: string;
+  /** валюта ЦЕНЫ (у замещающих облигаций — валюта номинала) */
+  currency: string;
+  accruedInterest?: string | null;
+  /** валюта НКД — своя, не обязана совпадать с валютой цены */
+  accruedCurrency?: string | null;
+}
+
+export type ValuationGroupBy = 'portfolio' | 'system' | 'instrument';
+
+export interface ValuationOptions {
+  /** последний день ряда включительно (обычно сегодня) */
+  till: string;
+  /** первый день ряда; по умолчанию — дата первой операции. Состояние до `from` считается всё равно */
+  from?: string;
+  groupBy: ValuationGroupBy;
+  systemId?: string;
+  portfolioId?: string;
+  futureIds?: ReadonlySet<string>;
+}
+
+/** Почему оценка инструмента на день не по цене этого дня */
+export type CarriedReason =
+  | 'no-price' // цены на дату нет вообще — остаток оценён по себестоимости
+  | 'no-fx' // нет курса валюты цены — остаток оценён по себестоимости
+  | 'carried'; // цена взята за более раннюю дату, а день был будним
+
+export interface CarriedPrice {
+  instrumentId: string;
+  reason: CarriedReason;
+  /** дата цены, которой воспользовались; null — цены не было */
+  priceDate: string | null;
+}
+
+export interface ValuationPoint {
+  date: string;
+  investedRub: string;
+  marketValueRub: string;
+  fixedRub: string;
+  unrealizedRub: string;
+  totalRub: string;
+  carried: CarriedPrice[];
+}
+
+export interface ValuationGroup {
+  key: string;
+  points: ValuationPoint[];
+}
+
+export interface ValuationSeries {
+  from: string | null;
+  till: string;
+  groupBy: ValuationGroupBy;
+  groups: ValuationGroup[];
+}
+
+const ZERO = new Decimal(0);
+const DAY_MS = 86_400_000;
+
+function addDays(iso: string, n: number): string {
+  return new Date(Date.parse(iso) + n * DAY_MS).toISOString().slice(0, 10);
+}
+
+/** Выходной (суббота/воскресенье) — отсутствие торгов не считаем пропуском цены */
+function isWeekend(iso: string): boolean {
+  const dow = new Date(Date.parse(iso)).getUTCDay();
+  return dow === 0 || dow === 6;
+}
+
+/** Последняя цена ≤ дня по каждому инструменту; дни обходятся по возрастанию, поэтому курсор только растёт */
+class PriceCursor {
+  private readonly rows = new Map<string, PriceObservation[]>();
+  private readonly pos = new Map<string, number>();
+
+  constructor(prices: readonly PriceObservation[]) {
+    for (const p of prices) {
+      const list = this.rows.get(p.instrumentId);
+      if (list) list.push(p);
+      else this.rows.set(p.instrumentId, [p]);
+    }
+    for (const list of this.rows.values()) list.sort((a, b) => a.date.localeCompare(b.date));
+  }
+
+  at(instrumentId: string, day: string): PriceObservation | null {
+    const list = this.rows.get(instrumentId);
+    if (!list) return null;
+    let i = this.pos.get(instrumentId) ?? -1;
+    while (i + 1 < list.length && list[i + 1].date <= day) i++;
+    this.pos.set(instrumentId, i);
+    return i >= 0 ? list[i] : null;
+  }
+}
+
+interface Accumulator {
+  invested: Decimal;
+  value: Decimal;
+  fixed: Decimal;
+  carried: CarriedPrice[];
+}
+
+export function valuationSeries(
+  operations: readonly Operation[],
+  prices: readonly PriceObservation[],
+  options: ValuationOptions,
+): ValuationSeries {
+  const keyOf = (r: { instrumentId?: string | null; systemId: string; portfolioId: string }): string =>
+    options.groupBy === 'instrument'
+      ? (r.instrumentId as string)
+      : options.groupBy === 'system'
+        ? r.systemId
+        : r.portfolioId;
+
+  // Transfer и операции без инструмента (ввод/вывод денег) на позиции не влияют — как в TradeLedger
+  const ops = operations
+    .filter(
+      (o) =>
+        o.instrumentId &&
+        o.operationType !== 'Transfer' &&
+        o.date <= options.till &&
+        (!options.systemId || o.systemId === options.systemId) &&
+        (!options.portfolioId || o.portfolioId === options.portfolioId),
+    )
+    .sort(compareOperations);
+
+  const keys = [...new Set(ops.map(keyOf))].sort();
+  if (ops.length === 0) {
+    return { from: options.from ?? null, till: options.till, groupBy: options.groupBy, groups: [] };
+  }
+
+  const fixedByKey = new Map<string, Decimal>(keys.map((k) => [k, ZERO]));
+  const ledger = new TradeLedger({ futureIds: options.futureIds }, (trade, event) => {
+    const k = keyOf(trade);
+    fixedByKey.set(k, (fixedByKey.get(k) ?? ZERO).plus(event.rub));
+  });
+
+  const cursor = new PriceCursor(prices);
+  const firstDay = ops[0].date;
+  const outFrom = options.from && options.from > firstDay ? options.from : firstDay;
+  const points = new Map<string, ValuationPoint[]>(keys.map((k) => [k, []]));
+
+  let next = 0;
+  for (let day = firstDay; day <= options.till; day = addDays(day, 1)) {
+    while (next < ops.length && ops[next].date <= day) ledger.apply(ops[next++]);
+    if (day < outFrom) continue;
+
+    const acc = new Map<string, Accumulator>(
+      keys.map((k) => [k, { invested: ZERO, value: ZERO, fixed: fixedByKey.get(k) ?? ZERO, carried: [] }]),
+    );
+    for (const trade of ledger.openTrades()) {
+      if (trade.quantity.isZero()) continue;
+      const a = acc.get(keyOf(trade));
+      if (!a) continue;
+      valueOpenTrade(trade, day, cursor, options.futureIds, a);
+    }
+
+    for (const k of keys) {
+      const a = acc.get(k) as Accumulator;
+      const unrealized = a.value.minus(a.invested);
+      (points.get(k) as ValuationPoint[]).push({
+        date: day,
+        investedRub: a.invested.toFixed(2),
+        marketValueRub: a.value.toFixed(2),
+        fixedRub: a.fixed.toFixed(2),
+        unrealizedRub: unrealized.toFixed(2),
+        totalRub: a.fixed.plus(unrealized).toFixed(2),
+        carried: a.carried,
+      });
+    }
+  }
+
+  return {
+    from: outFrom,
+    till: options.till,
+    groupBy: options.groupBy,
+    groups: keys.map((key) => ({ key, points: points.get(key) as ValuationPoint[] })),
+  };
+}
+
+/** Оценка одной открытой сделки на день: добавляет вложено/стоимость и пометки в аккумулятор группы */
+function valueOpenTrade(
+  trade: TradeResult,
+  day: string,
+  cursor: PriceCursor,
+  futureIds: ReadonlySet<string> | undefined,
+  acc: Accumulator,
+): void {
+  const isFuture = futureIds?.has(trade.instrumentId) ?? false;
+  const obs = cursor.at(trade.instrumentId, day);
+
+  const note = (reason: CarriedReason): void => {
+    acc.carried.push({ instrumentId: trade.instrumentId, reason, priceDate: obs?.date ?? null });
+  };
+  // стоимость без цены: спот — по себестоимости (переоценка 0), фьючерс — 0 (нет расчётной цены)
+  const fallback = (reason: CarriedReason): void => {
+    if (!isFuture) {
+      acc.invested = acc.invested.plus(trade.investedRub);
+      acc.value = acc.value.plus(trade.investedRub);
+    }
+    note(reason);
+  };
+
+  if (!obs) return fallback('no-price');
+
+  if (isFuture) {
+    // у фьючерса «стоимость» — нереализованный результат, вложено 0 (цена — ₽ за контракт)
+    acc.value = acc.value.plus(futureUnrealizedPnl({ quantity: trade.quantity, avgBuyPrice: trade.avgBuyPrice }, obs.price));
+  } else {
+    if (!trade.quantity.gt(0)) return; // спот с нулём/минусом — некорректные данные, как в текущей оценке
+    const fx = fxRateAt(obs.currency, day, cursor);
+    const accruedFx =
+      obs.accruedInterest === null || obs.accruedInterest === undefined
+        ? fx
+        : fxRateAt(obs.accruedCurrency || obs.currency, day, cursor);
+    if (fx === null || accruedFx === null) return fallback('no-fx');
+    acc.invested = acc.invested.plus(trade.investedRub);
+    acc.value = acc.value.plus(
+      marketValueRub({
+        quantity: trade.quantity,
+        price: obs.price,
+        fxRate: fx,
+        accruedInterest: obs.accruedInterest ?? null,
+        accruedFxRate: accruedFx,
+      }),
+    );
+  }
+  if (obs.date < day && !isWeekend(day)) note('carried');
+}
+
+/** Курс валюты к рублю на день (forward-fill); RUB — 1; null — курса нет */
+function fxRateAt(currency: string, day: string, cursor: PriceCursor): Decimal | null {
+  const c = currency.toUpperCase();
+  if (c === 'RUB') return new Decimal(1);
+  const obs = cursor.at(fxInstrumentId(c), day);
+  return obs ? new Decimal(obs.price) : null;
+}
