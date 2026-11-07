@@ -414,6 +414,19 @@ export const SystemPerformanceSchema = z.object({
 });
 export type SystemPerformance = z.infer<typeof SystemPerformanceSchema>;
 
+/** Query-параметры GET /api/systems/:systemId/performance (как у operations/summary) */
+const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Дата в формате YYYY-MM-DD');
+export const SystemPerformanceQuerySchema = z
+  .object({
+    portfolioId: z.string().min(1).optional(),
+    from: isoDate.optional(),
+    till: isoDate.optional(),
+  })
+  .refine((q) => !q.from || !q.till || q.from <= q.till, {
+    message: '`from` не может быть позже `till`',
+  });
+export type SystemPerformanceQuery = z.infer<typeof SystemPerformanceQuerySchema>;
+
 /**
  * Снимок стоимости портфеля на дату (docs/04-roadmap.md, Фаза 5) — один снимок
  * в день, пишется при обновлении котировок («Обновить цены»). Даёт линию

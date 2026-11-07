@@ -1,10 +1,15 @@
-import { Body, Controller, Delete, Get, Param, Post } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Delete, Get, Param, Post, Query } from '@nestjs/common';
+import { SystemPerformanceQuerySchema, type SystemPerformance } from '@core';
 import type { SystemRow, PortfolioRow, InstrumentRow } from '../../../db/schema';
 import { PortfoliosService } from './portfolios.service';
+import { SystemPerformanceService } from './system-performance.service';
 
 @Controller()
 export class PortfoliosController {
-  constructor(private readonly service: PortfoliosService) {}
+  constructor(
+    private readonly service: PortfoliosService,
+    private readonly performanceService: SystemPerformanceService,
+  ) {}
 
   @Get('systems')
   systems(): SystemRow[] {
@@ -14,6 +19,17 @@ export class PortfoliosController {
   @Post('systems')
   addSystem(@Body() body: unknown): SystemRow {
     return this.service.createSystem(body);
+  }
+
+  /** Статистика результатов системы. Фильтры — query: portfolioId, from, till */
+  @Get('systems/:systemId/performance')
+  systemPerformance(
+    @Param('systemId') systemId: string,
+    @Query() rawQuery: unknown,
+  ): Promise<SystemPerformance> {
+    const query = SystemPerformanceQuerySchema.safeParse(rawQuery);
+    if (!query.success) throw new BadRequestException(query.error.issues);
+    return this.performanceService.performance(systemId, query.data);
   }
 
   @Delete('systems/:id')

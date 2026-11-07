@@ -18,6 +18,7 @@ import {
   type Position,
   type DashboardSummary,
   type Trade,
+  type TradeResult,
 } from '@core';
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
 import {
@@ -44,6 +45,23 @@ export interface SummaryFilter {
   from?: string;
   /** дата операции ≤ till (YYYY-MM-DD) */
   till?: string;
+}
+
+/** Срез сделок: система/портфель сужают журнал, период — по дате закрытия */
+export interface TradeFilter {
+  systemId?: string;
+  portfolioId?: string;
+  from?: string;
+  till?: string;
+}
+
+/** Сделка движка вместе с рыночной оценкой остатка (null — оценки нет или остатка нет) */
+export interface ValuedTrade {
+  trade: TradeResult;
+  currentPrice: string | null;
+  priceCurrency: string | null;
+  /** рыночная стоимость остатка; у фьючерса — нереализованный результат */
+  currentValueRub: string | null;
 }
 
 /**
@@ -283,17 +301,78 @@ export class OperationsService {
    * Открытые сделки обогащаем текущей ценой/P&L, как и позиции.
    */
   async trades(): Promise<Trade[]> {
-    const ops = this.list();
-    const futureIds = this.futureIds();
-    const instrumentRows = this.db.select().from(instruments).all();
-    const quoteRows = this.db.select().from(quotes).all();
-    const instrumentById = new Map(instrumentRows.map((i) => [i.id, i]));
-    const quoteByInstrument = new Map(quoteRows.map((q) => [q.instrumentId, q]));
-
-    const result: Trade[] = [];
-    for (const t of calculateTrades(ops, { futureIds })) {
+    const instrumentById = new Map(this.db.select().from(instruments).all().map((i) => [i.id, i]));
+    return (await this.valuedTrades()).map(({ trade: t, currentPrice, priceCurrency, currentValueRub }) => {
       const instrument = instrumentById.get(t.instrumentId);
       const currency = instrument?.currency ?? 'RUB';
+      // P&L = реализованный (по проданной части) + нереализованный (по остатку) + выплаты
+      const unrealizedRub = currentValueRub ? Number(currentValueRub) - Number(t.investedRub) : 0;
+      const pnlRub = (
+        Number(t.realizedPnlRub) +
+        unrealizedRub +
+        Number(t.dividendsRub) +
+        Number(t.couponsRub)
+      ).toFixed(2);
+
+      return {
+        id: t.operationIds[0],
+        instrumentId: t.instrumentId,
+        ticker: instrument?.ticker ?? t.instrumentId,
+        systemId: t.systemId,
+        portfolioId: t.portfolioId,
+        type: instrument?.type ?? 'Stock',
+        currency,
+        status: t.status,
+        quantity: t.quantity.toString(),
+        qtyBought: t.qtyBought.toString(),
+        qtySold: t.qtySold.toString(),
+        avgBuyPrice: t.avgBuyPrice.toFixed(2),
+        investedCcy: t.investedCcy.toFixed(2),
+        investedRub: t.investedRub.toFixed(2),
+        proceedsCcy: t.proceedsCcy.toFixed(2),
+        proceedsRub: t.proceedsRub.toFixed(2),
+        realizedPnlCcy: t.realizedPnlCcy.toFixed(2),
+        realizedPnlRub: t.realizedPnlRub.toFixed(2),
+        dividendsRub: t.dividendsRub.toFixed(2),
+        couponsRub: t.couponsRub.toFixed(2),
+        avgPriceCurrency: t.tradeCurrency || currency,
+        currentPrice,
+        priceCurrency,
+        currentValueRub,
+        pnlRub,
+        direction: t.direction,
+        openedAt: t.openedAt,
+        closedAt: t.closedAt,
+        openedTime: t.openedTime,
+        closedTime: t.closedTime,
+        feesRub: t.feesRub.toFixed(2),
+        operationIds: t.operationIds,
+      };
+    });
+  }
+
+  /**
+   * Сделки движка с рыночной оценкой остатка — ЕДИНСТВЕННОЕ место, где открытая сделка
+   * оценивается по котировке (trades() и статистика системы берут оценку отсюда, DRY).
+   * Фильтр сужает журнал до расчёта (система/портфель/`till`); `from` отбрасывает
+   * сделки, закрытые раньше начала периода, — открытые остаются всегда (это состояние
+   * «сейчас»). Историю до `from` движку отдаём целиком: от неё зависит средняя цена.
+   */
+  async valuedTrades(filter: TradeFilter = {}): Promise<ValuedTrade[]> {
+    const ops = this.list().filter(
+      (o) =>
+        (!filter.systemId || o.systemId === filter.systemId) &&
+        (!filter.portfolioId || o.portfolioId === filter.portfolioId) &&
+        (!filter.till || o.date <= filter.till),
+    );
+    const futureIds = this.futureIds();
+    const instrumentById = new Map(this.db.select().from(instruments).all().map((i) => [i.id, i]));
+    const quoteByInstrument = new Map(this.db.select().from(quotes).all().map((q) => [q.instrumentId, q]));
+
+    const result: ValuedTrade[] = [];
+    for (const t of calculateTrades(ops, { futureIds })) {
+      if (filter.from && t.closedAt && t.closedAt < filter.from) continue;
+      const currency = instrumentById.get(t.instrumentId)?.currency ?? 'RUB';
       const quote = quoteByInstrument.get(t.instrumentId);
 
       let currentPrice: string | null = null;
@@ -329,49 +408,7 @@ export class OperationsService {
           accruedFxRate: accruedFx,
         }).toFixed(2);
       }
-      // P&L = реализованный (по проданной части) + нереализованный (по остатку) + выплаты
-      const unrealizedRub = currentValueRub ? Number(currentValueRub) - Number(t.investedRub) : 0;
-      const pnlRub = (
-        Number(t.realizedPnlRub) +
-        unrealizedRub +
-        Number(t.dividendsRub) +
-        Number(t.couponsRub)
-      ).toFixed(2);
-
-      result.push({
-        id: t.operationIds[0],
-        instrumentId: t.instrumentId,
-        ticker: instrument?.ticker ?? t.instrumentId,
-        systemId: t.systemId,
-        portfolioId: t.portfolioId,
-        type: instrument?.type ?? 'Stock',
-        currency,
-        status: t.status,
-        quantity: t.quantity.toString(),
-        qtyBought: t.qtyBought.toString(),
-        qtySold: t.qtySold.toString(),
-        avgBuyPrice: t.avgBuyPrice.toFixed(2),
-        investedCcy: t.investedCcy.toFixed(2),
-        investedRub: t.investedRub.toFixed(2),
-        proceedsCcy: t.proceedsCcy.toFixed(2),
-        proceedsRub: t.proceedsRub.toFixed(2),
-        realizedPnlCcy: t.realizedPnlCcy.toFixed(2),
-        realizedPnlRub: t.realizedPnlRub.toFixed(2),
-        dividendsRub: t.dividendsRub.toFixed(2),
-        couponsRub: t.couponsRub.toFixed(2),
-        avgPriceCurrency: t.tradeCurrency || currency,
-        currentPrice,
-        priceCurrency,
-        currentValueRub,
-        pnlRub,
-        direction: t.direction,
-        openedAt: t.openedAt,
-        closedAt: t.closedAt,
-        openedTime: t.openedTime,
-        closedTime: t.closedTime,
-        feesRub: t.feesRub.toFixed(2),
-        operationIds: t.operationIds,
-      });
+      result.push({ trade: t, currentPrice, priceCurrency, currentValueRub });
     }
     return result;
   }
