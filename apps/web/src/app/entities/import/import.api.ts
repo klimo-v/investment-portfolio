@@ -9,9 +9,19 @@ import { withToastSuccess } from '@web-shared';
  * API-клиент импорта (FSD: entities). Мутации → HttpClient, чтения → httpResource.
  */
 
+/** Что изменится в существующей операции при подтверждении («было → станет») */
+export interface FieldChange {
+  field: 'fee' | 'price' | 'quantity' | 'executedAt';
+  from: string | null;
+  to: string;
+}
+
 export interface PreviewRow {
   operation?: Operation;
-  confidence: 'ok' | 'warn' | 'error' | 'duplicate';
+  /** 'update' — операция уже есть, но брокер прислал другие значения: обновим, а не задвоим */
+  confidence: 'ok' | 'warn' | 'error' | 'duplicate' | 'update';
+  existingId?: string;
+  changes?: FieldChange[];
   reason?: string;
   /** Признак счёта из отчёта (docs/04-roadmap.md §3.1) */
   accountRef?: string;
@@ -23,7 +33,7 @@ export interface PreviewRow {
 
 export interface PreviewResult {
   rows: PreviewRow[];
-  summary: { total: number; ok: number; warn: number; error: number; duplicate: number };
+  summary: { total: number; ok: number; warn: number; error: number; duplicate: number; update: number };
   /** Id уже распарсенного на сервере файла — передать в следующий preview()/commit() вместо content */
   uploadId: string;
 }
@@ -109,9 +119,9 @@ export class ImportApi {
     return firstValueFrom(this.http.post<PreviewResult>('/api/import/preview', req));
   }
 
-  commit(req: ImportRequest): Promise<{ batchId: string; imported: number }> {
+  commit(req: ImportRequest): Promise<{ batchId: string; imported: number; updated: number }> {
     return firstValueFrom(
-      this.http.post<{ batchId: string; imported: number }>(
+      this.http.post<{ batchId: string; imported: number; updated: number }>(
         '/api/import/commit',
         req,
         withToastSuccess('Импорт завершён'),

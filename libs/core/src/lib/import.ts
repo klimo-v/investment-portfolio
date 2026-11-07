@@ -1,3 +1,4 @@
+import Decimal from 'decimal.js';
 import { z } from 'zod';
 import { OperationType, type Operation } from './schemas';
 
@@ -55,6 +56,14 @@ export interface RawRow {
    * внутри дня — от него зависит результат по шортам (фьючерсы).
    */
   time?: string;
+  /**
+   * Номер ОПЕРАЦИИ-РОДИТЕЛЯ у брокера, к которой относится эта строка. Так API Т-Банка
+   * присылает комиссию отдельной строкой (OPERATION_TYPE_BROKER_FEE с
+   * parentOperationId). Шаг нормализации `attachParentFees` прибавляет сумму такой
+   * строки к `fee` родителя (поиск по `brokerRef` в той же загрузке) и убирает её из
+   * списка — любой парсер может пользоваться этим полем.
+   */
+  parentBrokerRef?: string;
   /**
    * Причина, по которой строку нельзя импортировать (напр. опцион или неизвестная
    * серия фьючерса). Если задана, `normalizeRow` возвращает ошибку с этим текстом,
@@ -247,4 +256,97 @@ export function normalizeRow(
   };
 
   return { operation, confidence, reason, dedupeKey: makeDedupeKey(operation), systemUncertain };
+}
+
+
+/**
+ * Общий шаг нормализации: строки с `parentBrokerRef` (комиссия, пришедшая отдельной
+ * строкой) прибавляются к `fee` родительской строки с таким `brokerRef` и убираются
+ * из списка. Иначе комиссия висела бы отдельной операцией без инструмента — в сделке и
+ * статистике системы её не видно.
+ *
+ * Идемпотентно: сумма считается внутри одной загрузки (родитель + его дети), поэтому
+ * повторный импорт даёт то же `fee`, а не удвоенное. Если родителя в загрузке нет,
+ * строка остаётся как есть (обычная комиссия) — прибавлять вслепую к операции из базы
+ * нельзя: без учёта уже прибавленных детей повторная загрузка удвоила бы комиссию.
+ */
+export function attachParentFees(rows: RawRow[]): RawRow[] {
+  const parents = new Map<string, RawRow>();
+  for (const r of rows) {
+    if (r.brokerRef && !r.parentBrokerRef) parents.set(r.brokerRef, r);
+  }
+  const extra = new Map<string, Decimal>();
+  const consumed = new Set<RawRow>();
+  for (const r of rows) {
+    if (!r.parentBrokerRef || !parents.has(r.parentBrokerRef)) continue;
+    // сумма комиссии: колонка fee, а если её нет — price × quantity (строка типа «Комиссия»)
+    const amount = r.fee
+      ? new Decimal(normalizeNumber(r.fee, '0'))
+      : new Decimal(normalizeNumber(r.price, '0')).mul(normalizeNumber(r.quantity, '1'));
+    extra.set(r.parentBrokerRef, (extra.get(r.parentBrokerRef) ?? new Decimal(0)).plus(amount));
+    consumed.add(r);
+  }
+  return rows
+    .filter((r) => !consumed.has(r))
+    .map((r) => {
+      const add = r.brokerRef ? extra.get(r.brokerRef) : undefined;
+      if (!add || r.parentBrokerRef) return r;
+      return { ...r, fee: new Decimal(normalizeNumber(r.fee, '0')).plus(add).toString() };
+    });
+}
+
+// ───────────────────────── обновление операции из первичного источника ─────────────────────────
+
+/** Откуда пришли данные: отчёт/API брокера авторитетны для денег, прочее — нет */
+export type FieldSource = 'broker' | 'annotation';
+
+/** Поля операции, за которые отвечает брокер */
+export type BrokerField = 'fee' | 'price' | 'quantity' | 'executedAt';
+
+export interface FieldChange {
+  field: BrokerField;
+  /** было (как в базе) */
+  from: string | null;
+  /** станет */
+  to: string;
+}
+
+const same = (a: string, b: string): boolean => new Decimal(a).eq(new Decimal(b));
+
+/**
+ * Единая политика приоритета источников при повторном импорте той же операции
+ * (совпал `brokerRef` и портфель). Отчёт и API брокера авторитетны для денег и
+ * количества; всё остальное (система, заметки, прочая разметка пользователя) этой
+ * функцией не трогается вообще. Аннотации (CSV QUIK и подобное) не меняют НИ ОДНОГО
+ * поля операции.
+ *
+ * Правила по полям:
+ *  - `fee`: обновляется, только если пришла положительная комиссия, отличная от
+ *    сохранённой. Комиссия «0» не затирает уже известную (источник мог её не знать).
+ *  - `price`, `quantity`: любое расхождение — брокер прав.
+ *  - `executedAt`: обновляется, если источник дал время и оно отличается; пустое время
+ *    существующее не стирает.
+ */
+export function mergeBrokerFields(
+  existing: Pick<Operation, 'fee' | 'price' | 'quantity' | 'executedAt'>,
+  incoming: Pick<Operation, 'fee' | 'price' | 'quantity' | 'executedAt'>,
+  source: FieldSource = 'broker',
+): FieldChange[] {
+  if (source !== 'broker') return [];
+  const changes: FieldChange[] = [];
+  const exFee = existing.fee ?? '0';
+  const inFee = incoming.fee ?? '0';
+  if (new Decimal(inFee).gt(0) && !same(exFee, inFee)) {
+    changes.push({ field: 'fee', from: exFee, to: inFee });
+  }
+  if (!same(existing.price, incoming.price)) {
+    changes.push({ field: 'price', from: existing.price, to: incoming.price });
+  }
+  if (!same(existing.quantity, incoming.quantity)) {
+    changes.push({ field: 'quantity', from: existing.quantity, to: incoming.quantity });
+  }
+  if (incoming.executedAt && incoming.executedAt !== existing.executedAt) {
+    changes.push({ field: 'executedAt', from: existing.executedAt ?? null, to: incoming.executedAt });
+  }
+  return changes;
 }

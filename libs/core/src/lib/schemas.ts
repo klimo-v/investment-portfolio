@@ -120,6 +120,22 @@ export const PortfolioSchema = z.object({
 });
 export type Portfolio = z.infer<typeof PortfolioSchema>;
 
+/**
+ * Сверка результата движка с вариационной маржой брокера по фьючерсу
+ * (libs/core/futures-settlement.ts). Контроль качества данных, не источник P&L.
+ */
+export const SettlementCheckSchema = z.object({
+  status: z.enum(['ok', 'mismatch', 'unknown']),
+  /** движок − брокер, ₽; null при unknown */
+  diffRub: decimalString.nullable(),
+  engineRub: decimalString.nullable(),
+  brokerRub: decimalString,
+  /** дата конца периода отчёта, по которому сверяли */
+  asOf: z.string(),
+  reason: z.string().nullable(),
+});
+export type SettlementCheckDto = z.infer<typeof SettlementCheckSchema>;
+
 /** Позиция (вычисляется движком, не вводится руками) */
 export const PositionSchema = z.object({
   instrumentId: z.string(),
@@ -154,6 +170,8 @@ export const PositionSchema = z.object({
   /** Рыночная стоимость остатка: (цена + НКД) × количество × курс */
   currentValueRub: decimalString.nullable(),
   pnlRub: decimalString.nullable(), // реализованный + нереализованный + дивиденды/купоны
+  /** сверка с ВМ брокера — только у фьючерсов, по которым импортирован отчёт */
+  settlementCheck: SettlementCheckSchema.nullable().default(null),
 });
 export type Position = z.infer<typeof PositionSchema>;
 
@@ -333,6 +351,14 @@ const DirectionStatsSchema = z.object({
 export const SystemPerformanceSchema = z.object({
   systemId: z.string(),
   systemName: z.string(),
+  /**
+   * Сверка с вариационной маржой — только по инструментам, которыми в портфеле торгует
+   * ОДНА эта система (ВМ привязана к счёту и инструменту; если контракт делят две системы,
+   * разделить ВМ между ними нельзя — сверка показывается на странице «Портфель»).
+   */
+  reconciliation: z
+    .array(SettlementCheckSchema.extend({ ticker: z.string(), portfolioId: z.string() }))
+    .default([]),
   summary: z.object({
     /** реализованный результат закрытых сделок, после комиссий */
     netPnlRub: decimalString,

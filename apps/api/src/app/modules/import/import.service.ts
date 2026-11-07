@@ -3,15 +3,28 @@ import { BadRequestException, Inject, Injectable } from '@nestjs/common';
 import { desc, eq } from 'drizzle-orm';
 import ExcelJS from 'exceljs';
 import {
+  attachParentFees,
+  mergeBrokerFields,
   normalizeRow,
   makeDedupeKey,
   parseBrokerHtmlReportWithMarks,
+  type FieldChange,
+  type FuturesSettlement,
   type RawRow,
   type Operation,
   type FuturesMark,
 } from '@core';
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
-import { operations, systems, portfolios, instruments, quotes, type InstrumentRow } from '../../../db/schema';
+import {
+  futuresSettlements,
+  operations,
+  systems,
+  portfolios,
+  instruments,
+  quotes,
+  type InstrumentRow,
+  type OperationRow,
+} from '../../../db/schema';
 import { DB } from '../../db/drizzle.module';
 import { recordSnapshotInvalidation } from '../../../db/snapshot-invalidations';
 import { parseCsv } from './csv-parser';
@@ -21,12 +34,22 @@ import { parseTbankXlsx } from './tbank-xlsx-report';
 interface ParsedUpload {
   rows: RawRow[];
   marks: FuturesMark[];
+  /** вариационная маржа из отчёта — для сверки, в журнал не попадает */
+  settlements: FuturesSettlement[];
 }
 
 /** Одна строка предпросмотра импорта */
 export interface PreviewRow {
   operation?: Operation;
-  confidence: 'ok' | 'warn' | 'error' | 'duplicate';
+  /**
+   * 'update' — операция с таким номером у брокера уже есть, но брокер прислал другие
+   * значения (например, комиссия пришла позже): при подтверждении обновится существующая
+   * операция, а не создастся новая. Разметка пользователя (система, заметки) не трогается.
+   */
+  confidence: 'ok' | 'warn' | 'error' | 'duplicate' | 'update';
+  /** для 'update': id существующей операции и что в ней изменится («было → станет») */
+  existingId?: string;
+  changes?: FieldChange[];
   reason?: string;
   /** Признак счёта из отчёта (docs/04-roadmap.md §3.1) — для авто-обучения маппинга при commit() */
   accountRef?: string;
@@ -38,7 +61,7 @@ export interface PreviewRow {
 
 export interface PreviewResult {
   rows: PreviewRow[];
-  summary: { total: number; ok: number; warn: number; error: number; duplicate: number };
+  summary: { total: number; ok: number; warn: number; error: number; duplicate: number; update: number };
   /** Расчётные цены фьючерсов из отчёта — при commit() сохраняются как цена инструмента на дату отчёта */
   marks: FuturesMark[];
   /** Id уже распарсенного файла — передать в следующий preview()/commit() вместо content (см. ImportInput) */
@@ -120,7 +143,7 @@ export class ImportService {
   /** Строки файла: из кэша по uploadId либо свежий разбор content (Factory: формат → парсер) */
   private async resolveRawRows(
     input: ImportInput,
-  ): Promise<{ rows: RawRow[]; marks: FuturesMark[]; uploadId: string }> {
+  ): Promise<ParsedUpload & { uploadId: string }> {
     if (input.uploadId) {
       const cached = this.uploads.get(input.uploadId);
       if (cached) return { ...cached, uploadId: input.uploadId };
@@ -129,7 +152,8 @@ export class ImportService {
       }
     }
     const parsed = await this.parseFile(input.content ?? '', input.format);
-    return { ...parsed, uploadId: this.stashRawRows(parsed.rows, input.uploadId, parsed.marks) };
+    const uploadId = this.stashRawRows(parsed.rows, input.uploadId, parsed.marks, parsed.settlements);
+    return { ...(this.uploads.get(uploadId) as ParsedUpload), uploadId };
   }
 
   /**
@@ -140,9 +164,16 @@ export class ImportService {
    * после чего фронт вызывает те же самые preview()/commit() с этим uploadId —
    * весь конвейер ниже парсера остаётся общим для файлов и API (CLAUDE.md §7, DRY).
    */
-  stashRawRows(rows: RawRow[], reuseId?: string, marks: FuturesMark[] = []): string {
+  stashRawRows(
+    rows: RawRow[],
+    reuseId?: string,
+    marks: FuturesMark[] = [],
+    settlements: FuturesSettlement[] = [],
+  ): string {
     const uploadId = reuseId ?? randomUUID();
-    this.uploads.set(uploadId, { rows, marks });
+    // общий шаг нормализации для ЛЮБОГО источника: комиссия отдельной строкой по ссылке
+    // на сделку прибавляется к fee сделки (core/import.ts: attachParentFees)
+    this.uploads.set(uploadId, { rows: attachParentFees(rows), marks, settlements });
     if (this.uploads.size > ImportService.MAX_UPLOADS) {
       const oldest = this.uploads.keys().next().value;
       if (oldest) this.uploads.delete(oldest);
@@ -385,32 +416,32 @@ export class ImportService {
       // результат (проверено побайтовым сравнением), а разбор занимает ~200мс.
       await workbook.xlsx.load(buf, { ignoreNodes: ['mergeCells'] });
       const ws = workbook.worksheets[0];
-      return { rows: ws ? parseTbankXlsx(ws) : [], marks: [] };
+      return { rows: ws ? parseTbankXlsx(ws) : [], marks: [], settlements: [] };
     }
     if (format === 'html') return parseBrokerHtmlReportWithMarks(content);
-    return { rows: parseCsv(content), marks: [] };
+    return { rows: parseCsv(content), marks: [], settlements: [] };
   }
 
-  /** Существующие ключи дедупликации (чтобы не задвоить при повторной загрузке) */
-  private existingDedupeKeys(): Set<string> {
-    const ops = this.db.select().from(operations).all();
-    return new Set(
-      ops.map((o) =>
-        makeDedupeKey({
-          date: o.date,
-          systemId: o.systemId,
-          portfolioId: o.portfolioId,
-          instrumentId: o.instrumentId,
-          operationType: o.operationType as Operation['operationType'],
-          quantity: o.quantity,
-          price: o.price,
-          fee: o.fee,
-          fxRate: o.fxRate,
-          currency: o.currency,
-          brokerRef: o.brokerRef ?? undefined,
-        }),
-      ),
-    );
+  /** Существующие операции по ключу дедупликации (чтобы не задвоить и находить кандидатов на обновление) */
+  private existingByDedupeKey(): Map<string, OperationRow> {
+    const map = new Map<string, OperationRow>();
+    for (const o of this.db.select().from(operations).all()) {
+      const key = makeDedupeKey({
+        date: o.date,
+        systemId: o.systemId,
+        portfolioId: o.portfolioId,
+        instrumentId: o.instrumentId,
+        operationType: o.operationType as Operation['operationType'],
+        quantity: o.quantity,
+        price: o.price,
+        fee: o.fee,
+        fxRate: o.fxRate,
+        currency: o.currency,
+        brokerRef: o.brokerRef ?? undefined,
+      });
+      if (!map.has(key)) map.set(key, o);
+    }
+    return map;
   }
 
   /** Предпросмотр (dry-run): распознаёт строки, но ничего не пишет */
@@ -421,7 +452,7 @@ export class ImportService {
       portfolioId: input.portfolioId,
       tickerSystemOverrides: input.tickerSystemOverrides,
     });
-    const existing = this.existingDedupeKeys();
+    const existing = this.existingByDedupeKey();
     const seenInBatch = new Set<string>();
 
     const rows: PreviewRow[] = rawRows.map((raw) => {
@@ -434,8 +465,27 @@ export class ImportService {
       // один и тот же актив брокер может репортить то тикером, то ISIN — выбор
       // системы для "SBER" должен применяться и к строке, пришедшей по её ISIN.
       const ticker = res.operation.instrumentId ?? raw.ticker;
+      // уже есть в базе: полное совпадение — дубль; тот же номер у брокера в том же портфеле
+      // с другими значениями (комиссия пришла позже и т. п.) — обновление существующей
+      const stored = existing.get(res.dedupeKey);
+      if (stored && res.operation.brokerRef && stored.portfolioId === res.operation.portfolioId && !seenInBatch.has(res.dedupeKey)) {
+        const changes = mergeBrokerFields(stored, res.operation);
+        if (changes.length > 0) {
+          seenInBatch.add(res.dedupeKey);
+          return {
+            operation: res.operation,
+            confidence: 'update',
+            existingId: stored.id,
+            changes,
+            reason: 'Данные брокера изменились — операция будет обновлена',
+            accountRef: raw.accountRef,
+            ticker,
+            systemUncertain: false,
+          };
+        }
+      }
       // дедуп против БД и внутри самого файла
-      if (existing.has(res.dedupeKey) || seenInBatch.has(res.dedupeKey)) {
+      if (stored || seenInBatch.has(res.dedupeKey)) {
         return {
           operation: res.operation,
           confidence: 'duplicate',
@@ -462,26 +512,44 @@ export class ImportService {
       warn: rows.filter((r) => r.confidence === 'warn').length,
       error: rows.filter((r) => r.confidence === 'error').length,
       duplicate: rows.filter((r) => r.confidence === 'duplicate').length,
+      update: rows.filter((r) => r.confidence === 'update').length,
     };
     return { rows, summary, marks, uploadId };
   }
 
   /** Импорт: сохраняет все ok/warn строки (не error, не duplicate) под общим batchId */
-  async commit(input: ImportInput): Promise<{ batchId: string; imported: number }> {
+  async commit(input: ImportInput): Promise<{ batchId: string; imported: number; updated: number }> {
     // авто-обучение справочника инструментов ДО резолва — preview() внутри
     // подхватит уже созданные/донаученные строки при обычном поиске по тикеру/ISIN
-    const { rows: rawRows } = await this.resolveRawRows(input);
+    const { rows: rawRows, settlements } = await this.resolveRawRows(input);
     this.ensureInstruments(rawRows);
 
     const preview = await this.preview(input);
     const batchId = randomUUID();
     let imported = 0;
+    let updated = 0;
     let earliestDate: string | null = null;
+    let earliestUpdateDate: string | null = null;
     const learnedRefs = new Set<string>();
 
     for (const row of preview.rows) {
       if (!row.operation) continue;
       if (row.confidence === 'error' || row.confidence === 'duplicate') continue;
+
+      if (row.confidence === 'update') {
+        // обновляем ТОЛЬКО поля, за которые отвечает брокер (core/import.ts:
+        // mergeBrokerFields); система, заметки и прочая разметка остаются как были
+        const patch: Partial<Pick<OperationRow, 'fee' | 'price' | 'quantity' | 'executedAt'>> = {};
+        for (const c of row.changes ?? []) patch[c.field] = c.to;
+        if (row.existingId && Object.keys(patch).length > 0) {
+          this.db.update(operations).set(patch).where(eq(operations.id, row.existingId)).run();
+          updated++;
+          if (earliestUpdateDate === null || row.operation.date < earliestUpdateDate) {
+            earliestUpdateDate = row.operation.date;
+          }
+        }
+        continue;
+      }
 
       this.db
         .insert(operations)
@@ -515,7 +583,19 @@ export class ImportService {
     }
 
     this.saveMarks(preview.marks);
+    this.saveSettlements(settlements, input);
     this.uploads.delete(preview.uploadId);
+
+    // обновление комиссии/цены задним числом портит снимки так же, как правка операции;
+    // тот же механизм журнала инвалидаций, что и у импорта (новый не заводим)
+    if (earliestUpdateDate !== null) {
+      recordSnapshotInvalidation(this.db, {
+        kind: 'import-commit',
+        operationDate: earliestUpdateDate,
+        description: `Импорт: обновлено ${updated} ${pluralOperations(updated)}`,
+        affectedCount: updated,
+      });
+    }
 
     // Импорт задним числом меняет то, что должно было быть посчитано на прошлые даты
     // захвата, ровно как правка одной операции — помечаем снимки недостоверными.
@@ -529,7 +609,43 @@ export class ImportService {
       });
     }
 
-    return { batchId, imported };
+    return { batchId, imported, updated };
+  }
+
+  /**
+   * Вариационная маржа из отчёта → таблица futures_settlements (upsert по портфель ×
+   * инструмент × дата конца периода). Только для сверки, в операции не попадает.
+   * Портфель — тем же резолвером, что и у строк отчёта (по признаку счёта, затем
+   * батч-дефолт); если портфель или инструмент не найден — строка пропускается.
+   */
+  private saveSettlements(settlements: FuturesSettlement[], input: ImportOptions): void {
+    if (settlements.length === 0) return;
+    const { resolvePortfolio } = this.buildResolvers([], {
+      systemId: input.systemId,
+      portfolioId: input.portfolioId,
+    });
+    for (const st of settlements) {
+      const portfolioId = resolvePortfolio(st.accountRef);
+      const [inst] = this.db.select().from(instruments).where(eq(instruments.ticker, st.ticker)).all();
+      if (!portfolioId || !inst) continue;
+      const values = {
+        periodFrom: st.periodFrom,
+        vmPeriod: st.vmPeriod,
+        vmPlanned: st.vmPlanned,
+        qtyStart: st.qtyStart,
+        markStart: st.markStart,
+        markEnd: st.markEnd,
+        source: 'broker-report',
+      };
+      this.db
+        .insert(futuresSettlements)
+        .values({ portfolioId, instrumentId: inst.id, date: st.date, ...values })
+        .onConflictDoUpdate({
+          target: [futuresSettlements.portfolioId, futuresSettlements.instrumentId, futuresSettlements.date],
+          set: values,
+        })
+        .run();
+    }
   }
 
   /**

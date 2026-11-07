@@ -182,6 +182,7 @@ export function defaultSyncRange(
       <mat-card class="summary">
         <app-status-chip tone="success">Распознано: {{ preview()!.summary.ok }}</app-status-chip>
         <app-status-chip tone="warn">Проверить: {{ preview()!.summary.warn }}</app-status-chip>
+        <app-status-chip tone="info">Обновятся: {{ preview()!.summary.update }}</app-status-chip>
         <app-status-chip tone="neutral">Дубли: {{ preview()!.summary.duplicate }}</app-status-chip>
         <app-status-chip tone="danger">Ошибки: {{ preview()!.summary.error }}</app-status-chip>
         <span class="spacer"></span>
@@ -249,7 +250,15 @@ export function defaultSyncRange(
           </ng-container>
           <ng-container matColumnDef="reason">
             <th mat-header-cell *matHeaderCellDef>Примечание</th>
-            <td mat-cell *matCellDef="let r">{{ r.reason || '' }}</td>
+            <td mat-cell *matCellDef="let r">
+              @if (r.confidence === 'update') {
+                @for (c of r.changes; track c.field) {
+                  <div>{{ fieldLabel(c.field) }}: {{ c.from ?? '—' }} → {{ c.to }}</div>
+                }
+              } @else {
+                {{ r.reason || '' }}
+              }
+            </td>
           </ng-container>
           <tr mat-header-row *matHeaderRowDef="columns"></tr>
           <tr mat-row *matRowDef="let row; columns: columns"></tr>
@@ -259,7 +268,9 @@ export function defaultSyncRange(
 
     @if (lastBatch()) {
       <mat-card class="done">
-        <span>Импортировано {{ lastBatch()!.imported }} операций.</span>
+        <span>
+          Импортировано {{ lastBatch()!.imported }} операций@if (lastBatch()!.updated > 0) {, обновлено {{ lastBatch()!.updated }}}.
+        </span>
         <button mat-stroked-button (click)="rollback()">Откатить загрузку</button>
       </mat-card>
     }
@@ -380,7 +391,7 @@ export class ImportPage {
   protected readonly columns = ['status', 'date', 'type', 'ticker', 'qty', 'price', 'reason'];
   protected readonly preview = signal<PreviewResult | null>(null);
   protected readonly importing = signal(false);
-  protected readonly lastBatch = signal<{ batchId: string; imported: number } | null>(null);
+  protected readonly lastBatch = signal<{ batchId: string; imported: number; updated: number } | null>(null);
   protected readonly errorMessage = signal('');
 
   protected readonly fileName = signal('');
@@ -428,7 +439,7 @@ export class ImportPage {
   /** Сколько строк реально импортируется (ok + warn) */
   protected readonly importableCount = computed(() => {
     const s = this.preview()?.summary;
-    return s ? s.ok + s.warn : 0;
+    return s ? s.ok + s.warn + s.update : 0;
   });
 
   /** Тикеры, для которых система назначена батч-дефолтом, а не выбрана явно (§3.1) */
@@ -623,12 +634,18 @@ export class ImportPage {
 
   protected statusTone(c: string): ChipTone {
     return (
-      ({ ok: 'success', warn: 'warn', duplicate: 'neutral', error: 'danger' } as const)[c] ??
+      ({ ok: 'success', warn: 'warn', update: 'info', duplicate: 'neutral', error: 'danger' } as const)[c] ??
       'neutral'
     );
   }
 
   protected statusLabel(c: string): string {
-    return { ok: 'OK', warn: 'Проверить', duplicate: 'Дубль', error: 'Ошибка' }[c] ?? c;
+    return { ok: 'OK', warn: 'Проверить', update: 'Обновить', duplicate: 'Дубль', error: 'Ошибка' }[c] ?? c;
+  }
+
+  protected fieldLabel(field: string): string {
+    return (
+      { fee: 'Комиссия', price: 'Цена', quantity: 'Кол-во', executedAt: 'Время' } as Record<string, string>
+    )[field] ?? field;
   }
 }

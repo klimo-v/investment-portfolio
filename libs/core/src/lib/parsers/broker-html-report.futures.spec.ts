@@ -121,6 +121,34 @@ describe('parseBrokerHtmlReport — срочные сделки (фьючерс�
   });
 });
 
+describe('parseBrokerHtmlReport — вариационная маржа для сверки', () => {
+  it('отдаёт ВМ за период, плановую ВМ, позиции и расчётные цены начала/конца периода', () => {
+    const { settlements } = parseBrokerHtmlReportWithMarks(report());
+    expect(settlements).toEqual([
+      {
+        ticker: 'CNY-12.26',
+        accountRef: 'SESPS',
+        periodFrom: '2026-10-27',
+        date: '2026-11-05',
+        vmPeriod: '204.00',
+        vmPlanned: '-11117.00',
+        qtyStart: '0',
+        markStart: null,
+        qtyEnd: '-128',
+        markEnd: '12387',
+      },
+    ]);
+  });
+
+  it('ВМ не попадает в операции (нет двойного счёта)', () => {
+    expect(parseBrokerHtmlReport(report())).toHaveLength(14);
+  });
+
+  it('без периода в шапке сверять не с чем — settlements пуст', () => {
+    expect(parseBrokerHtmlReportWithMarks(report('', 'без периода')).settlements).toEqual([]);
+  });
+});
+
 describe('срочные сделки: некорректная цена', () => {
   it('пустая цена не обрывает разбор файла: строка со skipReason, остальные разобраны', () => {
     const bad = row(['01.11.2026', '01.11.2026', '10:00:00', 'CNY-12.26', 'фьючерс', 'Покупка', '1', '', '1', '1', '9999', '']);

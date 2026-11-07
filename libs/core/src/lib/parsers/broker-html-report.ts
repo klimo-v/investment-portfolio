@@ -309,10 +309,74 @@ function futuresMarkCandidates(
   return out;
 }
 
-/** Конец периода отчёта («за период с 27.10.2026 по 05.11.2026») → ISO-дата */
-function reportPeriodEnd(text: string): string | null {
-  const m = plainText(text).match(/за период с \d{2}\.\d{2}\.\d{4} по (\d{2}\.\d{2}\.\d{4})/i);
-  return m ? normalizeDate(m[1]) : null;
+/** Период отчёта («за период с 27.10.2026 по 05.11.2026») → ISO-даты начала и конца */
+function reportPeriod(text: string): { from: string | null; till: string } | null {
+  const m = plainText(text).match(
+    /за период с (\d{2}\.\d{2}\.\d{4}) по (\d{2}\.\d{2}\.\d{4})/i,
+  );
+  const till = m ? normalizeDate(m[2]) : null;
+  return m && till ? { from: normalizeDate(m[1]), till } : null;
+}
+
+/**
+ * Вариационная маржа по фьючерсу за период отчёта. Это данные для СВЕРКИ с результатом
+ * движка, а не источник P&L (docs/02-data-model.md): в операции не попадает.
+ * Относится к счёту и инструменту, а не к торговой системе.
+ */
+export interface FuturesSettlement {
+  ticker: string;
+  /** признак счёта из отчёта — по нему определяется портфель */
+  accountRef?: string;
+  /** начало периода отчёта (ISO); null — в шапке не нашли */
+  periodFrom: string | null;
+  /** конец периода отчёта (ISO) */
+  date: string;
+  /** ВМ за отчётный период, ₽ (колонка «Вариационная маржа за отчётный период») */
+  vmPeriod: string;
+  /** плановая ВМ на конец периода, ₽ (будет проведена на следующий клиринг) */
+  vmPlanned: string;
+  /** позиция и расчётная цена (₽ за контракт) на начало периода; цена null — позиции не было */
+  qtyStart: string;
+  markStart: string | null;
+  /** позиция и расчётная цена на конец периода */
+  qtyEnd: string;
+  markEnd: string | null;
+}
+
+/** Число из ячейки отчёта: «-11 117.00», «−5,5» → десятичная строка; пусто/мусор → null */
+function decimalCell(raw: string | undefined): string | null {
+  const v = clean((raw ?? '').replace(/[−–]/g, '-'));
+  return /^-?\d+(\.\d+)?$/.test(v) ? v : null;
+}
+
+/** Строки «Срочного рынка» → вариационная маржа по инструментам (даты проставляет вызывающий) */
+function futuresSettlementCandidates(
+  rows: string[][],
+  ctx: AccountContext,
+): Array<Omit<FuturesSettlement, 'periodFrom' | 'date'>> {
+  const out: Array<Omit<FuturesSettlement, 'periodFrom' | 'date'>> = [];
+  for (const c of rows) {
+    if (c.length !== 10 || c[1].toLowerCase() !== 'фьючерс') continue;
+    const multiplier = futuresMultiplier(c[0]);
+    const vmPeriod = decimalCell(c[8]);
+    const vmPlanned = decimalCell(c[9]);
+    if (!multiplier || (vmPeriod === null && vmPlanned === null)) continue;
+    const mark = (cell: string): string | null => {
+      const v = decimalCell(cell);
+      return v === null ? null : scaleByPowerOfTen(v, multiplier);
+    };
+    out.push({
+      ticker: c[0],
+      accountRef: ctx.accountRef,
+      vmPeriod: vmPeriod ?? '0',
+      vmPlanned: vmPlanned ?? '0',
+      qtyStart: decimalCell(c[4]) ?? '0',
+      markStart: mark(c[5]),
+      qtyEnd: decimalCell(c[6]) ?? '0',
+      markEnd: mark(c[7]),
+    });
+  }
+  return out;
 }
 
 /**
@@ -372,6 +436,8 @@ function cashRow(
 export interface BrokerReportParseResult {
   rows: RawRow[];
   marks: FuturesMark[];
+  /** вариационная маржа по фьючерсам — только для сверки */
+  settlements: FuturesSettlement[];
 }
 
 /** Главная точка входа: HTML-отчёт → строки операций и расчётные цены фьючерсов */
@@ -383,12 +449,13 @@ export function parseBrokerHtmlReportWithMarks(html: string): BrokerReportParseR
   const out: RawRow[] = [];
   const markCandidates: Array<{ ticker: string; price: string }> = [];
   const expiries = new Map<string, string>();
-  let periodEnd: string | null = null;
+  const settlementCandidates: Array<Omit<FuturesSettlement, 'periodFrom' | 'date'>> = [];
+  let period: { from: string | null; till: string } | null = null;
   let ctx: AccountContext = {};
   for (const seg of segments) {
     if (seg.kind === 'text') {
       ctx = { ...ctx, ...detectAccountUpdates(seg.text) };
-      periodEnd ??= reportPeriodEnd(seg.text);
+      period ??= reportPeriod(seg.text);
       continue;
     }
     out.push(...securityTradeRows(seg.rows, ref, ctx));
@@ -396,14 +463,18 @@ export function parseBrokerHtmlReportWithMarks(html: string): BrokerReportParseR
     out.push(...futuresTradeRows(seg.rows, ctx));
     out.push(...cashFlowRows(seg.rows, ref, ctx));
     markCandidates.push(...futuresMarkCandidates(seg.rows, expiries));
+    settlementCandidates.push(...futuresSettlementCandidates(seg.rows, ctx));
   }
   // название фьючерса — с датой исполнения (она есть только в «Срочном рынке»)
   for (const r of out) {
     const expiry = r.instrumentType === 'Future' && r.ticker ? expiries.get(r.ticker) : undefined;
     if (expiry && !r.name) r.name = `Фьючерс ${r.ticker}, исполнение ${expiry}`;
   }
-  const marks = periodEnd ? markCandidates.map((m) => ({ ...m, date: periodEnd as string })) : [];
-  return { rows: out, marks };
+  const marks = period ? markCandidates.map((m) => ({ ...m, date: period.till })) : [];
+  const settlements = period
+    ? settlementCandidates.map((m) => ({ ...m, periodFrom: period.from, date: period.till }))
+    : [];
+  return { rows: out, marks, settlements };
 }
 
 /** HTML-отчёт → RawRow[] (контракт как у parseCsv); расчётные цены — в `parseBrokerHtmlReportWithMarks` */

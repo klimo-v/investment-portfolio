@@ -17,7 +17,10 @@ const ZERO = new Decimal(0);
 const MS_DAY = 86_400_000;
 
 /** Результат без полей, которые добавляет вызывающий (справочник систем) */
-export type SystemPerformanceBody = Omit<SystemPerformance, 'systemId' | 'systemName'>;
+export type SystemPerformanceBody = Omit<
+  SystemPerformance,
+  'systemId' | 'systemName' | 'reconciliation'
+>;
 
 export interface PerformanceOptions {
   /**

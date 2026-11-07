@@ -7,6 +7,7 @@ import {
   calculateTrades,
   cashBalanceRub,
   futureUnrealizedPnl,
+  reconcileFuturesSettlement,
   marketValueRub,
   realizedPnlInRange,
   xirr,
@@ -16,6 +17,7 @@ import {
   type Effectiveness,
   type Operation,
   type Position,
+  type SettlementCheckDto,
   type DashboardSummary,
   type Trade,
   type TradeResult,
@@ -27,6 +29,7 @@ import {
   systems,
   portfolios,
   quotes,
+  futuresSettlements,
   type OperationRow,
 } from '../../../db/schema';
 import { DB } from '../../db/drizzle.module';
@@ -89,6 +92,45 @@ export class OperationsService {
         .all()
         .map((r) => r.id),
     );
+  }
+
+  /**
+   * Сверка движка с вариационной маржой брокера по фьючерсам (core/futures-settlement.ts).
+   * Берётся последний импортированный отчёт по паре «портфель × инструмент»; считается
+   * по ВСЕМУ журналу портфеля (ВМ не делится между системами). Ключ — `портфель|инструмент`.
+   */
+  settlementChecks(): Map<string, SettlementCheckDto & { ticker: string; portfolioId: string; systemIds: Set<string> }> {
+    const rows = this.db.select().from(futuresSettlements).all();
+    const latest = new Map<string, (typeof rows)[number]>();
+    for (const r of rows) {
+      const key = `${r.portfolioId}|${r.instrumentId}`;
+      const prev = latest.get(key);
+      if (!prev || r.date > prev.date) latest.set(key, r);
+    }
+    if (latest.size === 0) return new Map();
+
+    const ops = this.list();
+    const tickerById = new Map(this.db.select().from(instruments).all().map((i) => [i.id, i.ticker]));
+    const result = new Map<string, SettlementCheckDto & { ticker: string; portfolioId: string; systemIds: Set<string> }>();
+    for (const [key, st] of latest) {
+      const check = reconcileFuturesSettlement(ops, st.instrumentId, st.portfolioId, st);
+      result.set(key, {
+        status: check.status,
+        diffRub: check.diffRub?.toFixed(2) ?? null,
+        engineRub: check.engineRub?.toFixed(2) ?? null,
+        brokerRub: check.brokerRub.toFixed(2),
+        asOf: check.asOf,
+        reason: check.reason ?? null,
+        ticker: tickerById.get(st.instrumentId) ?? st.instrumentId,
+        portfolioId: st.portfolioId,
+        systemIds: new Set(
+          ops
+            .filter((o) => o.instrumentId === st.instrumentId && o.portfolioId === st.portfolioId)
+            .map((o) => o.systemId),
+        ),
+      });
+    }
+    return result;
   }
 
   list(): Operation[] {
@@ -207,6 +249,7 @@ export class OperationsService {
     const instrumentById = new Map(instrumentRows.map((i) => [i.id, i]));
     const quoteByInstrument = new Map(quoteRows.map((q) => [q.instrumentId, q]));
 
+    const checks = this.settlementChecks();
     const result: Position[] = [];
     for (const p of calculatePositions(ops, { futureIds })) {
       const instrument = instrumentById.get(p.instrumentId);
@@ -290,9 +333,22 @@ export class OperationsService {
         accruedInterestRub,
         currentValueRub,
         pnlRub,
+        settlementCheck: this.checkFor(checks, p.portfolioId, p.instrumentId),
       });
     }
     return result;
+  }
+
+  /** Сверка для позиции без служебных полей (ключ, системы) */
+  private checkFor(
+    checks: ReturnType<OperationsService['settlementChecks']>,
+    portfolioId: string,
+    instrumentId: string,
+  ): SettlementCheckDto | null {
+    const c = checks.get(`${portfolioId}|${instrumentId}`);
+    if (!c) return null;
+    const { diffRub, engineRub, brokerRub, asOf, reason, status } = c;
+    return { status, diffRub, engineRub, brokerRub, asOf, reason };
   }
 
   /**

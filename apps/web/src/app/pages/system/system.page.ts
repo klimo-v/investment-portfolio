@@ -4,7 +4,7 @@ import { MatButtonToggleModule } from '@angular/material/button-toggle';
 import { MatFormFieldModule } from '@angular/material/form-field';
 import { MatSelectModule } from '@angular/material/select';
 import { MatIconModule } from '@angular/material/icon';
-import { StateMessage } from '@web-shared';
+import { formatMoney, StateMessage } from '@web-shared';
 import { OperationApi } from '../../entities/operation/operation.api';
 import { ReferenceApi } from '../../entities/reference/reference.api';
 import { TradeApi } from '../../entities/trade/trade.api';
@@ -108,6 +108,23 @@ import { TradesTable } from '../../widgets/trades-table/trades-table';
             hint="Показатели качества считаются только по закрытым сделкам. Открытая позиция показана в плашке «Открытые позиции»."
           />
         }
+        @for (rec of p.reconciliation; track rec.ticker + rec.portfolioId) {
+          <p class="recon recon--{{ rec.status }}" role="status">
+            <mat-icon>{{ rec.status === 'ok' ? 'verified' : rec.status === 'mismatch' ? 'warning' : 'help_outline' }}</mat-icon>
+            {{ rec.ticker }}:
+            @switch (rec.status) {
+              @case ('ok') {
+                сверено с вариационной маржой брокера (отчёт на {{ rec.asOf }}).
+              }
+              @case ('mismatch') {
+                расхождение с вариационной маржой брокера {{ money(rec.diffRub ?? '0') }} (журнал {{ money(rec.engineRub ?? '0') }}, брокер {{ money(rec.brokerRub) }}). Проверьте, что импортированы все сделки.
+              }
+              @default {
+                сверить не удалось: {{ rec.reason }}
+              }
+            }
+          </p>
+        }
         <app-system-kpis [performance]="p" />
 
         <div class="charts">
@@ -152,6 +169,19 @@ import { TradesTable } from '../../widgets/trades-table/trades-table';
       .charts .wide {
         grid-column: 1 / -1;
       }
+      .recon {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin: 0 0 12px;
+        font-size: 13px;
+      }
+      .recon--ok mat-icon {
+        color: var(--app-success, #199e70);
+      }
+      .recon--mismatch mat-icon {
+        color: var(--app-danger, #e34948);
+      }
       .section-title {
         margin: 16px 0 8px;
         font-size: 18px;
@@ -165,6 +195,7 @@ export class SystemPage {
   readonly systemId = input.required<string>();
 
   protected readonly reference = inject(ReferenceApi);
+  protected readonly money = (v: string): string => formatMoney(v, 'RUB');
   protected readonly operationApi = inject(OperationApi);
   private readonly tradeApi = inject(TradeApi);
   protected readonly filter = dashboardFilter();

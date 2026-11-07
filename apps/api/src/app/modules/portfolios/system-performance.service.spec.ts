@@ -3,9 +3,10 @@ import { NotFoundException } from '@nestjs/common';
 import Database from 'better-sqlite3';
 import { drizzle, type BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
 import { migrate } from 'drizzle-orm/better-sqlite3/migrator';
+import { eq } from 'drizzle-orm';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { SystemPerformanceQuerySchema } from '@core';
-import { instruments, operations, portfolios, quotes, systems } from '../../../db/schema';
+import { futuresSettlements, instruments, operations, portfolios, quotes, systems } from '../../../db/schema';
 import { OperationsService } from '../operations/operations.service';
 import type { QuotesService } from '../quotes/quotes.service';
 import { SystemPerformanceService } from './system-performance.service';
@@ -38,6 +39,7 @@ const TRADES: T[] = [
 describe('SystemPerformanceService', () => {
   let db: BetterSQLite3Database;
   let service: SystemPerformanceService;
+  let ops: OperationsService;
 
   beforeEach(() => {
     const sqlite = new Database(':memory:');
@@ -76,7 +78,8 @@ describe('SystemPerformanceService', () => {
         })),
       )
       .run();
-    service = new SystemPerformanceService(db, new OperationsService(db, quotesStub));
+    ops = new OperationsService(db, quotesStub);
+    service = new SystemPerformanceService(db, ops);
   });
 
   it('эталон: net закрытых −15 852,46, комиссии 962,91, нереализованный +4 288, сверка с ВМ −10 913', async () => {
@@ -131,6 +134,63 @@ describe('SystemPerformanceService', () => {
 
   it('несуществующая система — 404', async () => {
     await expect(service.performance('nope', {})).rejects.toBeInstanceOf(NotFoundException);
+  });
+
+  describe('сверка с вариационной маржой брокера', () => {
+    const settle = () =>
+      db.insert(futuresSettlements)
+        .values({
+          portfolioId: 'pf',
+          instrumentId: 'CNY-12.26',
+          date: '2026-11-05',
+          periodFrom: '2026-10-27',
+          vmPeriod: '204.00',
+          vmPlanned: '-11117.00',
+          qtyStart: '0',
+          markStart: null,
+          markEnd: '12387',
+        })
+        .run();
+
+    it('эталон: расхождение 0 — на странице системы и у позиции в портфеле', async () => {
+      settle();
+      const p = await service.performance('sys', {});
+      expect(p.reconciliation).toHaveLength(1);
+      expect(p.reconciliation[0]).toMatchObject({
+        ticker: 'CNY-12.26',
+        portfolioId: 'pf',
+        status: 'ok',
+        diffRub: '0.00',
+        brokerRub: '-10913.00',
+        asOf: '2026-11-05',
+      });
+      const [pos] = await ops.positions();
+      expect(pos.settlementCheck).toMatchObject({ status: 'ok', diffRub: '0.00' });
+    });
+
+    it('потерянная сделка → mismatch с суммой расхождения', async () => {
+      settle();
+      db.delete(operations).where(eq(operations.brokerRef, '1008')).run();
+      const p = await service.performance('sys', {});
+      expect(p.reconciliation[0].status).toBe('mismatch');
+      expect(Math.abs(Number(p.reconciliation[0].diffRub))).toBeGreaterThan(1);
+    });
+
+    it('контракт делят две системы — на странице системы сверки нет, у позиции портфеля есть', async () => {
+      settle();
+      db.update(operations).set({ systemId: 'empty' }).where(eq(operations.brokerRef, '1001')).run();
+      const p = await service.performance('sys', {});
+      expect(p.reconciliation).toEqual([]);
+      const positions = await ops.positions();
+      expect(positions.every((x) => x.settlementCheck?.status === 'ok')).toBe(true);
+    });
+
+    it('отчёт не импортировался — сверки нет (null / пусто)', async () => {
+      const p = await service.performance('sys', {});
+      expect(p.reconciliation).toEqual([]);
+      const [pos] = await ops.positions();
+      expect(pos.settlementCheck).toBeNull();
+    });
   });
 
   it('валидация query: некорректная дата и from > till отклоняются', () => {

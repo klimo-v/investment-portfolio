@@ -8,7 +8,7 @@ import { MatSelectModule } from '@angular/material/select';
 import { MatTooltipModule } from '@angular/material/tooltip';
 import { MatDialog } from '@angular/material/dialog';
 import { RouterLink } from '@angular/router';
-import type { InstrumentType, Position } from '@core';
+import type { InstrumentType, Position, SettlementCheckDto } from '@core';
 import { firstValueFrom } from 'rxjs';
 import { OperationApi } from '../../entities/operation/operation.api';
 import { PositionApi } from '../../entities/position/position.api';
@@ -47,6 +47,8 @@ import { toIsoDate } from '../../shared/iso-date';
  */
 
 interface Row {
+  /** Сверка с вариационной маржой брокера — только у фьючерсов с импортированным отчётом */
+  settlementCheck: SettlementCheckDto | null;
   instrumentId: string;
   ticker: string;
   type: InstrumentType;
@@ -241,7 +243,17 @@ interface Group {
               <table mat-table [dataSource]="g.rows">
                 <ng-container matColumnDef="ticker">
                   <th mat-header-cell *matHeaderCellDef>Тикер</th>
-                  <td mat-cell *matCellDef="let r">{{ r.ticker }}</td>
+                  <td mat-cell *matCellDef="let r">
+                    {{ r.ticker }}
+                    @if (r.settlementCheck; as sc) {
+                      <mat-icon
+                        class="settlement settlement--{{ sc.status }}"
+                        [matTooltip]="settlementTooltip(sc)"
+                        [attr.aria-label]="settlementTooltip(sc)"
+                        >{{ sc.status === 'ok' ? 'verified' : sc.status === 'mismatch' ? 'warning' : 'help_outline' }}</mat-icon
+                      >
+                    }
+                  </td>
                 </ng-container>
                 <ng-container matColumnDef="qty">
                   <th mat-header-cell *matHeaderCellDef>Кол-во</th>
@@ -329,6 +341,24 @@ interface Group {
   `,
   styles: [
     `
+      /* индикатор сверки с вариационной маржой брокера у фьючерса */
+      .settlement {
+        width: 18px;
+        height: 18px;
+        font-size: 18px;
+        vertical-align: middle;
+        margin-left: 4px;
+        cursor: help;
+      }
+      .settlement--ok {
+        color: var(--app-success, #199e70);
+      }
+      .settlement--mismatch {
+        color: var(--app-danger, #e34948);
+      }
+      .settlement--unknown {
+        color: var(--app-text-muted);
+      }
       :host {
         display: flex;
         flex-direction: column;
@@ -498,6 +528,15 @@ export class PortfolioPage {
     return ids.map((id) => ({ id, name: names.get(id) ?? id }));
   });
 
+  /** Подсказка индикатора сверки: сверено / расхождение N ₽ / не удалось сверить */
+  protected settlementTooltip(sc: SettlementCheckDto): string {
+    if (sc.status === 'ok') return `Сверено с брокером (вариационная маржа, отчёт на ${sc.asOf})`;
+    if (sc.status === 'mismatch') {
+      return `Расхождение с брокером ${formatMoney(sc.diffRub ?? '0', 'RUB')}: результат по журналу ${formatMoney(sc.engineRub ?? '0', 'RUB')}, вариационная маржа отчёта на ${sc.asOf} — ${formatMoney(sc.brokerRub, 'RUB')}. Проверьте, что импортированы все сделки.`;
+    }
+    return `Сверить не удалось: ${sc.reason ?? 'нет данных'}`;
+  }
+
   protected readonly portfolioOptions = computed(() => {
     const names = this.portfolioNames();
     const ids = [...new Set(this.allPositions().map((p) => p.portfolioId))];
@@ -514,6 +553,7 @@ export class PortfolioPage {
       rows.push({
         instrumentId: p.instrumentId,
         ticker: p.ticker,
+        settlementCheck: p.settlementCheck,
         type: p.type,
         currency: p.currency,
         qty: p.quantity,

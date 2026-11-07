@@ -195,3 +195,33 @@ export type QuoteRow = typeof quotes.$inferSelect;
 export type SnapshotRow = typeof portfolioSnapshots.$inferSelect;
 export type SnapshotPositionRow = typeof snapshotPositions.$inferSelect;
 export type SnapshotInvalidationRow = typeof snapshotInvalidations.$inferSelect;
+
+/**
+ * Вариационная маржа по фьючерсу из отчёта брокера — ТОЛЬКО для сверки с результатом
+ * движка (libs/core/futures-settlement.ts), в P&L и в журнал операций не попадает.
+ * Привязана к счёту (портфелю) и инструменту, а не к торговой системе. Upsert по
+ * (портфель, инструмент, дата конца периода): повторный импорт отчёта перезаписывает.
+ */
+export const futuresSettlements = sqliteTable(
+  'futures_settlements',
+  {
+    portfolioId: text('portfolio_id')
+      .notNull()
+      .references(() => portfolios.id, { onDelete: 'cascade' }),
+    instrumentId: text('instrument_id')
+      .notNull()
+      .references(() => instruments.id, { onDelete: 'cascade' }),
+    /** конец периода отчёта, YYYY-MM-DD */
+    date: text('date').notNull(),
+    /** начало периода отчёта; null — в шапке не нашли */
+    periodFrom: text('period_from'),
+    vmPeriod: text('vm_period').notNull(),
+    vmPlanned: text('vm_planned').notNull(),
+    qtyStart: text('qty_start').notNull().default('0'),
+    markStart: text('mark_start'),
+    markEnd: text('mark_end'),
+    source: text('source').notNull().default('broker-report'),
+  },
+  (t) => [primaryKey({ columns: [t.portfolioId, t.instrumentId, t.date] })],
+);
+export type FuturesSettlementRow = typeof futuresSettlements.$inferSelect;

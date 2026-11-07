@@ -43,6 +43,17 @@ export class SystemPerformanceService {
       valued.map((v) => v.trade),
       { unrealizedOf: (t) => unrealized.get(t) ?? null },
     );
-    return SystemPerformanceSchema.parse({ systemId, systemName: system.name, ...body });
+    // ВМ брокера привязана к счёту и инструменту, а не к системе: показываем сверку
+    // только там, где весь инструмент в портфеле принадлежит этой системе
+    const reconciliation = [...this.operations.settlementChecks().values()]
+      .filter(
+        (c) =>
+          c.systemIds.size === 1 &&
+          c.systemIds.has(systemId) &&
+          (!query.portfolioId || c.portfolioId === query.portfolioId),
+      )
+      .map(({ systemIds: _systemIds, ...check }) => check);
+
+    return SystemPerformanceSchema.parse({ systemId, systemName: system.name, ...body, reconciliation });
   }
 }
