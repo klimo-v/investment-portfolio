@@ -9,10 +9,12 @@ import {
   instruments,
   operations,
   quotes,
+  priceHistory,
   type SystemRow,
   type PortfolioRow,
   type InstrumentRow,
 } from '../../../db/schema';
+import { recordPrice } from '../../../db/price-history-store';
 import { DB } from '../../db/drizzle.module';
 import { recordSnapshotInvalidation } from '../../../db/snapshot-invalidations';
 
@@ -159,6 +161,12 @@ export class PortfoliosService {
       .where(eq(operations.instrumentId, sourceId))
       .run();
 
+    // история цен переезжает к целевому инструменту по общей политике источников
+    // (рынок цели не затирается ценой слитого), остальное удаляется вместе с ним
+    for (const row of this.db.select().from(priceHistory).where(eq(priceHistory.instrumentId, sourceId)).all()) {
+      recordPrice(this.db, targetId, row);
+    }
+    this.db.delete(priceHistory).where(eq(priceHistory.instrumentId, sourceId)).run();
     this.db.delete(quotes).where(eq(quotes.instrumentId, sourceId)).run();
     this.db.delete(instruments).where(eq(instruments.id, sourceId)).run();
 

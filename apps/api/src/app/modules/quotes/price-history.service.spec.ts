@@ -118,3 +118,21 @@ describe('PriceHistoryService.targetsFor: курсы валют', () => {
     expect(targets.find((t) => t.instrumentId === 'fx:USD')).toMatchObject({ kind: 'fx', ticker: 'USD', currency: 'RUB' });
   });
 });
+
+describe('слияние инструментов: история цен переезжает к целевому', () => {
+  it('рынок цели не затирается, недостающие даты и цены слитого сохраняются', async () => {
+    const { PortfoliosService } = await import('../portfolios/portfolios.service');
+    db.insert(instruments).values({ id: 'OLD', ticker: 'OLD', type: 'Stock', currency: 'RUB', marketSource: 'manual' }).run();
+    const svc = new PriceHistoryService(db, []);
+    svc.record('SBER', point('2026-10-01', '300', 'moex'));
+    svc.record('OLD', point('2026-10-01', '1', 'manual'));
+    svc.record('OLD', point('2026-10-02', '2', 'snapshot'));
+
+    new PortfoliosService(db as never).mergeInstruments('OLD', 'SBER');
+
+    expect(rows().map((r) => [r.instrumentId, r.date, r.price, r.source])).toEqual([
+      ['SBER', '2026-10-01', '300', 'moex'],
+      ['SBER', '2026-10-02', '2', 'snapshot'],
+    ]);
+  });
+});
