@@ -436,6 +436,8 @@ export function systemPerformance(
       openRealizedRub: money(openRealized),
       unrealizedRub: money(unrealized),
       incomeRub: money(income),
+      closedResultRub: money(net.plus(income).minus(openIncome)),
+      closedIncomeRub: money(income.minus(openIncome)),
       openIncomeRub: money(openIncome),
       openResultRub: money(unrealized.plus(openIncome)),
       totalRub: money(net.plus(openRealized).plus(unrealized).plus(income)),

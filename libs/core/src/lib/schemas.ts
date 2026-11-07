@@ -409,6 +409,10 @@ export const SystemPerformanceSchema = z.object({
     unrealizedRub: decimalString,
     /** дивиденды и купоны по всем сделкам (налог уже удержан брокером) */
     incomeRub: decimalString,
+    /** net закрытых + их дивиденды и купоны: «закрытые сделки» целиком */
+    closedResultRub: decimalString,
+    /** дивиденды и купоны по закрытым сделкам */
+    closedIncomeRub: decimalString,
     /** из них по открытым сделкам */
     openIncomeRub: decimalString,
     /** нереализованный + выплаты по открытым: «открытые позиции» целиком */

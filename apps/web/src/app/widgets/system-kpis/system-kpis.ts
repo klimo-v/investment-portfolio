@@ -84,9 +84,10 @@ export class SystemKpis {
         items: [
           {
             label: 'Результат (закрытые)',
-            value: rub(s.netPnlRub),
-            tone: toneOfStr(s.netPnlRub),
-            hint: 'Реализованный результат закрытых сделок после комиссий.',
+            value: rub(s.closedResultRub),
+            tone: toneOfStr(s.closedResultRub),
+            sub: `сделки ${rub(s.netPnlRub)} · выплаты ${rub(s.closedIncomeRub)}`,
+            hint: 'Результат закрытых сделок после комиссий плюс дивиденды и купоны, полученные по ним.',
           },
           {
             label: 'Открытые позиции',
