@@ -304,3 +304,36 @@ function fxRateAt(currency: string, day: string, cursor: PriceCursor): Decimal |
   const obs = cursor.at(fxInstrumentId(c), day);
   return obs ? new Decimal(obs.price) : null;
 }
+
+/**
+ * Индекс доходности портфеля с очисткой от потоков (time-weighted return), база 100.
+ *
+ * Стоимость позиций для графика динамики не годится: продажа переводит деньги в кэш и роняет
+ * «стоимость» без всякого убытка, довнесение двигает её вверх без прибыли. Поэтому берём
+ * богатство W = чистый ввод + итог (зафиксированное + переоценка): это «позиции + кэш», в
+ * котором продажа ничего не меняет. Остаётся отделить ввод/вывод денег: дневная доходность
+ * r = (W_t − W_{t−1} − поток_t) / W_{t−1}, индекс — цепочка (1 + r). Дни до первого W > 0
+ * стоят на базе 100; если богатство ушло в ≤ 0, доходность дня считаем нулевой (делить не на что).
+ *
+ * Поток = изменение чистого ввода; предполагается, что ввод/вывод денег внесён в журнал
+ * (Deposit/Withdraw) — иначе довнесение будет выглядеть как прибыль.
+ */
+export function timeWeightedIndex(
+  points: readonly { totalRub: number; netContributionsRub: number }[],
+): number[] {
+  const index: number[] = [];
+  let level = 100;
+  let prevWealth: number | null = null;
+  let prevContrib = 0;
+  for (const p of points) {
+    const wealth = p.netContributionsRub + p.totalRub;
+    if (prevWealth !== null && prevWealth > 0) {
+      const flow = p.netContributionsRub - prevContrib;
+      level *= 1 + (wealth - prevWealth - flow) / prevWealth;
+    }
+    index.push(level);
+    prevWealth = wealth;
+    prevContrib = p.netContributionsRub;
+  }
+  return index;
+}

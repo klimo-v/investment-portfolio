@@ -4,7 +4,7 @@ import { StateMessage } from '@web-shared';
 import { summaryResource, type SummaryFilter } from '../../entities/summary/summary.api';
 import { benchmarkResource, type BenchmarkRange } from '../../entities/benchmark/benchmark.api';
 import {
-  totalSeries,
+  portfolioIndex,
   valuationResource,
   type ValuationFilter,
 } from '../../entities/valuation/valuation.api';
@@ -267,10 +267,13 @@ export class DashboardPage {
     (this.summary.value()?.breakdown ?? []).map((r) => ({ label: r.ticker, pnlRub: r.pnlRub })),
   );
 
-  /** Дневная стоимость портфеля целиком (сумма по инструментам) */
-  protected readonly portfolioValues = computed(() => totalSeries(this.valuation.value(), 'marketValueRub'));
+  /**
+   * Индекс доходности портфеля (база 100) без влияния ввода/вывода денег и продаж — не
+   * «стоимость позиций»: та падает при каждой продаже и растёт при довнесении.
+   */
+  protected readonly portfolioValues = computed(() => portfolioIndex(this.valuation.value()));
 
-  /** Просадка стоимости в процентах; null — меньше двух дней, считать не из чего */
+  /** Просадка индекса доходности в процентах; null — меньше двух дней, считать не из чего */
   protected readonly maxDrawdownPct = computed(() => {
     const v = this.portfolioValues();
     if (v.length < 2) return null;

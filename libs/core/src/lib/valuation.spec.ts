@@ -4,7 +4,7 @@ import type { Operation } from './schemas';
 import { calculateTrades, marketValueRub } from './engine';
 import { futureUnrealizedPnl } from './futures-engine';
 import { systemPerformance } from './performance';
-import { valuationSeries, type PriceObservation, type ValuationSeries } from './valuation';
+import { timeWeightedIndex, valuationSeries, type PriceObservation, type ValuationSeries } from './valuation';
 
 const base = { fee: '0', fxRate: '1', currency: 'RUB' } as const;
 const op = (o: Partial<Operation> & Pick<Operation, 'date' | 'operationType' | 'instrumentId'>): Operation =>
@@ -241,5 +241,43 @@ describe('чистый ввод средств', () => {
     expect(s.netContributionsRub).toHaveLength(s.groups[0].points.length);
     const p1 = valuationSeries(ops, [], { till: '2026-03-05', groupBy: 'portfolio', portfolioId: 'p1' });
     expect(p1.netContributionsRub).toEqual(['1000.00', '1000.00', '700.00', '700.00']);
+  });
+});
+
+describe('timeWeightedIndex: доходность без потоков', () => {
+  it('довнесение и продажа индекс не двигают, рост цены — двигает', () => {
+    const idx = timeWeightedIndex([
+      { totalRub: 0, netContributionsRub: 1000 }, // внесли 1000, ещё не покупали
+      { totalRub: 100, netContributionsRub: 1000 }, // +10%
+      { totalRub: 100, netContributionsRub: 2000 }, // довнесли 1000 — индекс не растёт
+      { totalRub: 100, netContributionsRub: 2000 }, // продали позицию (кэш) — итог тот же, индекс не падает
+      { totalRub: 320, netContributionsRub: 2000 }, // +220 на 2100 ≈ +10,476%
+    ]);
+    expect(idx[0]).toBe(100);
+    expect(idx[1]).toBeCloseTo(110, 10);
+    expect(idx[2]).toBeCloseTo(110, 10);
+    expect(idx[3]).toBeCloseTo(110, 10);
+    expect(idx[4]).toBeCloseTo(110 * (1 + 220 / 2100), 10);
+  });
+
+  it('вывод денег не падение; убыток — падение; до первого богатства база 100', () => {
+    const idx = timeWeightedIndex([
+      { totalRub: 0, netContributionsRub: 0 },
+      { totalRub: 0, netContributionsRub: 1000 },
+      { totalRub: -100, netContributionsRub: 1000 }, // −10%
+      { totalRub: -100, netContributionsRub: 500 }, // вывели 500: богатство 400 → 400−900−(−500)=0, доходность 0
+    ]);
+    expect(idx[0]).toBe(100);
+    expect(idx[1]).toBe(100);
+    expect(idx[2]).toBeCloseTo(90, 10);
+    expect(idx[3]).toBeCloseTo(90, 10);
+  });
+
+  it('нулевое/отрицательное богатство не даёт деления на ноль', () => {
+    const idx = timeWeightedIndex([
+      { totalRub: -50, netContributionsRub: 0 },
+      { totalRub: -20, netContributionsRub: 0 },
+    ]);
+    expect(idx.every(Number.isFinite)).toBe(true);
   });
 });

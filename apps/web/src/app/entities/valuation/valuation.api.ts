@@ -1,6 +1,6 @@
 import { inject, type Signal } from '@angular/core';
 import { httpResource, type HttpResourceRef } from '@angular/common/http';
-import { ValuationSeriesSchema, type ValuationSeriesDto } from '@core';
+import { timeWeightedIndex, ValuationSeriesSchema, type ValuationSeriesDto } from '@core';
 import { DataRevision } from '../../shared/data-revision';
 
 /** Фильтр дневного ряда оценки: система / портфель / период (как у сводки дашборда) */
@@ -63,6 +63,21 @@ export function totalSeries(
     date: p.date,
     valueRub: series.groups.reduce((s, g) => s + Number(g.points[i][field]), 0),
   }));
+}
+
+/**
+ * Индекс доходности портфеля (база 100), очищенный от ввода/вывода денег и продаж
+ * (timeWeightedIndex из @core). По нему считаются просадка и линия «Портфель» против рынка:
+ * ряд рыночной стоимости для этого не годится — продажа и довнесение двигают его без
+ * всякого результата.
+ */
+export function portfolioIndex(series: ValuationSeriesDto | undefined): TotalPoint[] {
+  const totals = totalSeries(series, 'totalRub');
+  if (!series || totals.length === 0) return [];
+  const index = timeWeightedIndex(
+    totals.map((t, i) => ({ totalRub: t.valueRub, netContributionsRub: Number(series.netContributionsRub[i] ?? 0) })),
+  );
+  return totals.map((t, i) => ({ date: t.date, valueRub: index[i] }));
 }
 
 export type { ValuationSeriesDto };
