@@ -28,7 +28,7 @@ import { formatMoney, KpiCard, pnlColorClass } from '@web-shared';
         [value]="execution().avgSlippagePerContractRub ? money(execution().avgSlippagePerContractRub!) : '—'"
         [sub]="'контрактов с сигналом: ' + execution().contractsWithSignal"
       />
-      <app-kpi-card label="Исполнений с тегом" [value]="execution().fills.toString()" />
+      <app-kpi-card label="Аннотированных исполнений" [value]="execution().fills.toString()" />
     </div>
 
     <div class="tables">

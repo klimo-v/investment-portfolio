@@ -273,6 +273,9 @@ export function defaultSyncRange(
         <span>
           Импортировано {{ lastBatch()!.imported }} операций@if (lastBatch()!.updated > 0) {, обновлено {{ lastBatch()!.updated }}}.
         </span>
+        @if (lastBatch()!.updated > 0) {
+          <span class="muted">Откат удалит добавленные операции, но не вернёт прежние значения обновлённых.</span>
+        }
         <button mat-stroked-button (click)="rollback()">Откатить загрузку</button>
       </mat-card>
     }
@@ -285,6 +288,10 @@ export function defaultSyncRange(
   `,
   styles: [
     `
+      .muted {
+        font-size: 12px;
+        color: var(--app-text-muted);
+      }
       .upload,
       .summary,
       .done {

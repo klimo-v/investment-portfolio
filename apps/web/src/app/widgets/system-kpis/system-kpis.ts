@@ -9,6 +9,8 @@ export function formatHolding(hours: number | null, hasTime: boolean): string {
   return `${hours.toFixed(1).replace(/\.0$/, '')} ч`;
 }
 
+/** Минимум дневных значений для Sharpe/Sortino */
+const MIN_RATIO_DAYS = 20;
 const ratio = (v: number | null): string => (v === null ? '—' : v.toFixed(2));
 const pct = (v: number | null, digits = 0): string => (v === null ? '—' : `${v.toFixed(digits)}%`);
 const rub = (v: string): string => formatMoney(v, 'RUB');
@@ -73,6 +75,9 @@ export class SystemKpis {
     const q = p.quality;
     const r = p.risk;
     const h = p.holding;
+    // на нескольких днях отношение среднего к σ — шум: не показываем
+    const enough = p.ratios.days >= MIN_RATIO_DAYS;
+    const sparse = enough ? undefined : `мало данных: ${p.ratios.days} дн. из ${MIN_RATIO_DAYS}`;
     return [
       {
         title: 'Итог',
@@ -102,7 +107,7 @@ export class SystemKpis {
             sub:
               s.feeSharePct === null
                 ? 'доля от gross не определена'
-                : `${s.feeSharePct.toFixed(1)}% от gross закрытых`,
+                : `закрытые: ${rub(s.feesRub)} — ${s.feeSharePct.toFixed(1)}% от gross`,
             hint: 'Фактические комиссии из отчёта брокера (брокер + биржа). Уже вычтены из результата.',
           },
         ],
@@ -158,8 +163,8 @@ export class SystemKpis {
           },
           { label: 'Длительность просадки', value: `${r.drawdownDays} дн.`, hint: 'От пика до восстановления (или до последней точки, если не восстановилась).' },
           { label: 'Recovery factor', value: ratio(r.recoveryFactor), hint: 'Результат закрытых / макс. просадка.' },
-          { label: 'Sharpe', value: ratio(p.ratios.sharpe), hint: p.ratios.assumptions },
-          { label: 'Sortino', value: ratio(p.ratios.sortino), hint: p.ratios.assumptions },
+          { label: 'Sharpe', value: enough ? ratio(p.ratios.sharpe) : '—', sub: sparse, hint: p.ratios.assumptions },
+          { label: 'Sortino', value: enough ? ratio(p.ratios.sortino) : '—', sub: sparse, hint: p.ratios.assumptions },
         ],
       },
       {

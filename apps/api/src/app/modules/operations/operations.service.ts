@@ -425,11 +425,15 @@ export class OperationsService {
     const instrumentById = new Map(this.db.select().from(instruments).all().map((i) => [i.id, i]));
     const quoteByInstrument = new Map(this.db.select().from(quotes).all().map((q) => [q.instrumentId, q]));
 
+    // Котировки только текущие. Если `till` в прошлом, сделки «открытые на till» нельзя
+    // честно оценить сегодняшней ценой (смесь прошлого и настоящего) — оценку не даём
+    const pastTill = !!filter.till && filter.till < new Date().toISOString().slice(0, 10);
+
     const result: ValuedTrade[] = [];
     for (const t of calculateTrades(ops, { futureIds })) {
       if (filter.from && t.closedAt && t.closedAt < filter.from) continue;
       const currency = instrumentById.get(t.instrumentId)?.currency ?? 'RUB';
-      const quote = quoteByInstrument.get(t.instrumentId);
+      const quote = pastTill ? undefined : quoteByInstrument.get(t.instrumentId);
 
       let currentPrice: string | null = null;
       let priceCurrency: string | null = null;

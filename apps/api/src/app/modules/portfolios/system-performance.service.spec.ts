@@ -125,6 +125,12 @@ describe('SystemPerformanceService', () => {
     expect(p.summary.openCount).toBe(0);
   });
 
+  it('till в прошлом: открытые сделки без оценки по сегодняшней цене', async () => {
+    const p = await service.performance('sys', { till: '2026-11-04' });
+    expect(p.summary.openCount).toBe(1); // шорт открыт 04.11
+    expect(p.summary.unrealizedRub).toBe('0.00');
+  });
+
   it('пустая система — валидный DTO с нулями', async () => {
     const p = await service.performance('empty', {});
     expect(p.systemName).toBe('Пустая');

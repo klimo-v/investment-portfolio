@@ -89,6 +89,17 @@ describe('quikTradesParser', () => {
     expect(rows[0].signalPrice).toBeNull();
   });
 
+  it('запятая внутри кавычек в reason не сдвигает колонки', () => {
+    const row = ROW_1012.replace(',h1,', ',"h1, повтор",');
+    const { rows, errors } = quikTradesParser.parse(csv(row));
+    expect(errors).toEqual([]);
+    expect(rows[0]).toMatchObject({ tag: 'h1, повтор', brokerRef: '1012', signalPrice: '12422' });
+  });
+
+  it('ref_price = 0 — это «сигнала нет», а не цена', () => {
+    expect(quikTradesParser.parse(csv(ROW_1012.replace('12.422', '0'))).rows[0].signalPrice).toBeNull();
+  });
+
   it('нет обязательных колонок → одна ошибка про колонки; пустой файл → пусто', () => {
     const r = quikTradesParser.parse('date,time\n2026-11-05,13:00:00');
     expect(r.rows).toEqual([]);

@@ -62,7 +62,8 @@ function stateAt(
   // ВМ брокера комиссий не содержит
   const fees = ops.reduce((s, o) => s.plus(new Decimal(o.fee ?? '0').mul(o.fxRate ?? '1')), new Decimal(0));
   const gross = positions.reduce((s, p) => s.plus(p.realizedPnlRub), new Decimal(0)).plus(fees);
-  const openQty = positions.reduce((s, p) => s.plus(p.quantity.abs()), new Decimal(0));
+  // позиция у брокера нетто по счёту: лонг одной системы гасит шорт другой
+  const openQty = positions.reduce((s, p) => s.plus(p.quantity), new Decimal(0)).abs();
   let unrealized = new Decimal(0);
   if (mark !== null) {
     unrealized = positions.reduce((s, p) => s.plus(futureUnrealizedPnl(p, mark)), new Decimal(0));

@@ -246,6 +246,30 @@ describe('mapTbankOperations — фильтры и незнакомые типы
   });
 });
 
+describe('mapTbankOperations — комиссия отдельной операцией (BROKER_FEE)', () => {
+  const fee = (id: string, parent: string | undefined, amount: number): TbankOperationItem => ({
+    id,
+    parentOperationId: parent,
+    date: '2026-03-15T10:30:00Z',
+    type: 'OPERATION_TYPE_BROKER_FEE',
+    state: 'OPERATION_STATE_EXECUTED',
+    payment: { currency: 'rub', units: String(-amount), nano: 0 },
+  });
+
+  it('прибавляется к комиссии родительской сделки, распределяясь по её исполнениям; отдельной строки нет', () => {
+    const rows = mapTbankOperations([buyWithTwoTrades(), fee('fee-1', 'op-1', 1.3)], 'acc', instruments);
+    expect(rows.every((r) => r.tradeType !== 'fee')).toBe(true);
+    const total = rows.reduce((s, r) => s.plus(r.fee ?? '0'), new Decimal(0));
+    expect(total.toString()).toBe('10'); // 8.7 + 1.3
+  });
+
+  it('без родителя в выборке остаётся обычной комиссией', () => {
+    const rows = mapTbankOperations([fee('fee-2', 'нет-такой', 5)], 'acc', instruments);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].tradeType).toBe('fee');
+  });
+});
+
 describe('дедупликация с файловым импортом', () => {
   /** Строка так, как её отдаёт XLSX-парсер отчёта Т-Банка (brokerRef = «Номер сделки») */
   const fromXlsx: RawRow = {

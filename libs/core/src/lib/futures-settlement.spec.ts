@@ -76,4 +76,24 @@ describe('reconcileFuturesSettlement', () => {
     expect(r.status).toBe('unknown');
     expect(r.reason).toContain('не совпадает');
   });
+
+  it('встречные позиции двух систем на начало периода нетто-сверяются с брокером', () => {
+    // система s2 держит шорт 2, система s1 — лонг 3: у брокера на счёте нетто +1
+    const mk = (id: string, systemId: string, side: 'Buy' | 'Sell', qty: string) => ({
+      ...cnyOperation(['2026-10-01', '10:00:00', side, qty, '12000', '0', id], 0),
+      id,
+      systemId,
+    });
+    const ops = [mk('a', 's1', 'Buy', '3'), mk('b', 's2', 'Sell', '2')];
+    const r = reconcileFuturesSettlement(ops, CNY_FUTURE_ID, 'p1', {
+      periodFrom: '2026-11-01',
+      date: '2026-11-02',
+      vmPeriod: '0',
+      vmPlanned: '0',
+      qtyStart: '1',
+      markStart: '12000',
+      markEnd: '12000',
+    });
+    expect(r.status).not.toBe('unknown');
+  });
 });

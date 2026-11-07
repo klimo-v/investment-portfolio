@@ -191,8 +191,25 @@ export function mapTbankOperations(
     withheldByParent.set(item.parentOperationId, prev.plus(moneyToDecimal(item.payment).abs()));
   }
 
+  // Комиссия брокера отдельной операцией со ссылкой на сделку (BROKER_FEE с
+  // parentOperationId) — тот же приём: прибавляем к комиссии родительской Buy/Sell, иначе
+  // она висела бы отдельным Fee без инструмента и не попадала в сделку и статистику
+  // системы. Сворачиваем здесь, а не через RawRow.parentBrokerRef: у строк-сделок
+  // brokerRef — номер биржевой сделки, а parentOperationId указывает на id операции.
+  const extraCommissionByParent = new Map<string, Decimal>();
+  const foldedFeeIds = new Set<string>();
+  for (const item of executed) {
+    if (item.type !== 'OPERATION_TYPE_BROKER_FEE' || !item.parentOperationId) continue;
+    const parent = executed.find((o) => o.id === item.parentOperationId);
+    if (!parent || !BUY_SELL.has(OPERATION_TYPE_MAP[parent.type ?? ''] ?? '')) continue;
+    const prev = extraCommissionByParent.get(parent.id ?? '') ?? new Decimal(0);
+    extraCommissionByParent.set(parent.id ?? '', prev.plus(moneyToDecimal(item.payment).abs()));
+    if (item.id) foldedFeeIds.add(item.id);
+  }
+
   const rows: RawRow[] = [];
   for (const item of executed) {
+    if (item.id && foldedFeeIds.has(item.id)) continue;
     // налог, уже учтённый в нетто-сумме родительской выплаты — отдельной строкой не идёт
     if (item.parentOperationId && WITHHOLDING_TAX_TYPES.has(item.type ?? '')) {
       const parentExists = executed.some((o) => o.id === item.parentOperationId);
@@ -241,7 +258,10 @@ export function mapTbankOperations(
         ...base,
         quantity: quantity.toFixed(),
         price: absMoney(item.price),
-        fee: absMoney(item.commission),
+        fee: moneyToDecimal(item.commission)
+          .abs()
+          .plus(extraCommissionByParent.get(item.id ?? '') ?? 0)
+          .toFixed(),
         note: item.description,
         brokerRef: item.id,
       });
@@ -252,7 +272,9 @@ export function mapTbankOperations(
     // Выпускаем строку на КАЖДУЮ сделку с `brokerRef` = номер сделки: именно его
     // пишет XLSX-парсер, поэтому уже импортированная из отчёта сделка распознаётся
     // как дубль, а не заводится второй раз.
-    const commission = moneyToDecimal(item.commission).abs();
+    const commission = moneyToDecimal(item.commission)
+      .abs()
+      .plus(extraCommissionByParent.get(item.id ?? '') ?? 0);
     const weights = trades.map((t) =>
       moneyToDecimal(t.price).abs().times(new Decimal(t.quantity ?? '0').abs()),
     );

@@ -48,6 +48,29 @@ export interface AnnotationParser {
 
 // ───────────────────────────── парсер выгрузки QUIK ─────────────────────────────
 
+/** Разбор строки CSV с учётом кавычек: запятая внутри "…" не разделитель, "" — кавычка */
+function splitCsvLine(line: string): string[] {
+  const out: string[] = [];
+  let cur = '';
+  let quoted = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (quoted) {
+      if (ch === '"' && line[i + 1] === '"') {
+        cur += '"';
+        i++;
+      } else if (ch === '"') quoted = false;
+      else cur += ch;
+    } else if (ch === '"') quoted = true;
+    else if (ch === ',') {
+      out.push(cur);
+      cur = '';
+    } else cur += ch;
+  }
+  out.push(cur);
+  return out;
+}
+
 const QUIK_REQUIRED = ['date', 'time', 'contract', 'side', 'qty', 'price', 'reason', 'ref_price', 'trade_num'];
 
 /**
@@ -68,7 +91,7 @@ export const quikTradesParser: AnnotationParser = {
     const errors: AnnotationParseError[] = [];
     if (lines.length === 0) return { rows, errors };
 
-    const header = lines[0].split(',').map((h) => h.trim().toLowerCase());
+    const header = splitCsvLine(lines[0]).map((h) => h.trim().toLowerCase());
     const missing = QUIK_REQUIRED.filter((c) => !header.includes(c));
     if (missing.length > 0) {
       return { rows, errors: [{ line: 0, reason: `В файле нет колонок: ${missing.join(', ')}` }] };
@@ -77,7 +100,7 @@ export const quikTradesParser: AnnotationParser = {
 
     for (const [i, text] of lines.slice(1).entries()) {
       const line = i + 1;
-      const c = text.split(',');
+      const c = splitCsvLine(text);
       const fail = (reason: string) => errors.push({ line, reason });
 
       const contract = col(c, 'contract');
@@ -113,7 +136,8 @@ export const quikTradesParser: AnnotationParser = {
         // сдвигаем запятую строкой, без float
         price: scaleByPowerOfTen(price, multiplier),
         tag: col(c, 'reason') || null,
-        signalPrice: ref === '' ? null : scaleByPowerOfTen(ref, multiplier),
+        // 0 — «сигнала нет» (терминал пишет его для выходов без сигнальной цены), а не цена
+        signalPrice: ref === '' || new Decimal(ref).isZero() ? null : scaleByPowerOfTen(ref, multiplier),
       });
     }
     return { rows, errors };
