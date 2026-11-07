@@ -68,8 +68,16 @@ libs/
 
 ```bash
 pnpm install          # установить зависимости
-pnpm start            # Angular фронт → http://localhost:4200
-pnpm start:api        # NestJS бэк → http://localhost:3000/api
+
+# пользоваться: один процесс, один порт
+pnpm app              # собрать фронт и бэк и запустить → http://localhost:3000
+pnpm start:app        # запустить уже собранное, без пересборки
+
+# разрабатывать: hot reload
+pnpm dev              # фронт (:4200) и бэк (:3000) в одном терминале
+pnpm start            # только Angular фронт → http://localhost:4200
+pnpm start:api        # только NestJS бэк → http://localhost:3000/api
+
 pnpm test             # тесты (движок расчётов в libs/core)
 pnpm lint             # проверка + Nx-границы FSD
 pnpm graph            # граф зависимостей проектов
@@ -92,20 +100,24 @@ pnpm db:studio        # Drizzle Studio — просмотр БД в браузе
    Тип — **только для чтения**: таким токеном нельзя выставлять заявки, приложение
    лишь читает список счетов, историю операций и справочник инструментов.
 2. Скопируйте `.env.example` в `.env` и подставьте токен в `TBANK_TOKEN`.
-3. Перезапустите `pnpm start:api` — на странице «Импорт» появится вкладка **T-Bank API**.
+3. Перезапустите приложение (`pnpm app` или `pnpm start:api`) — на странице «Импорт» появится вкладка **T-Bank API**.
 
 **Корневой сертификат.** Сертификат `*.tbank.ru` выпущен корневым центром Минцифры,
 а Node доверяет встроенному списку корней Mozilla и в системное хранилище macOS/Windows
 не смотрит — поэтому tbank.ru открывается в браузере, но запрос из бэкенда падал бы с
 «сертификат не проходит проверку». Корень лежит в репозитории
-(`certs/russian_trusted_root_ca.pem`, публичный — не секрет), и `pnpm start:api`
-подставляет его сам через `NODE_EXTRA_CA_CERTS`. Отдельно скачивать ничего не нужно;
-подробности и отпечаток — в [certs/README.md](certs/README.md).
+(`certs/russian_trusted_root_ca.pem`, публичный — не секрет), и команды запуска
+(`pnpm app`, `dev`, `start:app`, `start:api`) подставляют его сами через
+`NODE_EXTRA_CA_CERTS` — их обёртка `scripts/run-with-certs.mjs` работает из любого
+каталога и на любой ОС. Если `NODE_EXTRA_CA_CERTS` у вас уже задана (например,
+корпоративный прокси), она не теряется: оба сертификата склеиваются в один файл
+`tmp/extra-ca-certs.pem`. Отдельно скачивать ничего не нужно; подробности и
+отпечаток — в [certs/README.md](certs/README.md).
 
-Если запускаете бэкенд не через `pnpm start:api`, укажите путь вручную:
+Свою команду можно запустить через ту же обёртку:
 
 ```bash
-NODE_EXTRA_CA_CERTS=certs/russian_trusted_root_ca.pem nx serve api
+node scripts/run-with-certs.mjs node dist/apps/api/main.js
 ```
 
 Переменная добавляет корень **только этому процессу Node** — системное хранилище не
@@ -113,9 +125,6 @@ NODE_EXTRA_CA_CERTS=certs/russian_trusted_root_ca.pem nx serve api
 читает `NODE_EXTRA_CA_CERTS` при старте, до того как приложение загрузит `.env`. И не
 отключайте проверку через `NODE_TLS_REJECT_UNAUTHORIZED=0` — это снимает проверку
 сертификатов для всех исходящих соединений процесса, включая MOEX и ЦБ.
-
-> Windows: запись `VAR=... команда` в скрипте работает в PowerShell/Git Bash, но не в
-> `cmd.exe` — там задайте переменную отдельной строкой перед `nx serve api`.
 
 Токен читается только бэкендом, во фронт не передаётся и в репозиторий не попадает
 (`.env` в `.gitignore`). Без него всё остальное работает как раньше, вкладка просто

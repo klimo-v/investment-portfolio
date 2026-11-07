@@ -39,7 +39,13 @@ async function bootstrap() {
   const spaEnabled = serveSpa(app);
 
   const port = process.env['PORT'] ? Number(process.env['PORT']) : 3000;
-  await app.listen(port, '0.0.0.0');
+  // Авторизации в API нет, поэтому по умолчанию слушаем только loopback: на
+  // 0.0.0.0 портфель читал бы и правил любой в той же сети (кафе, офис).
+  // В контейнере, где снаружи ходят через проброс порта, — API_HOST=0.0.0.0.
+  // Не HOST: в tcsh и части CI она уже экспортирована и содержит имя машины —
+  // API молча открылся бы в сеть.
+  const host = process.env['API_HOST'] ?? '127.0.0.1';
+  await app.listen(port, host);
 
   // Пути в логе — чтобы при запуске из фонового сервиса было сразу видно,
   // с каким корнем и какой БД приложение работает.

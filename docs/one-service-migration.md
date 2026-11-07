@@ -1,5 +1,11 @@
 # План: упростить запуск приложения
 
+> **Статус (октябрь 2026).** Сделано: 1.1 (раздача SPA, `CORS_ORIGIN`, `bodyLimit`),
+> 1.2 (пути от корня проекта, сертификат через `scripts/run-with-certs.mjs`),
+> 1.3 (миграции на старте), 1.4 (`pnpm dev`, `pnpm app`, `pnpm start:app`),
+> API слушает только `127.0.0.1` (`API_HOST`). Не сделано: 1.5 (launchd-сервис),
+> бэкап, Этапы 2–3. Раздел «Context» ниже описывает состояние **до** Этапа 1.
+
 ## Context
 
 Сегодня запуск — два процесса в двух терминалах (`pnpm start` → :4200 и `pnpm start:api`
@@ -36,7 +42,7 @@
 (иконка/закладка, всё локально, интернет только за котировками) без этой цены.
 
 ⚠️ Отмечаю на будущее: авторизации в API нет вообще — ни guard-ов, ни сессий, ни таблицы
-`users`. Пока всё слушает localhost — это нормально. Выставлять наружу без гейта нельзя
+`users`. Пока API слушает только loopback (`127.0.0.1`, переопределяется `API_HOST`) — это нормально. Выставлять наружу без гейта нельзя
 (см. Этап 2).
 
 ---
@@ -89,8 +95,8 @@
 
 ```
 pnpm dev        # разработка: web+api параллельно в одном терминале, hot reload
-pnpm build:app  # сборка web + api в dist/
-pnpm start:app  # запуск собранного: node dist/apps/api/main.js, один порт 3000
+pnpm app        # сборка web + api в dist/ и запуск, один порт 3000
+pnpm start:app  # запуск собранного без пересборки: node dist/apps/api/main.js
 ```
 
 `pnpm dev` — через `nx run-many -t serve --parallel=2` (nx уже умеет, новых зависимостей
@@ -105,7 +111,7 @@ pnpm start:app  # запуск собранного: node dist/apps/api/main.js,
 Итог повседневного использования: приложение всегда живёт в фоне, открывается закладкой
 http://localhost:3000 (или ярлыком «Add to Dock» из Chrome — выглядит как отдельное приложение).
 
-Плюс `pnpm app:update` = `build:app` + `launchctl kickstart -k` — обновить после `git pull`.
+Плюс `pnpm app:update` = `pnpm build` + `launchctl kickstart -k` — обновить после `git pull`.
 Скрипт удаления сервиса — там же.
 
 ### 1.6 Документация
@@ -162,7 +168,7 @@ http://localhost:3000 (или ярлыком «Add to Dock» из Chrome — в�
 
 1. `pnpm lint && pnpm test` — регрессий нет.
 2. Dev-режим жив: `pnpm dev` поднимает оба процесса, hot reload работает, :4200 проксирует на :3000.
-3. `pnpm build:app && pnpm start:app` → http://localhost:3000 отдаёт SPA; deep-link
+3. `pnpm app` → http://localhost:3000 отдаёт SPA; deep-link
    (например `/operations`) с прямой перезагрузкой страницы не даёт 404.
 4. Запуск из **другой** директории (`cd ~ && node …/dist/apps/api/main.js`) работает —
    БД, `.env` и сертификат находятся.
@@ -174,5 +180,4 @@ http://localhost:3000 (или ярлыком «Add to Dock» из Chrome — в�
    Минцифры подхватился в фоновом сервисе.
 8. Импорт xlsx ~5 МБ — проверка нового `bodyLimit`.
 
-Шаги 2–8 выполняете вы по чек-листу; UI кликами я не проверяю
-(см. [feedback_no_self_verify_browser](/Users/krisfeminova/.claude/projects/-Users-krisfeminova-projects-investment-portfolio/memory/feedback_no_self_verify_browser.md)).
+Шаги 2–8 — ручной чек-лист.
