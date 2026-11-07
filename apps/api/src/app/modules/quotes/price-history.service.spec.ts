@@ -146,7 +146,7 @@ describe('PriceHistoryService.targetsFor: курсы валют', () => {
   });
 });
 
-describe('слияние инструментов: история цен переезжает к целевому', () => {
+describe('слияние инструментов: история цен переезжает к целевому (одна валюта)', () => {
   it('рынок цели не затирается, недостающие даты и цены слитого сохраняются', async () => {
     const { PortfoliosService } = await import('../portfolios/portfolios.service');
     db.insert(instruments).values({ id: 'OLD', ticker: 'OLD', type: 'Stock', currency: 'RUB', marketSource: 'manual' }).run();
@@ -180,5 +180,15 @@ describe('цена момента нажатия «Обновить цены» �
     const svc = new PriceHistoryService(db, []);
     svc.record('SBER', point('2026-10-06', '105', 'moex'));
     expect(svc.record('SBER', point('2026-10-06', '999', 'quote'))).toBe(false);
+  });
+});
+
+describe('слияние инструментов в разных валютах', () => {
+  it('история цен слитого НЕ переносится к целевому (валюта/масштаб цены разные)', async () => {
+    const { PortfoliosService } = await import('../portfolios/portfolios.service');
+    db.insert(instruments).values({ id: 'USDX', ticker: 'USDX', type: 'Stock', currency: 'USD', marketSource: 'manual' }).run();
+    new PriceHistoryService(db, []).record('USDX', point('2026-10-01', '10', 'manual'));
+    new PortfoliosService(db as never).mergeInstruments('USDX', 'SBER');
+    expect(rows()).toEqual([]);
   });
 });

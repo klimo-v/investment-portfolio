@@ -152,11 +152,12 @@ describe('valuationSeries: оценка позиций', () => {
     expect(bond.carried[0]).toMatchObject({ instrumentId: 'BOND', reason: 'no-fx' });
   });
 
-  it('перенос цены: выходные не помечаются, пропущенный будний день — помечается', () => {
+  it('перенос цены: до трёх суток (выходные, праздники) не помечается, дольше — помечается', () => {
     const series = valuationSeries(OPS, PRICES, opts('instrument'));
     const pts = series.groups.find((g) => g.key === 'SBER')!.points;
     const day = (d: string) => pts.find((p) => p.date === d)!;
     expect(day('2026-03-14').carried).toEqual([]); // суббота: цена 13.03 перенесена, но это выходной
+    expect(day('2026-03-16').carried).toEqual([]); // понедельник после выходных: 3 суток — норма
     expect(day('2026-03-17').carried).toEqual([{ instrumentId: 'SBER', reason: 'carried', priceDate: '2026-03-13' }]);
     expect(day('2026-03-13').carried).toEqual([]); // цена именно этого дня
   });

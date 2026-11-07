@@ -124,11 +124,16 @@ function addDays(iso: string, n: number): string {
   return new Date(Date.parse(iso) + n * DAY_MS).toISOString().slice(0, 10);
 }
 
-/** Выходной (суббота/воскресенье) — отсутствие торгов не считаем пропуском цены */
-function isWeekend(iso: string): boolean {
-  const dow = new Date(Date.parse(iso)).getUTCDay();
-  return dow === 0 || dow === 6;
+/** Дней между датами (YYYY-MM-DD) */
+function ageDays(from: string, to: string): number {
+  return Math.round((Date.parse(to) - Date.parse(from)) / DAY_MS);
 }
+
+/**
+ * Перенос цены дольше этого числа дней считается пропуском данных. Выходные и длинные
+ * праздничные выходные (до 3 суток без торгов) — норма и шума не дают: помечаем от 4 суток.
+ */
+const CARRIED_AFTER_DAYS = 3;
 
 /** Последняя цена ≤ дня по каждому инструменту; дни обходятся по возрастанию, поэтому курсор только растёт */
 class PriceCursor {
@@ -328,7 +333,7 @@ function valueOpenTrade(
       }).toDecimalPlaces(2),
     );
   }
-  if (obs.date < day && !isWeekend(day)) note('carried');
+  if (ageDays(obs.date, day) > CARRIED_AFTER_DAYS) note('carried');
 }
 
 /** Курс валюты к рублю на день (forward-fill); RUB — 1; null — курса нет */

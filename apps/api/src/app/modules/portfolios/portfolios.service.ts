@@ -149,8 +149,11 @@ export class PortfoliosService {
 
     // история цен переезжает к целевому инструменту по общей политике источников
     // (рынок цели не затирается ценой слитого), остальное удаляется вместе с ним
-    for (const row of this.db.select().from(priceHistory).where(eq(priceHistory.instrumentId, sourceId)).all()) {
-      recordPrice(this.db, targetId, row);
+    // только при совпадении валюты инструмента: цены в разных валютах/масштабах на один id смешивать нельзя
+    if (source.currency === target.currency) {
+      for (const row of this.db.select().from(priceHistory).where(eq(priceHistory.instrumentId, sourceId)).all()) {
+        recordPrice(this.db, targetId, row);
+      }
     }
     this.db.delete(priceHistory).where(eq(priceHistory.instrumentId, sourceId)).run();
     this.db.delete(quotes).where(eq(quotes.instrumentId, sourceId)).run();
