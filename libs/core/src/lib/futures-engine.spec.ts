@@ -189,3 +189,16 @@ describe('compareOperations', () => {
     expect(sorted).toEqual(['9', '10', '100']);
   });
 });
+
+import { tickerToExchangeCode, quikCodeToTicker } from './futures';
+describe('tickerToExchangeCode', () => {
+  it('CNY-12.26 ↔ CRZ6 в обе стороны', () => {
+    expect(tickerToExchangeCode('CNY-12.26')).toBe('CRZ6');
+    expect(quikCodeToTicker('CRZ6')).toBe('CNY-12.26');
+    expect(tickerToExchangeCode('CNY-3.27')).toBe('CRH7');
+  });
+  it('неизвестная серия и мусор — null', () => {
+    expect(tickerToExchangeCode('XXX-12.26')).toBeNull();
+    expect(tickerToExchangeCode('SBER')).toBeNull();
+  });
+});

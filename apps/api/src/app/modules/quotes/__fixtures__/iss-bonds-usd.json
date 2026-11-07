@@ -1,0 +1,10 @@
+{
+"history": {
+	"columns": ["TRADEDATE", "BOARDID", "CLOSE", "ACCINT", "FACEVALUE", "FACEUNIT", "CURRENCYID", "VALUE"], 
+	"data": [
+		["2026-11-03", "TQCB", 100.1299, 38.0575, 100, "USD", "SUR", 24583416.38],
+		["2026-11-03", "TQOD", null, 0.47, 100, "USD", "USD", null],
+		["2026-11-05", "TQCB", 99.4621, 41.6516, 100, "USD", "SUR", 88153658.76],
+		["2026-11-05", "TQOD", null, 0.51, 100, "USD", "USD", null]
+	]
+}}

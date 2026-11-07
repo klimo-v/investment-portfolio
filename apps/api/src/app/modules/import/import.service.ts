@@ -26,6 +26,7 @@ import {
   type OperationRow,
 } from '../../../db/schema';
 import { DB } from '../../db/drizzle.module';
+import { recordPrice } from '../../../db/price-history-store';
 import { recordSnapshotInvalidation } from '../../../db/snapshot-invalidations';
 import { parseCsv } from './csv-parser';
 import { parseTbankXlsx } from './tbank-xlsx-report';
@@ -659,6 +660,17 @@ export class ImportService {
     for (const mark of marks) {
       const [inst] = this.db.select().from(instruments).where(eq(instruments.ticker, mark.ticker)).all();
       if (!inst || inst.marketSource !== 'manual') continue;
+
+      // история цен — независимо от того, свежее ли это текущей котировки: цена на СВОЮ дату
+      // расчётная цена на дату отчёта — факт для истории цен (приоритет выше ручной цены)
+      recordPrice(this.db, inst.id, {
+        date: mark.date,
+        price: mark.price,
+        currency: 'RUB',
+        accruedInterest: null,
+        accruedCurrency: null,
+        source: 'broker-report',
+      });
 
       const [current] = this.db.select().from(quotes).where(eq(quotes.instrumentId, inst.id)).all();
       if (current && current.asOf.slice(0, 10) > mark.date) continue;

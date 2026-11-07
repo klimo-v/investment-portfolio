@@ -33,6 +33,19 @@ export function quikCodeToTicker(code: string): string | null {
   return `${series}-${month}.2${m[3]}`;
 }
 
+/**
+ * Тикер отчёта брокера → код контракта на бирже: «CNY-12.26» → «CRZ6» (обратное к
+ * quikCodeToTicker; код на MOEX ISS совпадает с кодом QUIK). null — серия неизвестна.
+ */
+export function tickerToExchangeCode(ticker: string): string | null {
+  const m = ticker.trim().match(/^([A-Za-z0-9]+)-(\d{1,2})\.\d(\d)$/);
+  if (!m) return null;
+  const spec = FUTURES_SPECS[m[1].toUpperCase()];
+  const month = Number(m[2]);
+  if (!spec || month < 1 || month > 12) return null;
+  return `${spec.quikCode}${MONTH_CODES[month - 1]}${m[3]}`;
+}
+
 /** Серия из кода контракта: «CNY-12.26» → «CNY» */
 export function futuresSeries(contractCode: string): string | null {
   const m = contractCode.trim().match(/^([A-Za-z0-9]+)-\d{1,2}\.\d{2}$/);

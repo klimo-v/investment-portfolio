@@ -120,6 +120,13 @@
       "when": 1794059021620,
       "tag": "0016_operation_annotations",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "6",
+      "when": 1794064334513,
+      "tag": "0017_price_history",
+      "breakpoints": true
     }
   ]
 }

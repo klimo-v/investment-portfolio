@@ -8,6 +8,8 @@ import { MoexProvider } from './moex.provider';
 import { CbrProvider } from './cbr.provider';
 import { BinanceProvider } from './binance.provider';
 import type { PriceProvider } from './price-provider';
+import { PriceHistoryService } from './price-history.service';
+import { fxInstrumentId, type PriceSource } from '@core';
 
 /**
  * Сервис котировок (CLAUDE.md §7: Facade над провайдерами).
@@ -27,6 +29,7 @@ export class QuotesService {
     private readonly moex: MoexProvider,
     private readonly cbr: CbrProvider,
     private readonly binance: BinanceProvider,
+    private readonly history: PriceHistoryService,
   ) {
     this.providers = [this.moex, this.binance];
   }
@@ -50,12 +53,53 @@ export class QuotesService {
   }
 
   /**
+   * Цена дня в историю цен — «снимок», но ФАКТА (цена и НКД), а не посчитанного итога:
+   * из истории любые ряды пересчитываются, и правка журнала задним числом ничего не портит.
+   */
+  private recordHistory(instrumentId: string, row: {
+    price: string;
+    currency: string;
+    accruedInterest: string | null;
+    accruedCurrency: string | null;
+    source: PriceSource;
+    asOf: string;
+  }): void {
+    this.history.record(instrumentId, {
+      date: row.asOf.slice(0, 10),
+      price: row.price,
+      currency: row.currency,
+      accruedInterest: row.accruedInterest,
+      accruedCurrency: row.accruedCurrency,
+      source: row.source,
+    });
+  }
+
+  /** Курс каждой нерублёвой валюты котировок на сегодня — в ту же историю (fx:USD) */
+  private async recordFxToday(currencies: Iterable<string>): Promise<void> {
+    const date = new Date().toISOString().slice(0, 10);
+    for (const c of new Set([...currencies].map((x) => x.toUpperCase()))) {
+      if (c === 'RUB') continue;
+      const rate = await this.cbr.getRateOrNull(c);
+      if (rate === null) continue; // «нет курса» не подменяем единицей
+      this.history.record(fxInstrumentId(c), {
+        date,
+        price: String(rate),
+        currency: 'RUB',
+        accruedInterest: null,
+        accruedCurrency: null,
+        source: 'cbr',
+      });
+    }
+  }
+
+  /**
    * Обновить цены по всем инструментам из справочника.
    * Возвращает количество успешно обновлённых.
    */
   async refreshAll(): Promise<{ updated: number; total: number }> {
     const instrumentRows = this.db.select().from(instruments).all();
     let updated = 0;
+    const currencies = new Set<string>();
 
     for (const inst of instrumentRows) {
       const provider = this.providers.find((p) => p.supports(inst.marketSource));
@@ -95,8 +139,19 @@ export class QuotesService {
           set: { price: quote.price, currency, accruedInterest, accruedCurrency, asOf: quote.asOf },
         })
         .run();
+      this.recordHistory(inst.id, {
+        price: quote.price,
+        currency,
+        accruedInterest,
+        accruedCurrency,
+        source: quote.source,
+        asOf: quote.asOf,
+      });
+      currencies.add(currency);
+      if (accruedCurrency) currencies.add(accruedCurrency);
       updated++;
     }
+    await this.recordFxToday(currencies);
 
     return { updated, total: instrumentRows.length };
   }
@@ -147,6 +202,15 @@ export class QuotesService {
         },
       })
       .run();
+
+    this.recordHistory(instrumentId, {
+      price,
+      currency: inst.currency,
+      accruedInterest: null,
+      accruedCurrency: null,
+      source: 'manual',
+      asOf,
+    });
 
     const [row] = this.db.select().from(quotes).where(eq(quotes.instrumentId, instrumentId)).all();
     return row;
@@ -205,6 +269,14 @@ export class QuotesService {
         })
         .run();
 
+      this.recordHistory(instrumentId, {
+        price: quote.price,
+        currency,
+        accruedInterest,
+        accruedCurrency,
+        source: quote.source,
+        asOf: quote.asOf,
+      });
       return { price: quote.price, source: quote.source };
     }
 

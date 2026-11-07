@@ -25,6 +25,13 @@ export class CbrProvider {
     return rates[currency] ?? 1;
   }
 
+  /** Курс валюты или null, если ЦБ недоступен/валюты нет — для записи в историю, где «1» вместо «нет курса» недопустимо */
+  async getRateOrNull(currency: string): Promise<number | null> {
+    if (currency === 'RUB') return 1;
+    const rates = await this.getRates();
+    return rates[currency] ?? null;
+  }
+
   private async getRates(): Promise<Record<string, number>> {
     if (this.cache && Date.now() - this.cache.asOf < this.TTL_MS) {
       return this.cache.rates;

@@ -186,6 +186,31 @@ export const snapshotInvalidations = sqliteTable('snapshot_invalidations', {
   acknowledgedAt: text('acknowledged_at'),
 });
 
+/**
+ * История цен — факты, из которых считаются ряды динамики (libs/core/valuation.ts).
+ * Одна строка = цена инструмента на дату. Курсы валют лежат здесь же под синтетическим
+ * id `fx:USD` (₽ за единицу, валюта цены RUB), поэтому FK на instruments нет: один
+ * механизм догрузки и чтения для бумаг и курсов. Приоритет источников при конфликте на
+ * одну дату — PRICE_SOURCE_PRIORITY в @core (единственное место политики).
+ * Валюта цены и НКД с валютой — как в quotes (у замещающих облигаций они разные).
+ */
+export const priceHistory = sqliteTable(
+  'price_history',
+  {
+    instrumentId: text('instrument_id').notNull(),
+    date: text('date').notNull(), // YYYY-MM-DD
+    price: text('price').notNull(),
+    currency: text('currency').notNull(),
+    accruedInterest: text('accrued_interest'),
+    accruedCurrency: text('accrued_currency'),
+    source: text('source', {
+      enum: ['moex', 'cbr', 'binance', 'broker-report', 'snapshot', 'manual'],
+    }).notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.instrumentId, t.date] })],
+);
+export type PriceHistoryRow = typeof priceHistory.$inferSelect;
+
 export type SystemRow = typeof systems.$inferSelect;
 export type PortfolioRow = typeof portfolios.$inferSelect;
 export type InstrumentRow = typeof instruments.$inferSelect;
