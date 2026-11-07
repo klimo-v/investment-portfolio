@@ -87,7 +87,9 @@ pnpm yv1:refresh --curve out.csv    # плюс кривая date,ret,equity (с�
 `GET /api/strategies` (список), `GET /api/strategies/:systemId/overview`, `POST .../refresh`, `GET|PUT .../settings`,
 `PUT .../portfolio` (`{"portfolioId": "..."}`), `GET .../curve.csv`.
 
-`pnpm yv1:refresh --portfolio Trader` — привязать счёт стратегии к портфелю (имя или id), один раз.
+Портфель стратегии выбирается списком в шапке страницы стратегии (или `pnpm yv1:refresh --portfolio Trader`, или
+`PUT .../portfolio`) — один раз; у ЮВ1, перенесённой миграцией, портфель сначала пустой. Пересчитывать ничего не нужно:
+лента результата читает портфель из конфига.
 
 Переменные окружения: `QUIK_BRIDGE_DIR`; `YV1_BACKTEST_CSV` (по умолчанию
 `../strategy-backtester-vectorbt/data-reports/yv1_2vh_rub_report_2026-11-05/daily_yv1_2vh.csv`, только чтение);

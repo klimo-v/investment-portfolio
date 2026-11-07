@@ -2,8 +2,11 @@ import { ChangeDetectionStrategy, Component, computed, inject, input, signal } f
 import { Router } from '@angular/router';
 import { MatButtonModule } from '@angular/material/button';
 import { MatCardModule } from '@angular/material/card';
+import { MatFormFieldModule } from '@angular/material/form-field';
+import { MatInputModule } from '@angular/material/input';
 import { MatIconModule } from '@angular/material/icon';
 import { ConfirmService, StateMessage, StatusChip, extractErrorMessage, formatMoney, type ChipTone } from '@web-shared';
+import { ReferenceApi } from '../../entities/reference/reference.api';
 import { StrategyListApi } from '../../entities/strategy/strategy-list.api';
 import { StrategyApi } from '../../entities/strategy/strategy.api';
 import { Yv1Controls } from '../../features/yv1-controls/yv1-controls';
@@ -31,7 +34,9 @@ const VERDICT_TONE: Record<string, ChipTone> = {
   imports: [
     MatButtonModule,
     MatCardModule,
+    MatFormFieldModule,
     MatIconModule,
+    MatInputModule,
     StateMessage,
     StatusChip,
     Yv1Controls,
@@ -45,7 +50,18 @@ const VERDICT_TONE: Record<string, ChipTone> = {
     <div class="page-header">
       <h1 class="page-title">{{ title() }} — факт по мосту QUIK</h1>
       @if (strategy(); as s) {
-        <span class="muted">{{ s.portfolioName ? 'Портфель: ' + s.portfolioName : 'Портфель не привязан' }}</span>
+        <mat-form-field appearance="outline" subscriptSizing="dynamic" class="portfolio">
+          <mat-label>Портфель (счёт)</mat-label>
+          <select matNativeControl [disabled]="linking()" (change)="link($any($event.target).value)">
+            <option value="" disabled [selected]="!s.portfolioId">— не привязан —</option>
+            @for (p of portfolios(); track p.id) {
+              <option [value]="p.id" [selected]="p.id === s.portfolioId">{{ p.name }}</option>
+            }
+          </select>
+          @if (!s.portfolioId) {
+            <mat-hint>Пока не привязан — результат стратегии не попадает в портфель</mat-hint>
+          }
+        </mat-form-field>
         <span class="spacer"></span>
         <button mat-stroked-button type="button" class="danger" [disabled]="removing()" (click)="remove(s.name)">
           <mat-icon>delete</mat-icon>
@@ -119,6 +135,9 @@ const VERDICT_TONE: Record<string, ChipTone> = {
       .spacer {
         flex: 1;
       }
+      .portfolio {
+        width: 260px;
+      }
       .danger {
         color: var(--app-danger);
       }
@@ -133,8 +152,10 @@ const VERDICT_TONE: Record<string, ChipTone> = {
 export class StrategyPage {
   protected readonly api = inject(StrategyApi);
   private readonly confirm = inject(ConfirmService);
+  private readonly referenceApi = inject(ReferenceApi);
   private readonly router = inject(Router);
-  private readonly strategies = inject(StrategyListApi).list;
+  private readonly strategyList = inject(StrategyListApi);
+  private readonly strategies = this.strategyList.list;
 
   /** id торговой системы из маршрута */
   readonly systemId = input.required<string>();
@@ -161,8 +182,25 @@ export class StrategyPage {
     }
   });
 
+  protected readonly portfolios = computed(() => this.referenceApi.portfolios.value() ?? []);
+  protected readonly linking = signal(false);
   protected readonly removing = signal(false);
   protected readonly errorMessage = signal('');
+
+  /** Выбор портфеля в шапке: ошибка сервера показывается под заголовком, список остаётся прежним */
+  protected async link(portfolioId: string): Promise<void> {
+    if (portfolioId === '' || portfolioId === this.strategy()?.portfolioId) return;
+    this.errorMessage.set('');
+    this.linking.set(true);
+    try {
+      await this.api.linkPortfolio(this.systemId(), portfolioId);
+    } catch (err) {
+      this.errorMessage.set(extractErrorMessage(err, 'Не удалось привязать портфель.'));
+      this.strategyList.reload(); // вернуть селект к фактическому значению на сервере
+    } finally {
+      this.linking.set(false);
+    }
+  }
 
   /**
    * Удаление необратимо: показываем, что пропадёт (журнал, дни результата в портфеле), и просим

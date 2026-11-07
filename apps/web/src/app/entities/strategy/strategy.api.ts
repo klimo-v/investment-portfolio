@@ -82,6 +82,19 @@ export class StrategyApi {
     this.revision.bump();
   }
 
+  /**
+   * Привязать счёт стратегии к портфелю (или сменить привязку). Лента результата читает портфель
+   * из конфига, поэтому пересчитывать нечего — достаточно перезапросить список стратегий и
+   * данные портфеля.
+   */
+  async linkPortfolio(systemId: string, portfolioId: string): Promise<void> {
+    await firstValueFrom(
+      this.http.put(`${this.base(systemId)}/portfolio`, { portfolioId }, withToastSuccess('Портфель привязан')),
+    );
+    this.strategyList.reload();
+    this.revision.bump();
+  }
+
   /** Обзор одной стратегии; ресурс перезапрашивается при смене `systemId` и после мутаций */
   overview(systemId: Signal<string>) {
     return httpResource(
