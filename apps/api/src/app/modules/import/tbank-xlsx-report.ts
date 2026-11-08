@@ -60,6 +60,7 @@ const TRADE_COL = {
 /** Колонки раздела «2. Операции с денежными средствами» */
 const CASH_COL = {
   date: 1,
+  time: 11,
   settleDate: 23,
   operation: 38,
   credit: 53,
@@ -184,18 +185,33 @@ interface CorpActionCredit {
   amount: number;
   reference?: string;
   name?: string;
+  currency: string;
+  time?: string;
 }
 interface TaxDebit {
   date: string;
-  isin: string;
-  amount: number;
+  isin?: string;
+  /** списание (удержание) и зачисление (возврат) из колонок отчёта */
+  debit: number;
+  credit: number;
+  operation: string;
+  currency: string;
+  time?: string;
+  used?: boolean;
 }
 
-function depositOrWithdrawRow(date: string, tradeType: 'Deposit' | 'Withdraw', amount: number): RawRow {
+function depositOrWithdrawRow(
+  date: string,
+  tradeType: 'Deposit' | 'Withdraw',
+  amount: number,
+  currency: string,
+  time?: string,
+): RawRow {
   return {
     date,
+    ...(time ? { time } : {}),
     tradeType,
-    currency: 'RUB',
+    currency,
     quantity: '1',
     price: amount.toString(),
     fee: '0',
@@ -203,26 +219,42 @@ function depositOrWithdrawRow(date: string, tradeType: 'Deposit' | 'Withdraw', a
   };
 }
 
+/** Код валюты в подзаголовке блока раздела 2 («RUB», «USD», «CNY»): строка только с кодом в первой колонке */
+const CURRENCY_BLOCK_RE = /^[A-Z]{3}$/;
+
+/** Время операции из колонки «Время совершения» («11:14:29», МСК) */
+function cashTime(ws: ExcelJS.Worksheet, row: number): string | undefined {
+  const t = cellText(ws, row, CASH_COL.time);
+  return /^\d{1,2}:\d{2}(:\d{2})?$/.test(t) ? t : undefined;
+}
+
 /** Раздел «2. Операции с денежными средствами» → RawRow[] (без денежного хвоста сделок) */
 function parseCashSection(ws: ExcelJS.Worksheet, from: number, to: number): RawRow[] {
   const out: RawRow[] = [];
   const credits: CorpActionCredit[] = [];
   const taxes: TaxDebit[] = [];
+  // раздел разбит на блоки по валютам: перед таблицей стоит строка с кодом валюты
+  let currency = 'RUB';
 
   for (let r = from; r <= to; r++) {
     const op = cellText(ws, r, CASH_COL.operation);
-    if (!op) continue;
+    if (!op) {
+      const block = cellText(ws, r, CASH_COL.date);
+      if (CURRENCY_BLOCK_RE.test(block)) currency = block;
+      continue;
+    }
 
     const date = cellText(ws, r, CASH_COL.date) || cellText(ws, r, CASH_COL.settleDate);
     const credit = cellNum(ws, r, CASH_COL.credit);
     const debit = cellNum(ws, r, CASH_COL.debit);
     const note = cellText(ws, r, CASH_COL.note);
     const opLower = op.toLowerCase();
+    const time = cashTime(ws, r);
 
     if (op === 'Пополнение счета') {
-      out.push(depositOrWithdrawRow(date, 'Deposit', credit));
+      out.push(depositOrWithdrawRow(date, 'Deposit', credit, currency, time));
     } else if (opLower.includes('списание со счета') || opLower.includes('вывод')) {
-      out.push(depositOrWithdrawRow(date, 'Withdraw', debit));
+      out.push(depositOrWithdrawRow(date, 'Withdraw', debit, currency, time));
     } else if (op === 'Выплата доходов по корпоративным действиям') {
       const isin = note.match(ISIN_IN_NOTE_RE)?.[1];
       if (isin) {
@@ -236,31 +268,61 @@ function parseCashSection(ws: ExcelJS.Worksheet, from: number, to: number): RawR
           amount: credit,
           reference,
           name,
+          currency,
+          time,
         });
       }
-    } else if (op.startsWith('Налог')) {
-      const isin = note.match(ISIN_IN_NOTE_RE)?.[1];
-      if (isin) taxes.push({ date, isin, amount: debit });
+    } else if (opLower.includes('налог')) {
+      taxes.push({ date, isin: note.match(ISIN_IN_NOTE_RE)?.[1], debit, credit, operation: op, currency, time });
+    } else if (opLower.includes('комисси') && !opLower.includes('за сделки')) {
+      // комиссия, не привязанная к сделке (обслуживание и т. п.); «Комиссия за сделки» — денежный
+      // хвост сделок, она уже внутри самой сделки. Знак: списание — расход, зачисление — возврат
+      const amount = new Decimal(debit).minus(credit);
+      if (!amount.isZero()) {
+        out.push({ date, ...(time ? { time } : {}), tradeType: 'Fee', currency, quantity: '1', price: amount.toString(), fee: '0', note: op });
+      }
     }
     // «Покупка/продажа», «Комиссия за сделки», «DFP/RFP» — денежный хвост сделок
     // из раздела 1.1 (комиссии уже учтены в самой сделке) — пропускаем намеренно.
   }
 
   for (const c of credits) {
-    const tax = taxes.find((t) => t.isin === c.isin && t.date === c.date);
-    const net = tax ? c.amount - tax.amount : c.amount;
+    // налог по выплате: тот же ISIN и день, удержание (списание) без возврата
+    const tax = taxes.find((t) => !t.used && t.isin === c.isin && t.date === c.date && t.debit > 0 && t.credit === 0);
+    if (tax) tax.used = true;
+    const net = tax ? c.amount - tax.debit : c.amount;
     out.push({
       date: c.date,
+      ...(c.time ? { time: c.time } : {}),
       tradeType: c.kind,
       // тикера у выплаты нет — только ISIN; идёт отдельным идентификатором
       identifiers: { isin: c.isin },
       name: c.name,
-      currency: 'RUB',
+      currency: c.currency,
       quantity: '1',
       price: net.toString(),
       fee: '0',
       note: `${c.kind === 'Dividend' ? 'Дивиденд' : 'Купон'} нетто (ISIN ${c.isin}${tax ? ', налог учтён' : ''})`,
       brokerRef: c.reference,
+    });
+  }
+
+  // Остальные налоги — отдельные записи Tax (паритет с API): без ISIN, без выплаты в отчёте и
+  // возвраты/корректировки. Знак как у API (П2): удержание — положительная сумма, возврат
+  // (зачисление) — отрицательная; кэш вычитает налог, минус на минус даёт приход.
+  for (const t of taxes) {
+    if (t.used) continue;
+    const amount = new Decimal(t.debit).minus(t.credit);
+    if (amount.isZero()) continue;
+    out.push({
+      date: t.date,
+      ...(t.time ? { time: t.time } : {}),
+      tradeType: 'Tax',
+      currency: t.currency,
+      quantity: '1',
+      price: amount.toString(),
+      fee: '0',
+      note: amount.isNegative() ? `${t.operation} (возврат)` : t.operation,
     });
   }
 

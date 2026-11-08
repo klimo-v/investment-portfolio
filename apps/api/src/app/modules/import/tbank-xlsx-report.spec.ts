@@ -3,7 +3,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import ExcelJS from 'exceljs';
 import { parseTbankXlsx } from './tbank-xlsx-report';
-import { normalizeRawRows, type RawRow } from '@core';
+import { mapTbankOperations, normalizeRawRows, type RawRow } from '@core';
 
 /**
  * Тест парсера xlsx-отчёта Т-Банка на реальном отчёте пользователя
@@ -157,5 +157,80 @@ describe('parseTbankXlsx — синтетический документ (куп
     expect(coupon?.identifiers).toEqual({ isin: 'RU000TEST001' });
     expect(coupon?.price).toBe('870');
     expect(rows.filter((r) => r.tradeType === 'Tax')).toHaveLength(0);
+  });
+});
+
+/** Раздел 2 из заданных строк: [дата, время, операция, зачисление, списание, примечание] с блоками по валютам */
+function buildCashWorkbook(blocks: Record<string, Array<[string, string, string, number, number, string?]>>): ExcelJS.Worksheet {
+  const ws = new ExcelJS.Workbook().addWorksheet('rep');
+  ws.getCell(1, 1).value = '2. Операции с денежными средствами';
+  let r = 2;
+  for (const [currency, items] of Object.entries(blocks)) {
+    ws.getCell(r++, 1).value = currency;
+    ws.getCell(r, 1).value = 'Дата';
+    ws.getCell(r, 38).value = 'Операция';
+    r++;
+    for (const [date, time, op, credit, debit, note] of items) {
+      ws.getCell(r, 1).value = date;
+      ws.getCell(r, 11).value = time;
+      ws.getCell(r, 23).value = date;
+      ws.getCell(r, 38).value = op;
+      ws.getCell(r, 53).value = credit;
+      ws.getCell(r, 66).value = debit;
+      if (note) ws.getCell(r, 77).value = note;
+      r++;
+    }
+  }
+  ws.getCell(r, 1).value = '3.1 Движение по ценным бумагам инвестора';
+  return ws;
+}
+
+describe('parseTbankXlsx — паритет с API: налоги без ISIN, возвраты, комиссия, валюта и время (синтетика)', () => {
+  const rows = parseTbankXlsx(
+    buildCashWorkbook({
+      RUB: [
+        ['02.05.2025', '11:14:29', 'Пополнение счета', 1000, 0],
+        ['06.05.2025', '10:00:00', 'Корректировка налога', 2689, 0], // возврат
+        ['06.05.2025', '10:00:01', 'Корректировка налога', 0, 2689], // повторное удержание
+        ['07.05.2025', '09:00:00', 'Налог на доход', 0, 500], // налог без ISIN
+        ['22.07.2026', '04:00:00', 'Списание комиссии за обслуживание', 0, 390],
+        ['22.07.2026', '04:00:01', 'Комиссия за сделки', 0, 9.51], // хвост сделки — пропускается
+      ],
+      CNY: [['04.09.2024', '07:10:00', 'Пополнение счета', 19860.18, 0]],
+    }),
+  );
+  const byType = (t: string) => rows.filter((r) => r.tradeType === t);
+
+  it('возврат налога — Tax с отрицательной суммой, удержание — положительной (как у API)', () => {
+    expect(byType('Tax').map((r) => r.price)).toEqual(['-2689', '2689', '500']);
+    expect(byType('Tax')[0].note).toContain('возврат');
+  });
+
+  it('комиссия обслуживания — Fee; «Комиссия за сделки» не тянется', () => {
+    expect(byType('Fee').map((r) => r.price)).toEqual(['390']);
+  });
+
+  it('валюта берётся из блока раздела, время — из «Время совершения»', () => {
+    const [rubDep, cnyDep] = byType('Deposit');
+    expect(rubDep.currency).toBe('RUB');
+    expect(rubDep.time).toBe('11:14:29');
+    expect(cnyDep.currency).toBe('CNY');
+    expect(cnyDep.price).toBe('19860.18');
+  });
+
+  it('те же суммы и знаки, что у API-маппера для тех же операций', () => {
+    const item = (id: string, type: string, units: string) => ({
+      id, date: '2025-05-06T07:00:00Z', type: `OPERATION_TYPE_${type}`, state: 'OPERATION_STATE_EXECUTED', payment: { currency: 'rub', units, nano: 0 },
+    });
+    const api = mapTbankOperations(
+      [item('a', 'TAX_CORRECTION', '2689'), item('b', 'TAX_CORRECTION', '-2689'), item('c', 'TAX', '-500'), item('d', 'SERVICE_FEE', '-390')],
+      'acc',
+    );
+    expect(api.map((r) => [r.tradeType, r.price])).toEqual([
+      ['tax', '-2689'],
+      ['tax', '2689'],
+      ['tax', '500'],
+      ['fee', '390'],
+    ]);
   });
 });
