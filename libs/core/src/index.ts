@@ -19,3 +19,4 @@ export * from './lib/price-history';
 export * from './lib/valuation';
 export * from './lib/twr';
 export * from './lib/period-performance';
+export * from './lib/benchmark';

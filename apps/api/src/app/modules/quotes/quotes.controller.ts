@@ -1,5 +1,4 @@
-import { Body, Controller, Get, Param, Post, Query } from '@nestjs/common';
-import type { BenchmarkPoint } from '@core';
+import { Body, Controller, Get, Param, Post } from '@nestjs/common';
 import type { QuoteRow } from '../../../db/schema';
 import { QuotesService } from './quotes.service';
 
@@ -29,18 +28,5 @@ export class QuotesController {
   @Post(':instrumentId/resolve')
   resolveViaApi(@Param('instrumentId') instrumentId: string): Promise<{ price: string; source: string }> {
     return this.service.resolveViaApi(instrumentId);
-  }
-
-  /**
-   * История индекса-бенчмарка (по умолчанию IMOEX) за период — для линии
-   * «Портфель vs рынок» на дашборде. Даты в формате YYYY-MM-DD.
-   */
-  @Get('benchmark')
-  benchmark(
-    @Query('from') from: string,
-    @Query('till') till: string,
-    @Query('secid') secid?: string,
-  ): Promise<BenchmarkPoint[]> {
-    return this.service.benchmark(from, till, secid);
   }
 }

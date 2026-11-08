@@ -1,7 +1,10 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { parseIssHistory, type IssHistoryResponse } from './moex-history.provider';
+import { MoexHistoryProvider, parseIssHistory, type IssHistoryResponse } from './moex-history.provider';
+import { CbrHistoryProvider } from './cbr-history.provider';
+import { BinanceHistoryProvider } from './binance-history.provider';
+import type { HistoryTarget } from './price-history.provider';
 import { parseCbrDynamic } from './cbr-history.provider';
 import { parseKlines } from './binance-history.provider';
 
@@ -94,5 +97,29 @@ describe('Binance klines', () => {
     const points = parseKlines(JSON.parse(fixture('binance-btc-klines.json')));
     expect(points[0]).toMatchObject({ date: '2026-11-04', price: '80504.01', currency: 'USD', source: 'binance' });
     expect(points.length).toBeGreaterThanOrEqual(2);
+  });
+});
+
+
+/**
+ * Фикстура индекса составлена ВРУЧНУЮ в формате ответа ISS (history/engines/stock/markets/index/
+ * securities/{SECID}.json, колонки TRADEDATE, CLOSE) — без сети живой ответ не снимался.
+ */
+describe('MOEX ISS history: индексы', () => {
+  it('CLOSE как есть, валюта IDX; нулевые и пустые закрытия пропускаются', () => {
+    const points = parseIssHistory(iss('iss-index-history.json'), 'index');
+    expect(points.map((p) => [p.date, p.price])).toEqual([
+      ['2026-10-30', '12000.5'],
+      ['2026-11-02', '12060.55'],
+      ['2026-11-06', '12120.6'],
+    ]);
+    expect(points[0]).toMatchObject({ currency: 'IDX', accruedInterest: null, source: 'moex' });
+  });
+
+  it('индексы обслуживает только MOEX-провайдер', () => {
+    const idx: HistoryTarget = { instrumentId: 'index:MCFTRR', ticker: 'MCFTRR', kind: 'index', type: 'Index', currency: 'IDX', marketSource: 'moex' };
+    expect(new MoexHistoryProvider().supports(idx)).toBe(true);
+    expect(new CbrHistoryProvider().supports(idx)).toBe(false);
+    expect(new BinanceHistoryProvider().supports(idx)).toBe(false);
   });
 });

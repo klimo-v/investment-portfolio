@@ -1,4 +1,6 @@
 import { Module } from '@nestjs/common';
+import { BenchmarkController } from './benchmark.controller';
+import { BenchmarkService } from './benchmark.service';
 import { QuotesController } from './quotes.controller';
 import { QuotesService } from './quotes.service';
 import { MoexProvider } from './moex.provider';
@@ -11,7 +13,7 @@ import { PRICE_HISTORY_PROVIDERS } from './price-history.provider';
 import { PriceHistoryService } from './price-history.service';
 
 @Module({
-  controllers: [QuotesController],
+  controllers: [QuotesController, BenchmarkController],
   providers: [
     QuotesService,
     MoexProvider,
@@ -26,6 +28,7 @@ import { PriceHistoryService } from './price-history.service';
       inject: [MoexHistoryProvider, CbrHistoryProvider, BinanceHistoryProvider],
     },
     PriceHistoryService,
+    BenchmarkService,
   ],
   exports: [QuotesService, PriceHistoryService],
 })

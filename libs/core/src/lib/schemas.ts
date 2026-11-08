@@ -247,12 +247,22 @@ export const DashboardSummarySchema = z.object({
 });
 export type DashboardSummary = z.infer<typeof DashboardSummarySchema>;
 
-/** Точка истории бенчмарка (индекс IMOEX) — для линии «Портфель vs рынок» */
-export const BenchmarkPointSchema = z.object({
-  date: z.string(), // YYYY-MM-DD
-  close: z.number(),
+/** Ряд ориентира на базе 100 на первый день периода (libs/core/benchmark.ts) */
+export const BenchmarkSeriesSchema = z.object({
+  secid: z.string(),
+  label: z.string(),
+  /** пояснение под переключателем: что это за индекс и чем он честен/нечестен */
+  note: z.string(),
+  series: z.array(z.object({ date: z.string(), index: z.number() })),
 });
-export type BenchmarkPoint = z.infer<typeof BenchmarkPointSchema>;
+export type BenchmarkSeriesDto = z.infer<typeof BenchmarkSeriesSchema>;
+
+/** Ответ GET /api/benchmark: выбранный индекс и линия денежного рынка; null — данных нет (источник недоступен) */
+export const BenchmarkResponseSchema = z.object({
+  index: BenchmarkSeriesSchema.nullable(),
+  moneyMarket: BenchmarkSeriesSchema.nullable(),
+});
+export type BenchmarkResponse = z.infer<typeof BenchmarkResponseSchema>;
 
 /** Статус сделки: открыта / частично закрыта / закрыта по остатку количества */
 export const TradeStatus = z.enum(['Open', 'Partial', 'Closed']);

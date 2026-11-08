@@ -18,13 +18,16 @@ export interface HistoryPoint {
   source: PriceSource;
 }
 
-/** Что именно догружаем: бумага из справочника или курс валюты (`kind: 'fx'`, ticker = код валюты) */
+/**
+ * Что именно догружаем: бумага из справочника, курс валюты (`kind: 'fx'`, ticker = код валюты)
+ * или ряд ориентира (`kind: 'index'`, ticker = SECID индекса MOEX; id вида `index:MCFTRR`).
+ */
 export interface HistoryTarget {
   /** id в price_history: instruments.id или «fx:USD» */
   instrumentId: string;
   ticker: string;
-  kind: 'instrument' | 'fx';
-  type: 'Stock' | 'Bond' | 'ETF' | 'Currency' | 'Crypto' | 'Cash' | 'Future' | 'Fx';
+  kind: 'instrument' | 'fx' | 'index';
+  type: 'Stock' | 'Bond' | 'ETF' | 'Currency' | 'Crypto' | 'Cash' | 'Future' | 'Fx' | 'Index';
   currency: string;
   marketSource: 'moex' | 'cbr' | 'binance' | 'manual';
 }

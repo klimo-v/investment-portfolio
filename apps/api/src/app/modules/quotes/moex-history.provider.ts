@@ -17,7 +17,7 @@ export interface IssHistoryResponse {
   history?: IssHistorySection;
 }
 
-export type IssHistoryKind = 'shares' | 'bonds' | 'selt' | 'forts';
+export type IssHistoryKind = 'shares' | 'bonds' | 'selt' | 'forts' | 'index';
 
 const PAGE = 100;
 
@@ -94,6 +94,16 @@ export function parseIssHistory(
         accruedCurrency: acc === null ? null : faceUnitToCurrency(iCurrencyId >= 0 ? row[iCurrencyId] : null),
         source: 'moex',
       });
+    } else if (kind === 'index') {
+      // индекс: CLOSE в пунктах (у RUSFAR — ставка, % годовых); своей валюты нет
+      points.push({
+        date,
+        price: new Decimal(close).toString(),
+        currency: 'IDX',
+        accruedInterest: null,
+        accruedCurrency: null,
+        source: 'moex',
+      });
     } else if (kind === 'forts') {
       points.push({
         date,
@@ -119,6 +129,7 @@ export function parseIssHistory(
 }
 
 function kindOf(target: HistoryTarget): IssHistoryKind | null {
+  if (target.kind === 'index') return 'index';
   if (target.kind !== 'instrument') return null;
   if (target.type === 'Future') return 'forts';
   if (target.marketSource !== 'moex') return null;
@@ -133,6 +144,7 @@ const PATH: Record<IssHistoryKind, string> = {
   bonds: 'stock/markets/bonds',
   selt: 'currency/markets/selt',
   forts: 'futures/markets/forts',
+  index: 'stock/markets/index',
 };
 
 const COLUMNS: Record<IssHistoryKind, string> = {
@@ -140,6 +152,7 @@ const COLUMNS: Record<IssHistoryKind, string> = {
   bonds: 'TRADEDATE,BOARDID,CLOSE,ACCINT,FACEVALUE,FACEUNIT,CURRENCYID,VALUE',
   selt: 'TRADEDATE,BOARDID,CLOSE',
   forts: 'TRADEDATE,SETTLEPRICE,CLOSE',
+  index: 'TRADEDATE,CLOSE',
 };
 
 @Injectable()
