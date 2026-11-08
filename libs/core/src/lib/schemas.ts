@@ -610,6 +610,8 @@ export const PeriodPerformanceSchema = z.object({
   }),
   xirrPct: z.number().nullable(),
   dietzPct: z.number().nullable(),
+  /** максимальная просадка ряда TWR, % (отрицательное число или 0); null — меньше двух точек или нет процентов */
+  maxDrawdownPct: z.number().nullable(),
   averageCapitalRub: decimalString,
 });
 export type PeriodPerformanceDto = z.infer<typeof PeriodPerformanceSchema>;
@@ -656,7 +658,7 @@ export const PerformanceSchema = z.object({
     }),
   ),
   /** инструменты, оценённые не по цене дня на конец периода (перенос цены / нет цены) */
-  carried: z.array(z.object({ instrumentId: z.string(), reason: z.enum(['no-price', 'no-fx', 'carried']), priceDate: z.string().nullable() })),
+  carried: z.array(z.object({ instrumentId: z.string(), ticker: z.string(), reason: z.enum(['no-price', 'no-fx', 'carried']), priceDate: z.string().nullable() })),
 });
 export type PerformanceDto = z.infer<typeof PerformanceSchema>;
 

@@ -128,7 +128,7 @@ export class BenchmarkChart {
           ...(index
             ? [
                 {
-                  label: index.secid,
+                  label: index.label,
                   data: byDate(index.series),
                   borderColor: this.cc().benchmark,
                   backgroundColor: this.cc().benchmark,

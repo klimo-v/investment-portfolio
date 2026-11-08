@@ -189,6 +189,24 @@ describe('periodPerformance — инварианты на ряде из журн
     expect(part.twr.series[0]).toEqual({ date: '2026-01-31', index: 100 });
   });
 
+  it('просадка ряда TWR: наибольшее падение от пика до дна, % (≤ 0); рост без откатов — 0', () => {
+    const rising = periodPerformance(series('portfolio', '2026-02-09'), { contour: 'wealth' });
+    expect(rising.maxDrawdownPct).toBe(0);
+    const f = PERIOD_FIXTURES.find((x) => x.name === 'midDepositBeforeFlat') as PeriodFixture;
+    // индекс 100 → 110 → 110 → 110: падений нет
+    expect(periodPerformance(seriesOf(f), { from: '2025-01-01', contour: 'wealth' }).maxDrawdownPct).toBe(0);
+    const falling: PeriodFixture = {
+      ...f,
+      points: [
+        { date: '2024-12-31', marketValueRub: 100_000, totalRub: 0, netContributionsRub: 100_000 },
+        { date: '2025-03-01', marketValueRub: 120_000, totalRub: 20_000, netContributionsRub: 100_000 },
+        { date: '2025-06-01', marketValueRub: 90_000, totalRub: -10_000, netContributionsRub: 100_000 },
+      ],
+    };
+    // пик 120, дно 90 → −25%
+    expect(periodPerformance(seriesOf(falling), { from: '2025-01-01', contour: 'wealth' }).maxDrawdownPct).toBeCloseTo(-25, 6);
+  });
+
   it('«Всё время»: база нулевая, поток первого дня — весь стартовый капитал', () => {
     const perf = periodPerformance(series('portfolio'), { contour: 'wealth' });
     expect(perf.baseDate).toBeNull();

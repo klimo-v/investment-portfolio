@@ -1,5 +1,5 @@
 import { ChangeDetectionStrategy, Component, computed, inject, signal } from '@angular/core';
-import { BENCHMARK_INDEXES, DEFAULT_BENCHMARK, maxDrawdown, type Cash, type Effectiveness } from '@core';
+import { BENCHMARK_INDEXES, DEFAULT_BENCHMARK, type Cash, type Effectiveness } from '@core';
 import { StateMessage } from '@web-shared';
 import { summaryResource, type SummaryFilter } from '../../entities/summary/summary.api';
 import { benchmarkResource, type BenchmarkQuery } from '../../entities/benchmark/benchmark.api';
@@ -317,12 +317,8 @@ export class DashboardPage {
     (this.performance.value()?.total.twr.series ?? []).map((p) => ({ date: p.date, valueRub: p.index })),
   );
 
-  /** Просадка индекса доходности в процентах; null — меньше двух дней, считать не из чего */
-  protected readonly maxDrawdownPct = computed(() => {
-    const v = this.portfolioValues();
-    if (v.length < 2) return null;
-    return maxDrawdown(v.map((r) => r.valueRub)) * 100;
-  });
+  /** Просадка ряда TWR в процентах — считает бэк вместе с рядом (null — меньше двух дней или процентов нет) */
+  protected readonly maxDrawdownPct = computed(() => this.performance.value()?.total.maxDrawdownPct ?? null);
 
   /** Выбранный ориентир живёт в адресной строке (?benchmark=), как и остальной фильтр дашборда */
   private readonly urlParams = queryParams();

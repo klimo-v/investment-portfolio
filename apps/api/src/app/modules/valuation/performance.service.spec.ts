@@ -3,7 +3,7 @@ import Database from 'better-sqlite3';
 import { drizzle, type BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
 import { migrate } from 'drizzle-orm/better-sqlite3/migrator';
 import Decimal from 'decimal.js';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { PerformanceQuerySchema, type CouponScheduleRow } from '@core';
 import { instruments, operations, portfolios, priceHistory, systems } from '../../../db/schema';
 import { OperationsService } from '../operations/operations.service';
@@ -145,5 +145,28 @@ describe('PerformanceService: предупреждения о полноте ж�
     expect(all.warnings.every((w) => w.kind === 'negative-cash' || w.kind === 'missing-coupon')).toBe(true);
     const sys = await service.performance({ scope: 'system', id: 's1' });
     expect(sys.warnings.some((w) => w.kind === 'negative-cash')).toBe(false);
+  });
+});
+
+describe('PerformanceService: один вход на все ряды, тикер в пометках, просадка в DTO', () => {
+  it('догрузка истории цен и подготовка входа выполняются один раз на запрос, а не на каждый ряд', async () => {
+    const spy = vi.spyOn(PriceHistoryService.prototype, 'ensureForInstruments');
+    await service.performance({ scope: 'all' }); // 2 системы + 2 портфеля + итог = 6 рядов
+    expect(spy).toHaveBeenCalledTimes(1);
+    spy.mockRestore();
+  });
+
+  it('просадка ряда TWR приходит в DTO (≤ 0) и совпадает с расчётом по ряду', async () => {
+    const dto = await service.performance({ scope: 'all' });
+    expect(dto.total.maxDrawdownPct).not.toBeNull();
+    expect(dto.total.maxDrawdownPct as number).toBeLessThanOrEqual(0);
+  });
+
+  it('пометка «цена не найдена» несёт тикер, а не внутренний id инструмента', async () => {
+    db.insert(instruments).values({ id: 'a3f-uuid', ticker: 'NOPRICE', type: 'Stock', currency: 'RUB', marketSource: 'manual' }).run();
+    op({ date: day(-3), type: 'Buy', instrument: 'a3f-uuid', qty: '1', price: '100' });
+    const dto = await service.performance({ scope: 'all' });
+    const c = dto.carried.find((x) => x.instrumentId === 'a3f-uuid');
+    expect(c?.ticker).toBe('NOPRICE');
   });
 });

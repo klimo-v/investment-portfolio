@@ -170,7 +170,18 @@ export class SummaryKpis {
   }
 
   protected noMetric(reason: string | null | undefined): string {
-    return reason === 'no-capital' ? 'нет капитала за период' : reason === 'xirr-undefined' ? 'не определена для этих потоков' : '';
+    switch (reason) {
+      case 'no-capital':
+        return 'нет капитала за период';
+      case 'negative-capital':
+        return 'капитал уходил в минус — журнал неполон (нет пополнения или перевода)';
+      case 'xirr-undefined':
+        return 'не определена для этих потоков';
+      case 'no-data':
+        return 'в выбранном периоде нет данных';
+      default:
+        return '';
+    }
   }
 
   protected readonly money = formatRub;

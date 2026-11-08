@@ -38,8 +38,7 @@ export class PerformanceService {
   ) {}
 
   async performance(query: PerformanceQuery): Promise<PerformanceDto> {
-    const today = new Date().toISOString().slice(0, 10);
-    const till = query.till && query.till < today ? query.till : today;
+    const till = this.valuation.cap(query.till);
     const systemId = query.scope === 'system' ? query.id : undefined;
     const portfolioId = query.scope === 'portfolio' ? query.id : query.scope === 'system' ? query.portfolioId : undefined;
     const contour: PerformanceContour = systemId ? 'positions' : 'wealth';
@@ -49,8 +48,13 @@ export class PerformanceService {
     const payouts = (extra: { systemId?: string; portfolioId?: string }) =>
       payoutsInPeriod(ops, { from: query.from, till, ...extra });
 
-    // ряд — всегда с начала журнала: `from` задаёт период расчёта, а не окно запроса
-    const base = await this.valuation.series({ groupBy: 'system', ...filtered, till });
+    // Вход (догрузка истории цен, котировки, курсы) готовим ОДИН раз на все ряды запроса: сеть и ensure —
+    // самое дорогое, а ряды по системам и счетам считаются из того же входа чистой функцией.
+    // Ряд — всегда с начала журнала: `from` задаёт период расчёта, а не окно запроса.
+    const inputs = await this.valuation.prepare(till);
+    const series = (q: { groupBy: 'system' | 'portfolio'; systemId?: string; portfolioId?: string }) =>
+      this.valuation.build(inputs, { ...q, till });
+    const base = series({ groupBy: 'system', ...filtered });
     const total = periodPerformance(base, { from: query.from, contour, payoutsRub: payouts(filtered) });
 
     const systemNames = new Map(this.db.select().from(systems).all().map((s) => [s.id, s.name]));
@@ -67,14 +71,14 @@ export class PerformanceService {
       }),
     }));
 
-    const portfolioKeys = (await this.valuation.series({ groupBy: 'portfolio', ...filtered, till })).groups.map((g) => g.key);
+    const portfolioKeys = series({ groupBy: 'portfolio', ...filtered }).groups.map((g) => g.key);
     const byPortfolio = [];
     for (const pid of portfolioKeys) {
-      const series = await this.valuation.series({ groupBy: 'system', systemId, portfolioId: pid, till });
+      const pfSeries = series({ groupBy: 'system', systemId, portfolioId: pid });
       byPortfolio.push({
         id: pid,
         name: portfolioNames.get(pid) ?? pid,
-        performance: periodPerformance(series, {
+        performance: periodPerformance(pfSeries, {
           from: query.from,
           contour,
           payoutsRub: payouts({ systemId, portfolioId: pid }),
@@ -82,6 +86,7 @@ export class PerformanceService {
       });
     }
 
+    const tickers = new Map(this.db.select().from(instruments).all().map((i) => [i.id, i.ticker]));
     const warnings = await this.completeness(ops, filtered, till, contour === 'wealth' ? base : null);
 
     return PerformanceSchema.parse({
@@ -93,7 +98,7 @@ export class PerformanceService {
       bySystem,
       byPortfolio,
       warnings: warnings.map((w) => ({ ...w, inPeriod: warningTouchesPeriod(w, query.from, till) })),
-      carried: carriedAtEnd(base),
+      carried: carriedAtEnd(base).map((c) => ({ ...c, ticker: tickers.get(c.instrumentId) ?? c.instrumentId })),
     });
   }
 

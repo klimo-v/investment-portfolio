@@ -1,11 +1,20 @@
 import { Inject, Injectable } from '@nestjs/common';
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
-import { cashSeries, fxInstrumentId, isFxInstrumentId, NO_INSTRUMENT_GROUP, ValuationSeriesSchema, valuationEvents, valuationSeries, type PriceObservation, type ValuationQuery, type ValuationSeriesDto } from '@core';
+import { cashSeries, fxInstrumentId, isFxInstrumentId, NO_INSTRUMENT_GROUP, ValuationSeriesSchema, valuationEvents, valuationSeries, type Operation, type PriceObservation, type ValuationQuery, type ValuationSeriesDto } from '@core';
 import { instruments, portfolios, quotes, systems } from '../../../db/schema';
 import { DB } from '../../db/drizzle.module';
 import { OperationsService } from '../operations/operations.service';
 import { PriceHistoryService } from '../quotes/price-history.service';
 import { QuotesService } from '../quotes/quotes.service';
+
+/** Подготовленный вход расчёта рядов (см. ValuationService.prepare) */
+export interface SeriesInputs {
+  till: string;
+  ops: Operation[];
+  observations: PriceObservation[];
+  /** по фильтру нет ни одной сделки — ряда нет */
+  empty: boolean;
+}
 
 /**
  * Сервис дневных рядов оценки. Только собирает вход — журнал, историю цен (с догрузкой
@@ -22,21 +31,35 @@ export class ValuationService {
     private readonly quotesService: QuotesService,
   ) {}
 
+  /** Ряд оценки под запрос: подготовка входа (сеть, история цен) + чистый расчёт */
   async series(query: ValuationQuery): Promise<ValuationSeriesDto> {
-    const today = new Date().toISOString().slice(0, 10);
-    const till = query.till && query.till < today ? query.till : today;
+    const till = this.cap(query.till);
+    const inputs = await this.prepare(till, { systemId: query.systemId, portfolioId: query.portfolioId });
+    return this.build(inputs, query);
+  }
 
+  /** Конец периода: не позже сегодня */
+  cap(till: string | undefined): string {
+    const today = new Date().toISOString().slice(0, 10);
+    return till && till < today ? till : today;
+  }
+
+  /**
+   * Вход расчёта рядов: журнал (под фильтр), история цен с догрузкой недостающего, сегодняшние
+   * котировки и курсы. Вынесено из series(), чтобы расчёт с несколькими рядами (доходность по
+   * системам и счетам) готовил вход ОДИН раз: догрузка истории и сетевые курсы — самое дорогое.
+   */
+  async prepare(till: string, filter: { systemId?: string; portfolioId?: string } = {}): Promise<SeriesInputs> {
+    const today = new Date().toISOString().slice(0, 10);
     const ops = this.operations
       .list()
       .filter(
         (o) =>
-          (!query.systemId || o.systemId === query.systemId) &&
-          (!query.portfolioId || o.portfolioId === query.portfolioId),
+          (!filter.systemId || o.systemId === filter.systemId) &&
+          (!filter.portfolioId || o.portfolioId === filter.portfolioId),
       );
     const traded = ops.filter((o) => o.instrumentId && o.operationType !== 'Transfer' && o.date <= till);
-    if (traded.length === 0) {
-      return ValuationSeriesSchema.parse({ from: query.from ?? null, till, groupBy: query.groupBy, groups: [], netContributionsRub: [] });
-    }
+    if (traded.length === 0) return { till, ops, observations: [], empty: true };
 
     const instrumentIds = [...new Set(traded.map((o) => o.instrumentId as string))];
     // начало загрузки — своё у каждой бумаги: дата её первой операции
@@ -86,11 +109,23 @@ export class ValuationService {
       }
     }
 
+    return { till, ops, observations, empty: false };
+  }
+
+  /** Чистая сборка DTO из подготовленного входа под запрос (без сети); фильтры системы/портфеля — из запроса */
+  build(inputs: SeriesInputs, query: ValuationQuery): ValuationSeriesDto {
+    const { till, ops, observations } = inputs;
+    if (inputs.empty) {
+      return ValuationSeriesSchema.parse({ from: query.from ?? null, till, groupBy: query.groupBy, groups: [], netContributionsRub: [] });
+    }
+    const futureIds = this.operations.futureIds();
     const result = valuationSeries(ops, observations, {
       till,
       from: query.from,
       groupBy: query.groupBy,
-      futureIds: this.operations.futureIds(),
+      systemId: query.systemId,
+      portfolioId: query.portfolioId,
+      futureIds,
     });
 
     const names = this.nameOf(query.groupBy);
@@ -100,7 +135,9 @@ export class ValuationService {
     const events = valuationEvents(ops, {
       from: result.from ?? undefined,
       till,
-      futureIds: this.operations.futureIds(),
+      systemId: query.systemId,
+      portfolioId: query.portfolioId,
+      futureIds,
     }).map((e) => ({ ...e, name: e.instrumentId ? (tickers.get(e.instrumentId) ?? e.instrumentId) : (tickers.get(NO_INSTRUMENT_GROUP) ?? '') }));
     return ValuationSeriesSchema.parse({
       ...result,

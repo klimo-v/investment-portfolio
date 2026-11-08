@@ -1,5 +1,5 @@
 import Decimal from 'decimal.js';
-import { xirr, type CashFlow } from './metrics';
+import { maxDrawdown, xirr, type CashFlow } from './metrics';
 import type { Operation } from './schemas';
 import { twrLevels } from './twr';
 import { incomeAmountRub, type ValuationSeries } from './valuation';
@@ -114,6 +114,8 @@ export interface PeriodPerformance {
   xirrPct: number | null;
   /** результат / средний капитал (Modified Dietz), % за период */
   dietzPct: number | null;
+  /** максимальная просадка ряда TWR, % (≤ 0); null — меньше двух точек или процентов нет */
+  maxDrawdownPct: number | null;
   /** V_start + Σ w·F, w — доля периода, в течение которой поток работал */
   averageCapitalRub: string;
 }
@@ -196,6 +198,7 @@ export function periodPerformance(series: ValuationSeries, options: PeriodPerfor
     mwr: { kind: 'period', pct: null, reason },
     xirrPct: null,
     dietzPct: null,
+    maxDrawdownPct: null,
     averageCapitalRub: money(ZERO),
   });
   if (days.length === 0 || idxFrom < 0) return empty('no-data');
@@ -287,6 +290,7 @@ export function periodPerformance(series: ValuationSeries, options: PeriodPerfor
     mwr: { kind: annual ? 'annual' : 'period', pct: mwrPct, reason: mwrReason },
     xirrPct,
     dietzPct: dietz,
+    maxDrawdownPct: hasCapital && reliable && seriesPoints.length >= 2 ? maxDrawdown(seriesPoints.map((p) => p.index)) * 100 : null,
     averageCapitalRub: money(averageCapital),
   };
 }
