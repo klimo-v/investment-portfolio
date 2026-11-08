@@ -59,6 +59,36 @@ describe('journalCompleteness: купоны по графику биржи', () 
   });
 });
 
+describe('journalCompleteness: купон без привязки к бумаге и дата фиксации', () => {
+  const base = { schedules: [coupon('2026-04-22', '2026-04-21')], tickers, today: '2026-11-07' };
+  const loose = (date: string, id = 'L') =>
+    mk({ id, date, operationType: 'Coupon', quantity: '1', price: '4000' } as Partial<Operation> & Pick<Operation, 'date' | 'operationType'>);
+
+  it('Coupon без instrumentId в окне закрывает выплату — ложного «пропущен купон» нет', () => {
+    expect(journalCompleteness({ operations: [buy, loose('2026-04-23')], ...base })).toEqual([]);
+  });
+
+  it('одна неатрибутированная операция закрывает ровно одну выплату, не все сразу', () => {
+    const two: CouponScheduleRow[] = [coupon('2026-04-22', '2026-04-21'), { ...coupon('2026-04-22', '2026-04-21'), instrumentId: 'OFZ2' }];
+    const buy2 = mk({ date: '2026-01-05', operationType: 'Buy', instrumentId: 'OFZ2', quantity: '10', price: '1000' });
+    const w = journalCompleteness({ operations: [buy, buy2, loose('2026-04-22')], schedules: two, tickers, today: '2026-11-07' });
+    expect(w).toHaveLength(1);
+  });
+
+  it('проданная накануне фиксации (расчёт T+1 до реестра) купон не получает — предупреждения нет', () => {
+    const sold = mk({ date: '2026-04-20', operationType: 'Sell', instrumentId: 'OFZ', quantity: '100', price: '1000' });
+    expect(journalCompleteness({ operations: [buy, sold], ...base })).toEqual([]); // реестр 21.04
+  });
+
+  it('нет даты фиксации: реестр считается за 3 дня до выплаты — продажа до него не даёт предупреждения, после — даёт', () => {
+    const noRecord = { schedules: [coupon('2026-04-22', null)], tickers, today: '2026-11-07' }; // реестр ≈ 19.04
+    const soldBefore = mk({ date: '2026-04-18', operationType: 'Sell', instrumentId: 'OFZ', quantity: '100', price: '1000' });
+    const soldAfter = mk({ date: '2026-04-20', operationType: 'Sell', instrumentId: 'OFZ', quantity: '100', price: '1000' });
+    expect(journalCompleteness({ operations: [buy, soldBefore], ...noRecord })).toEqual([]);
+    expect(journalCompleteness({ operations: [buy, soldAfter], ...noRecord })).toHaveLength(1);
+  });
+});
+
 describe('journalCompleteness: кэш ниже нуля', () => {
   const day = (i: number, v: string) => ({ date: `2026-03-${String(i).padStart(2, '0')}`, cashRub: v });
 

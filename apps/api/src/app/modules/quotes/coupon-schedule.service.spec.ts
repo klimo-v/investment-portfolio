@@ -3,10 +3,10 @@ import { join } from 'node:path';
 import Database from 'better-sqlite3';
 import { drizzle, type BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
 import { migrate } from 'drizzle-orm/better-sqlite3/migrator';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { couponSchedule, couponScheduleLoads, instruments } from '../../../db/schema';
 import { CouponScheduleService, SCHEDULE_TTL_DAYS } from './coupon-schedule.service';
-import { parseBondizationCoupons, type CouponScheduleProvider, type IssCouponsResponse, type ParsedCoupon } from './coupon-schedule.provider';
+import { MoexCouponProvider, parseBondizationCoupons, type CouponScheduleProvider, type IssCouponsResponse, type ParsedCoupon } from './coupon-schedule.provider';
 
 /** Ответ ISS bondization по SU29015RMFS3, снятый с живого эндпоинта (07.11.2026) */
 const fixture = JSON.parse(readFileSync(join(__dirname, '__fixtures__', 'iss-bondization-ofz.json'), 'utf8')) as IssCouponsResponse;
@@ -93,5 +93,55 @@ describe('CouponScheduleService', () => {
     await svc.ensure(first([['SU29015RMFS3', '2025-07-01']]), '2026-11-20', new Date(later.getTime() + 60_000));
     expect(calls).toHaveLength(2); // успех + одна неудача; вторая попытка отложена
     expect(svc.list(['SU29015RMFS3'])).toHaveLength(6); // старый график на месте
+  });
+});
+
+describe('CouponScheduleService: свежесть графика не зависит от «сегодня»', () => {
+  const args = (till: string) => [new Map([['SU29015RMFS3', '2025-07-01']]), till] as const;
+
+  it('на следующий день (till вырос) график в пределах TTL не перезагружается', async () => {
+    const svc = new CouponScheduleService(db, provider);
+    await svc.ensure(...args('2026-11-07'), NOW);
+    for (let d = 1; d < SCHEDULE_TTL_DAYS; d++) {
+      const day = new Date(NOW.getTime() + d * 86_400_000);
+      await svc.ensure(...args(day.toISOString().slice(0, 10)), day);
+    }
+    expect(calls).toHaveLength(1);
+  });
+
+  it('запрос за прошлый период не сужает кэш: после перезагрузки охват остаётся прежним', async () => {
+    const svc = new CouponScheduleService(db, provider);
+    await svc.ensure(...args('2026-11-07'), NOW);
+    const later = new Date(NOW.getTime() + (SCHEDULE_TTL_DAYS + 1) * 86_400_000);
+    await svc.ensure(...args('2026-06-30'), later);
+    expect(calls[1]).toBe('SU29015RMFS3|2025-07-01|2026-11-07');
+    expect(db.select().from(couponScheduleLoads).get()).toMatchObject({ coveredTill: '2026-11-07' });
+  });
+
+  it('параллельные запросы по одной бумаге делят одну загрузку', async () => {
+    const svc = new CouponScheduleService(db, provider);
+    await Promise.all([svc.ensure(...args('2026-11-07'), NOW), svc.ensure(...args('2026-11-07'), NOW)]);
+    expect(calls).toHaveLength(1);
+  });
+});
+
+describe('MoexCouponProvider: неожиданный ответ биржи', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('HTTP 200 без блока coupons — ошибка (кэш не стирается), пустой блок — просто нет купонов', async () => {
+    const respond = (body: unknown) => vi.fn(async () => ({ ok: true, json: async () => body }) as Response);
+    vi.stubGlobal('fetch', respond({ message: 'maintenance' }));
+    await expect(new MoexCouponProvider().getCoupons('X', '2026-01-01', '2026-02-01')).rejects.toThrow('нет блока coupons');
+    vi.stubGlobal('fetch', respond({ coupons: { columns: ['coupondate', 'recorddate', 'value_rub'], data: [] } }));
+    await expect(new MoexCouponProvider().getCoupons('X', '2026-01-01', '2026-02-01')).resolves.toEqual([]);
+  });
+
+  it('сбой при неожиданном ответе не стирает уже загруженный график', async () => {
+    const svc = new CouponScheduleService(db, provider);
+    await svc.ensure(new Map([['SU29015RMFS3', '2025-07-01']]), '2026-11-07', NOW);
+    const broken: CouponScheduleProvider = { getCoupons: async () => { throw new Error('нет блока coupons'); } };
+    const svc2 = new CouponScheduleService(db, broken);
+    await svc2.ensure(new Map([['SU29015RMFS3', '2025-07-01']]), '2026-11-30', new Date(NOW.getTime() + 10 * 86_400_000));
+    expect(svc2.list(['SU29015RMFS3'])).toHaveLength(6);
   });
 });

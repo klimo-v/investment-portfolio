@@ -25,6 +25,7 @@ const addDays = (iso: string, n: number): string => new Date(Date.parse(iso) + n
 export class CouponScheduleService {
   private readonly log = new Logger(CouponScheduleService.name);
   private readonly failedAt = new Map<string, number>();
+  private readonly inFlight = new Map<string, Promise<void>>();
 
   constructor(
     @Inject(DB) private readonly db: BetterSQLite3Database,
@@ -33,7 +34,7 @@ export class CouponScheduleService {
 
   /**
    * Догрузить графики по бумагам. `firstOpDate` — дата первой операции по бумаге (с неё график
-   * нужен); `till` — сегодня. Грузим, если графика нет, он устарел по TTL или не покрывает период.
+   * нужен); `till` — сегодня. Грузим, если графика нет, он устарел по TTL или не покрывает начало периода.
    */
   async ensure(firstOpDate: ReadonlyMap<string, string>, till: string, now: Date = new Date()): Promise<void> {
     if (firstOpDate.size === 0) return;
@@ -49,34 +50,50 @@ export class CouponScheduleService {
     for (const bond of bonds) {
       const from = firstOpDate.get(bond.id) as string;
       const load = loads.get(bond.id);
-      const fresh =
-        load !== undefined && load.loadedAt.slice(0, 10) >= staleBefore && load.coveredFrom <= from && load.coveredTill >= till;
+      // Свежесть — только по сроку и началу охвата, НЕ по `till`: «сегодня» каждый день новое, и условие
+      // coveredTill >= till перезагружало бы график ежедневно. Пропуска нет: TTL (7 дн.) меньше окна
+      // ожидания выплаты (COMPLETENESS.PAYOUT_WINDOW_DAYS = 10), а проверяются только купоны, у которых окно
+      // уже закрылось, — они старше загруженной границы.
+      const fresh = load !== undefined && load.loadedAt.slice(0, 10) >= staleBefore && load.coveredFrom <= from;
       if (fresh) continue;
       const failed = this.failedAt.get(bond.id);
       if (failed !== undefined && now.getTime() - failed < FAILURE_TTL_MS) continue;
-      // при перезагрузке берём полный охват: прежний и новый
-      const rangeFrom = load && load.coveredFrom < from ? load.coveredFrom : from;
-      try {
-        const coupons = await this.provider.getCoupons(bond.ticker, rangeFrom, till);
-        this.db.transaction((tx) => {
-          tx.delete(couponSchedule).where(eq(couponSchedule.instrumentId, bond.id)).run();
-          for (const c of coupons) {
-            tx.insert(couponSchedule)
-              .values({ instrumentId: bond.id, couponDate: c.couponDate, recordDate: c.recordDate, amountRub: c.amountRub })
-              .run();
-          }
-          tx.insert(couponScheduleLoads)
-            .values({ instrumentId: bond.id, loadedAt: now.toISOString(), coveredFrom: rangeFrom, coveredTill: till })
-            .onConflictDoUpdate({
-              target: couponScheduleLoads.instrumentId,
-              set: { loadedAt: now.toISOString(), coveredFrom: rangeFrom, coveredTill: till },
-            })
-            .run();
-        });
-      } catch (err) {
-        this.failedAt.set(bond.id, now.getTime());
-        this.log.warn(`График купонов ${bond.ticker}: ${(err as Error).message}`);
+      // одновременные запросы по одной бумаге делят одну загрузку (дашборд шлёт несколько расчётов подряд)
+      const running = this.inFlight.get(bond.id);
+      if (running) {
+        await running;
+        continue;
       }
+      // при перезагрузке берём полный охват: прежний и новый (запрос за прошлый период не сужает кэш)
+      const rangeFrom = load && load.coveredFrom < from ? load.coveredFrom : from;
+      const rangeTill = load && load.coveredTill > till ? load.coveredTill : till;
+      const job = this.load(bond.id, bond.ticker, rangeFrom, rangeTill, now).finally(() => this.inFlight.delete(bond.id));
+      this.inFlight.set(bond.id, job);
+      await job;
+    }
+  }
+
+  private async load(instrumentId: string, ticker: string, from: string, till: string, now: Date): Promise<void> {
+    try {
+      const coupons = await this.provider.getCoupons(ticker, from, till);
+      this.db.transaction((tx) => {
+        tx.delete(couponSchedule).where(eq(couponSchedule.instrumentId, instrumentId)).run();
+        for (const c of coupons) {
+          tx.insert(couponSchedule)
+            .values({ instrumentId, couponDate: c.couponDate, recordDate: c.recordDate, amountRub: c.amountRub })
+            .run();
+        }
+        tx.insert(couponScheduleLoads)
+          .values({ instrumentId, loadedAt: now.toISOString(), coveredFrom: from, coveredTill: till })
+          .onConflictDoUpdate({
+            target: couponScheduleLoads.instrumentId,
+            set: { loadedAt: now.toISOString(), coveredFrom: from, coveredTill: till },
+          })
+          .run();
+      });
+    } catch (err) {
+      this.failedAt.set(instrumentId, now.getTime());
+      this.log.warn(`График купонов ${ticker}: ${(err as Error).message}`);
     }
   }
 

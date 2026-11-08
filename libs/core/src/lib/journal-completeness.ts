@@ -21,14 +21,20 @@ Decimal.set({ precision: 40 });
  *    день выплаты или на 1–3 рабочих дня позже, отчёт и импорт — ещё позже; 10 дней — запас.
  *  - EARLY_TOLERANCE_DAYS: операция чуть РАНЬШЕ даты выплаты тоже засчитывается (даты у брокера
  *    и биржи расходятся на день-два).
- *  - RECORD_GRACE_DAYS: держали ли бумагу на дату фиксации, смотрим на RECORD_GRACE_DAYS раньше —
+ *  - RECORD_GRACE_DAYS: держали ли бумагу, смотрим и на дату фиксации, и на RECORD_GRACE_DAYS раньше —
  *    сделка в последние дни перед фиксацией (расчёты T+1) не должна давать ложное предупреждение.
+ *  - NO_RECORD_DATE_OFFSET_DAYS: см. ниже.
  *  - MIN_NEGATIVE_CASH_RUB: отрицательный кэш меньше этой суммы считаем шумом округления.
  */
 export const COMPLETENESS = {
   PAYOUT_WINDOW_DAYS: 10,
   EARLY_TOLERANCE_DAYS: 3,
   RECORD_GRACE_DAYS: 2,
+  /**
+   * Биржа не указала дату фиксации: реестр закрывается за 1–2 рабочих дня до выплаты, поэтому считаем её на
+   * этот срок раньше выплаты — бумага, проданная до реестра, купон не получает и ложного предупреждения не даёт.
+   */
+  NO_RECORD_DATE_OFFSET_DAYS: 3,
   MIN_NEGATIVE_CASH_RUB: 1,
 } as const;
 
@@ -76,41 +82,63 @@ function addDays(iso: string, n: number): string {
 
 const fmtRub = (v: Decimal): string => v.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ' ') + ' ₽';
 
-/** Количество бумаги на конец дня `date` по сделкам журнала (покупки − продажи) */
-function heldOn(operations: readonly Operation[], instrumentId: string, date: string): Decimal {
+/** Количество бумаги на конец дня `date` по её сделкам (покупки − продажи) */
+function heldOn(trades: readonly Operation[], date: string): Decimal {
   let qty = new Decimal(0);
-  for (const o of operations) {
-    if (o.instrumentId !== instrumentId || o.date > date) continue;
-    if (o.operationType === 'Buy') qty = qty.plus(o.quantity);
-    else if (o.operationType === 'Sell') qty = qty.minus(o.quantity);
+  for (const o of trades) {
+    if (o.date > date) continue;
+    qty = o.operationType === 'Buy' ? qty.plus(o.quantity) : qty.minus(o.quantity);
   }
   return qty;
+}
+
+function push<K, V>(map: Map<K, V[]>, key: K, value: V): void {
+  const list = map.get(key);
+  if (list) list.push(value);
+  else map.set(key, [value]);
 }
 
 export function journalCompleteness(input: CompletenessInput): CompletenessWarning[] {
   const warnings: CompletenessWarning[] = [];
   const name = (id: string): string => input.tickers.get(id) ?? id;
 
-  // 1. Купон по графику биржи: бумага удерживалась на дату фиксации, а Coupon-операции нет
-  const couponOps = input.operations.filter((o) => o.operationType === 'Coupon' && o.instrumentId);
-  const firstTrade = new Map<string, string>();
+  // 1. Купон по графику биржи: бумага удерживалась на дату фиксации, а Coupon-операции нет.
+  //    Операции индексируем по бумаге — график × журнал без перебора всего журнала на каждый купон.
+  const trades = new Map<string, Operation[]>();
+  const couponsByInstrument = new Map<string, Operation[]>();
+  const unattributed: { op: Operation; used: boolean }[] = [];
   for (const o of input.operations) {
-    if (!o.instrumentId || (o.operationType !== 'Buy' && o.operationType !== 'Sell')) continue;
-    const known = firstTrade.get(o.instrumentId);
-    if (known === undefined || o.date < known) firstTrade.set(o.instrumentId, o.date);
+    if (o.operationType === 'Coupon') {
+      if (!o.instrumentId) unattributed.push({ op: o, used: false });
+      else push(couponsByInstrument, o.instrumentId, o);
+    } else if (o.instrumentId && (o.operationType === 'Buy' || o.operationType === 'Sell')) {
+      push(trades, o.instrumentId, o);
+    }
   }
-  for (const row of input.schedules) {
-    const first = firstTrade.get(row.instrumentId);
-    if (!first) continue;
+  const schedules = [...input.schedules].sort((a, b) => a.couponDate.localeCompare(b.couponDate));
+  for (const row of schedules) {
+    const own = trades.get(row.instrumentId);
+    if (!own) continue;
     // срок ожидания ещё не вышел — рано судить
     if (addDays(row.couponDate, COMPLETENESS.PAYOUT_WINDOW_DAYS) > input.today) continue;
-    const checkDate = addDays(row.recordDate ?? row.couponDate, -COMPLETENESS.RECORD_GRACE_DAYS);
-    const qty = heldOn(input.operations, row.instrumentId, checkDate);
+    const recordDate = row.recordDate ?? addDays(row.couponDate, -COMPLETENESS.NO_RECORD_DATE_OFFSET_DAYS);
+    // держали и ДО фиксации (с запасом — сделка перед реестром ещё не рассчитана), и НА дату фиксации
+    // (проданное накануне уходит с расчётом T+1 до реестра — купон уже не положен)
+    const qtyBefore = heldOn(own, addDays(recordDate, -COMPLETENESS.RECORD_GRACE_DAYS));
+    const qtyAt = heldOn(own, recordDate);
+    const qty = qtyBefore.lt(qtyAt) ? qtyBefore : qtyAt;
     if (!qty.gt(0)) continue;
     const from = addDays(row.couponDate, -COMPLETENESS.EARLY_TOLERANCE_DAYS);
     const till = addDays(row.couponDate, COMPLETENESS.PAYOUT_WINDOW_DAYS);
-    const paid = couponOps.some((o) => o.instrumentId === row.instrumentId && o.date >= from && o.date <= till);
-    if (paid) continue;
+    const inWindow = (o: Operation): boolean => o.date >= from && o.date <= till;
+    if ((couponsByInstrument.get(row.instrumentId) ?? []).some(inWindow)) continue;
+    // купон без привязки к бумаге (в журнале так бывает) тоже закрывает выплату — по одному на выплату,
+    // чтобы одна неатрибутированная операция не гасила предупреждения сразу по нескольким бумагам
+    const loose = unattributed.find((u) => !u.used && inWindow(u.op));
+    if (loose) {
+      loose.used = true;
+      continue;
+    }
     const expected = row.amountRub ? qty.mul(row.amountRub) : null;
     warnings.push({
       kind: 'missing-coupon',

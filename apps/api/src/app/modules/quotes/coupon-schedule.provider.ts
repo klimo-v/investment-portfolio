@@ -74,7 +74,11 @@ export class MoexCouponProvider implements CouponScheduleProvider {
         `?iss.meta=off&iss.only=coupons&coupons.columns=coupondate,recorddate,value_rub&from=${start}&till=${end}`;
       const res = await fetch(url);
       if (!res.ok) throw new Error(`MOEX ISS bondization ${secid}: HTTP ${res.status}`);
-      for (const c of parseBondizationCoupons((await res.json()) as IssCouponsResponse)) all.set(c.couponDate, c);
+      const json = (await res.json()) as IssCouponsResponse;
+      // HTTP 200 без блока купонов — неожиданный формат (переименование колонок, заглушка биржи), а не
+      // «купонов нет» (у бумаги без купонов блок приходит пустым): пустой график стёр бы кэш и скрыл проверку
+      if (!json.coupons) throw new Error(`MOEX ISS bondization ${secid}: в ответе нет блока coupons`);
+      for (const c of parseBondizationCoupons(json)) all.set(c.couponDate, c);
       start = next;
     }
     return [...all.values()].sort((a, b) => a.couponDate.localeCompare(b.couponDate));
