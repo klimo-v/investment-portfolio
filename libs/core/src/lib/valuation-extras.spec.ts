@@ -22,6 +22,9 @@ const OPS: Operation[] = [
   mk({ date: '2026-03-01', operationType: 'Dividend', instrumentId: 'SBER', quantity: '1', price: '300' }),
   mk({ date: '2026-03-02', operationType: 'Tax', instrumentId: 'SBER', quantity: '1', price: '39' }), // налог с дивиденда
   mk({ date: '2026-03-15', operationType: 'Deposit', price: '500000', systemId: 's2' }),
+  // перевод денег с другого счёта (входящий — плюс): внешний поток, как ввод
+  mk({ date: '2026-03-16', operationType: 'Transfer', quantity: '1', price: '2500' }),
+  mk({ date: '2026-03-17', operationType: 'Transfer', quantity: '1', price: '-700', systemId: 's2' }),
   mk({ date: '2026-04-01', operationType: 'Coupon', quantity: '1', price: '777' }), // без инструмента
   mk({ date: '2026-04-02', operationType: 'Tax', quantity: '1', price: '101' }), // налог без инструмента
   mk({ date: '2026-04-05', operationType: 'Fee', quantity: '1', price: '25' }), // комиссия депозитария

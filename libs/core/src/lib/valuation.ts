@@ -118,6 +118,17 @@ export function incomeAmountRub(op: Operation): Decimal {
 }
 
 /**
+ * Перевод денег между счетами (Transfer без инструмента): для счёта это внешний поток, как ввод/вывод.
+ * Знак — в данных (cash.ts): входящий перевод — положительная сумма, исходящий — отрицательная; на
+ * весь журнал пара переводов гасится. Без этого у счёта с переводом кэш ряда расходился с cashBalanceRub,
+ * а доходность первого дня (когда деньги пришли переводом) считалась от нулевого капитала.
+ * Перевод ценных бумаг (с инструментом) в ряд не входит, как и раньше: позиции его не двигают.
+ */
+export function isMoneyTransfer(op: Operation): boolean {
+  return op.operationType === 'Transfer' && !op.instrumentId;
+}
+
+/**
  * Отдельный налог или комиссия (операции Tax/Fee): деньги со счёта ушли, на позиции они не
  * влияют (движок их не разносит по сделкам), поэтому в итог ряда входят отдельным потоком
  * со знаком «минус» — иначе богатство завышено на удержанные налоги и комиссии, а вычисленный
@@ -230,7 +241,7 @@ export function valuationSeries(
   const cashOps = operations
     .filter(
       (o) =>
-        (o.operationType === 'Deposit' || o.operationType === 'Withdraw') &&
+        (o.operationType === 'Deposit' || o.operationType === 'Withdraw' || isMoneyTransfer(o)) &&
         o.date <= options.till &&
         (!options.systemId || o.systemId === options.systemId) &&
         (!options.portfolioId || o.portfolioId === options.portfolioId),
@@ -264,7 +275,9 @@ export function valuationSeries(
     while (nextCash < cashOps.length && cashOps[nextCash].date <= day) {
       const o = cashOps[nextCash++];
       const amount = new Decimal(o.quantity).mul(o.price).mul(o.fxRate ?? '1');
-      netContributions = o.operationType === 'Deposit' ? netContributions.plus(amount) : netContributions.minus(amount);
+      // Transfer денег (без инструмента) несёт знак в данных: исходящий — отрицательной суммой, входящий — положительной
+      netContributions =
+        o.operationType === 'Withdraw' ? netContributions.minus(amount) : netContributions.plus(amount);
     }
     if (day < outFrom) continue;
     netContributionsRub.push(netContributions.toFixed(2));

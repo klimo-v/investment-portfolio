@@ -577,7 +577,7 @@ export type ValuationQuery = z.infer<typeof ValuationQuerySchema>;
 
 // --- Единый расчёт периода: GET /api/performance (libs/core/period-performance.ts) ---
 
-const PerformanceUnavailableSchema = z.enum(['no-capital', 'no-data', 'xirr-undefined']);
+const PerformanceUnavailableSchema = z.enum(['no-capital', 'negative-capital', 'no-data', 'xirr-undefined']);
 
 /** Доходность за период по одному контуру: результат ₽, TWR, доходность денег, средний капитал */
 export const PeriodPerformanceSchema = z.object({

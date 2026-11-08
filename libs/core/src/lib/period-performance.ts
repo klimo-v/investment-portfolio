@@ -42,6 +42,7 @@ export type PerformanceContour = 'wealth' | 'positions';
 /** Почему метрику нельзя посчитать */
 export type PerformanceUnavailable =
   | 'no-capital' // за период не было капитала: делить не на что (например, система только из фьючерсов)
+  | 'negative-capital' // капитал контура уходил в минус: журнал неполон (нет Deposit/перевода), проценты недостоверны
   | 'no-data' // в ряду нет дней периода
   | 'xirr-undefined'; // у потоков нет решения, либо они слишком близки/нет притока и оттока
 
@@ -228,7 +229,18 @@ export function periodPerformance(series: ValuationSeries, options: PeriodPerfor
   // процентов не имеет: результат в ₽ есть, а делить на капитал нечего
   const hasCapital =
     options.contour === 'wealth' || start.invested.gt(0) || period.some((d) => d.invested.gt(0));
-  const twrPct = hasCapital && twr.capitalDays > 0 ? lastLevel.minus(100).toNumber() : null;
+  // Капитал контура был отрицательным (покупки без внесённых денег): TWR пропускает такие дни, а Dietz и XIRR
+  // считают их по-своему — цифры расходились втрое без оговорки. Проценты тогда не показываем: результат в ₽
+  // верен, а причину («журнал неполон») пользователь видит в предупреждении о кэше.
+  let prevValue = start.value;
+  let negativeDays = 0;
+  for (const d of inputs) {
+    if (prevValue.lt(0)) negativeDays++;
+    prevValue = d.value;
+  }
+  const reliable = negativeDays === 0;
+  const twrPct = reliable && hasCapital && twr.capitalDays > 0 ? lastLevel.minus(100).toNumber() : null;
+  const unavailable: PerformanceUnavailable = reliable ? 'no-capital' : 'negative-capital';
 
   // Modified Dietz: ввод работает с начала дня (вес включает день потока), вывод — с конца
   const total = daysBetween(baseDate, end.date);
@@ -238,20 +250,20 @@ export function periodPerformance(series: ValuationSeries, options: PeriodPerfor
     const remaining = daysBetween(baseDate, end.date) - daysBetween(baseDate, d.date) + (d.flow.gt(0) ? 1 : 0);
     averageCapital = averageCapital.plus(d.flow.mul(remaining).div(total));
   }
-  const dietz = hasCapital && averageCapital.gt(0) ? result.div(averageCapital).mul(100).toNumber() : null;
+  const dietz = reliable && hasCapital && averageCapital.gt(0) ? result.div(averageCapital).mul(100).toNumber() : null;
 
   // XIRR: отток V_start (по рынку) на день базы, внешние потоки на их даты, приток V_end на конец
   const flows: CashFlow[] = [];
   if (start.value.gt(0)) flows.push({ date: baseDate, amount: -start.value.toNumber() });
   for (const d of inputs) if (!d.flow.isZero()) flows.push({ date: d.date, amount: -d.flow.toNumber() });
   flows.push({ date: end.date, amount: end.value.toNumber() });
-  const rate = hasCapital ? xirr(flows) : null;
+  const rate = reliable && hasCapital ? xirr(flows) : null;
   const xirrPct = rate === null ? null : rate * 100;
 
   const annual = total >= ANNUALIZE_FROM_DAYS;
   const mwrPct = annual ? xirrPct : dietz;
   const mwrReason: PerformanceUnavailable | null =
-    mwrPct !== null ? null : annual && hasCapital && averageCapital.gt(0) ? 'xirr-undefined' : 'no-capital';
+    mwrPct !== null ? null : reliable && annual && hasCapital && averageCapital.gt(0) ? 'xirr-undefined' : unavailable;
 
   const payouts = options.payoutsRub ?? null;
   const fixedDelta = end.fixed.minus(start.fixed);
@@ -271,7 +283,7 @@ export function periodPerformance(series: ValuationSeries, options: PeriodPerfor
       realizedRub: payouts ? money(fixedDelta.minus(payouts)) : null,
       revaluationRub: money(end.unrealized.minus(start.unrealized)),
     },
-    twr: { pct: twrPct, series: hasCapital ? seriesPoints : [], reason: twrPct === null ? 'no-capital' : null },
+    twr: { pct: twrPct, series: hasCapital && reliable ? seriesPoints : [], reason: twrPct === null ? unavailable : null },
     mwr: { kind: annual ? 'annual' : 'period', pct: mwrPct, reason: mwrReason },
     xirrPct,
     dietzPct: dietz,

@@ -239,3 +239,50 @@ describe('periodPerformance — инварианты на ряде из журн
     expect(perf.twr.series).toEqual([]);
   });
 });
+
+
+describe('periodPerformance: перевод денег и неполный журнал', () => {
+  it('счёт, на который деньги пришли переводом: кэш не уходит в минус, доходность считается от внесённого', () => {
+    const ops = [
+      mk({ date: '2026-02-02', operationType: 'Transfer', quantity: '1', price: '1000', portfolioId: 'pB' }),
+      mk({ date: '2026-02-02', operationType: 'Buy', instrumentId: 'SBER', quantity: '10', price: '100', portfolioId: 'pB' }),
+    ];
+    const prices = [px('SBER', '2026-02-02', '100'), px('SBER', '2026-02-03', '105'), px('SBER', '2026-02-04', '110'), px('SBER', '2026-02-05', '115')];
+    const s = valuationSeries(ops, prices, { till: '2026-02-05', groupBy: 'instrument', portfolioId: 'pB' });
+    const perf = periodPerformance(s, { contour: 'wealth' });
+    expect(perf.resultRub).toBe('150.00');
+    expect(perf.netFlowRub).toBe('1000.00');
+    // до исправления: TWR +200% (капитал считался с нуля), Dietz — null
+    expect(perf.twr.pct).toBeCloseTo(15, 6);
+    expect(perf.dietzPct).not.toBeNull();
+  });
+
+  it('капитал контура уходил в минус (покупка без внесённых денег): проценты не показываются, ₽ верны', () => {
+    const ops = [
+      mk({ date: '2026-02-02', operationType: 'Buy', instrumentId: 'SBER', quantity: '10', price: '100', fee: '5' }),
+      mk({ date: '2026-02-04', operationType: 'Deposit', price: '2000' }),
+    ];
+    const prices = [px('SBER', '2026-02-02', '100'), px('SBER', '2026-02-03', '110'), px('SBER', '2026-02-05', '120')];
+    const s = valuationSeries(ops, prices, { till: '2026-02-05', groupBy: 'instrument' });
+    const perf = periodPerformance(s, { contour: 'wealth' });
+    expect(Number(perf.resultRub)).toBeGreaterThan(0);
+    expect(perf.twr.pct).toBeNull();
+    expect(perf.twr.reason).toBe('negative-capital');
+    expect(perf.twr.series).toEqual([]);
+    expect(perf.mwr.pct).toBeNull();
+    expect(perf.mwr.reason).toBe('negative-capital');
+    expect(perf.dietzPct).toBeNull();
+    expect(perf.xirrPct).toBeNull();
+  });
+
+  it('нулевой капитал до первого ввода — норма, а не «отрицательный»: проценты считаются', () => {
+    const ops = [
+      mk({ date: '2026-02-03', operationType: 'Deposit', price: '1000' }),
+      mk({ date: '2026-02-03', operationType: 'Buy', instrumentId: 'SBER', quantity: '10', price: '100' }),
+    ];
+    const prices = [px('SBER', '2026-02-03', '100'), px('SBER', '2026-02-05', '110')];
+    const perf = periodPerformance(valuationSeries(ops, prices, { till: '2026-02-05', groupBy: 'instrument' }), { contour: 'wealth' });
+    expect(perf.twr.pct).toBeCloseTo(10, 6);
+    expect(perf.twr.reason).toBeNull();
+  });
+});
