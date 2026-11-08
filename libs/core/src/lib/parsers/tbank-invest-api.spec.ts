@@ -232,7 +232,7 @@ describe('mapTbankOperations — фильтры и незнакомые типы
     expect(mapTbankOperations([canceled, inProgress], '2000000001', instruments)).toHaveLength(0);
   });
 
-  it('незнакомый тип операции не превращается в покупку, а доходит до предпросмотра как warn', () => {
+  it('незнакомый тип операции не превращается в покупку: normalizeRow возвращает ошибку', () => {
     const rows = mapTbankOperations(
       [
         {
@@ -254,8 +254,8 @@ describe('mapTbankOperations — фильтры и незнакомые типы
       resolvePortfolio: () => 'pf',
       resolveInstrument: () => ({ instrumentId: null }),
     });
-    expect('error' in normalized).toBe(false);
-    expect((normalized as { confidence: string }).confidence).toBe('warn');
+    expect('error' in normalized).toBe(true);
+    expect((normalized as { error: string }).error).toContain('Неизвестный тип');
   });
 
   it('без справочника инструментов тикера нет, figi и uid — отдельные идентификаторы', () => {
@@ -284,7 +284,7 @@ describe('mapTbankOperations — фильтры и незнакомые типы
   });
 });
 
-describe('mapTbankOperations — комиссия отдельной операцией (BROKER_FEE)', () => {
+describe('mapTbankOperations — комиссия: одно списание — одна запись (П1)', () => {
   const fee = (id: string, parent: string | undefined, amount: number): TbankOperationItem => ({
     id,
     parentOperationId: parent,
@@ -293,18 +293,133 @@ describe('mapTbankOperations — комиссия отдельной опера�
     state: 'OPERATION_STATE_EXECUTED',
     payment: { currency: 'rub', units: String(-amount), nano: 0 },
   });
+  const totalFee = (rows: RawRow[]) => rows.reduce((sum, r) => sum.plus(r.fee ?? '0'), new Decimal(0)).toString();
 
-  it('прибавляется к комиссии родительской сделки, распределяясь по её исполнениям; отдельной строки нет', () => {
-    const rows = mapTbankOperations([buyWithTwoTrades(), fee('fee-1', 'op-1', 1.3)], 'acc', instruments);
-    expect(rows.every((r) => r.tradeType !== 'fee')).toBe(true);
-    const total = rows.reduce((s, r) => s.plus(r.fee ?? '0'), new Decimal(0));
-    expect(total.toString()).toBe('10'); // 8.7 + 1.3
+  it('commission равна сумме дочерних BROKER_FEE (реальный случай) — комиссия одна, не удвоенная', () => {
+    // реальный пример: GAZP, комиссия 20,23 пришла и полем commission, и дочерней BROKER_FEE
+    const op: TbankOperationItem = {
+      ...buyWithTwoTrades(),
+      tradesInfo: undefined,
+      commission: { currency: 'rub', units: '-20', nano: -230000000 },
+    };
+    const rows = mapTbankOperations([op, fee('fee-1', 'op-1', 20.23)], 'acc', instruments);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].fee).toBe('20.23');
   });
 
-  it('без родителя в выборке остаётся обычной комиссией', () => {
+  it('несколько исполнений: комиссия делится по сделкам, сумма равна комиссии (8,7, а не 17,4)', () => {
+    const rows = mapTbankOperations([buyWithTwoTrades(), fee('fee-1', 'op-1', 8.7)], 'acc', instruments);
+    expect(rows.every((r) => r.tradeType !== 'fee')).toBe(true);
+    expect(totalFee(rows)).toBe('8.7');
+  });
+
+  it('только commission (дочерней нет)', () => {
+    expect(totalFee(mapTbankOperations([buyWithTwoTrades()], 'acc', instruments))).toBe('8.7');
+  });
+
+  it('только дочерняя BROKER_FEE (commission пуста)', () => {
+    const op: TbankOperationItem = { ...buyWithTwoTrades(), commission: undefined };
+    expect(totalFee(mapTbankOperations([op, fee('fee-1', 'op-1', 1.3)], 'acc', instruments))).toBe('1.3');
+  });
+
+  it('без родителя в выборке остаётся обычной комиссией (Fee)', () => {
     const rows = mapTbankOperations([fee('fee-2', 'нет-такой', 5)], 'acc', instruments);
     expect(rows).toHaveLength(1);
     expect(rows[0].tradeType).toBe('fee');
+    expect(rows[0].price).toBe('5');
+  });
+
+  it('абонентская плата 390 — отдельная Fee', () => {
+    const svc: TbankOperationItem = {
+      id: 'svc',
+      date: '2026-07-22T04:00:00Z',
+      type: 'OPERATION_TYPE_SERVICE_FEE',
+      description: 'Списание комиссии за обслуживание',
+      state: 'OPERATION_STATE_EXECUTED',
+      payment: { currency: 'rub', units: '-390', nano: 0 },
+    };
+    const [row] = mapTbankOperations([svc], 'acc', instruments);
+    expect(row.tradeType).toBe('fee');
+    expect(row.price).toBe('390');
+  });
+
+  it('возврат комиссии (payment > 0) — Fee с отрицательной суммой', () => {
+    const refund: TbankOperationItem = { ...fee('fee-r', undefined, 0), payment: { currency: 'rub', units: '7', nano: 0 } };
+    const [row] = mapTbankOperations([refund], 'acc', instruments);
+    expect(row.tradeType).toBe('fee');
+    expect(row.price).toBe('-7');
+  });
+});
+
+describe('mapTbankOperations — знак задаёт брокер (П2), время (П5), дивиденд на карту', () => {
+  const pay = (type: string, units: string, extra: Partial<TbankOperationItem> = {}): TbankOperationItem => ({
+    id: `id-${type}-${units}`,
+    date: '2026-03-15T10:30:00Z',
+    type: `OPERATION_TYPE_${type}`,
+    state: 'OPERATION_STATE_EXECUTED',
+    payment: { currency: 'rub', units, nano: 0 },
+    ...extra,
+  });
+  const price = (item: TbankOperationItem) => mapTbankOperations([item], 'acc', instruments)[0].price;
+
+  it('расходы пишутся положительно, возврат — отрицательно; доходы — со своим знаком', () => {
+    expect(price(pay('TAX', '-100'))).toBe('100');
+    expect(price(pay('TAX_CORRECTION', '100'))).toBe('-100');
+    expect(price(pay('TAX_CORRECTION_PROGRESSIVE', '100'))).toBe('-100');
+    expect(price(pay('TAX_REPO_REFUND', '50'))).toBe('-50');
+    expect(price(pay('OUTPUT', '-500'))).toBe('500');
+    expect(price(pay('INPUT', '500'))).toBe('500');
+    expect(price(pay('DIVIDEND', '1000'))).toBe('1000');
+  });
+
+  it('сторно дивиденда (payment < 0) — Dividend с отрицательной суммой', () => {
+    expect(price(pay('DIVIDEND', '-1000'))).toBe('-1000');
+  });
+
+  it('налог со ссылкой на выплату вычитается из неё один раз; возврат налога прибавляется', () => {
+    const div = pay('DIVIDEND', '1000', { id: 'div', instrumentUid: 'uid-sber' });
+    const tax = pay('DIVIDEND_TAX', '-130', { id: 't', parentOperationId: 'div', instrumentUid: 'uid-sber' });
+    const rows = mapTbankOperations([div, tax], 'acc', instruments);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].price).toBe('870');
+    const back = pay('DIVIDEND_TAX', '30', { id: 't2', parentOperationId: 'div', instrumentUid: 'uid-sber' });
+    expect(mapTbankOperations([div, tax, back], 'acc', instruments)[0].price).toBe('900');
+  });
+
+  it('время — по Москве из метки UTC, для сделок и выплат', () => {
+    const rows = mapTbankOperations([buyWithTwoTrades(), pay('TAX', '-1')], 'acc', instruments);
+    expect(rows.every((r) => /^\d{2}:\d{2}:\d{2}$/.test(r.time ?? ''))).toBe(true); // у каждой строки есть время
+    expect(rows[0].time).toBe('13:30:00');
+    const [n] = mapTbankOperations([pay('INPUT', '1', { date: '2026-03-15T21:05:07Z' })], 'acc', instruments);
+    expect(n.time).toBe('00:05:07');
+  });
+
+  it('DIV_EXT: Dividend (брутто) + Withdraw (брутто − налог), налог остаётся Tax; кэш от трёх записей — ноль', () => {
+    const ext = pay('DIV_EXT', '16928', { id: 'ext', instrumentUid: 'uid-sber', description: 'Выплата дивидендов на карту' });
+    const tax = pay('DIVIDEND_TAX', '-2200', { id: 'tx', instrumentUid: 'uid-sber' });
+    const rows = mapTbankOperations([ext, tax], 'acc', instruments);
+    const div = rows.find((r) => r.tradeType === 'dividend');
+    const wd = rows.find((r) => r.tradeType === 'withdraw');
+    const tx = rows.find((r) => r.tradeType === 'tax');
+    expect(rows).toHaveLength(3);
+    expect(div?.price).toBe('16928');
+    expect(div?.ticker).toBe('SBER');
+    expect(wd?.price).toBe('14728');
+    expect(wd?.ticker).toBeUndefined();
+    expect(wd?.brokerRef).toBe('ext:card');
+    expect(div?.transferGroup).toBe('divext:ext');
+    expect(wd?.transferGroup).toBe('divext:ext');
+    expect(tx?.price).toBe('2200');
+    const cash = new Decimal(div!.price!).minus(tx!.price!).minus(wd!.price!);
+    expect(cash.toString()).toBe('0');
+  });
+
+  it('DIV_EXT и обычный дивиденд в один день: налог делится пропорционально выплатам', () => {
+    const ext = pay('DIV_EXT', '1000', { id: 'ext', instrumentUid: 'uid-sber' });
+    const div = pay('DIVIDEND', '3000', { id: 'div', instrumentUid: 'uid-sber' });
+    const tax = pay('DIVIDEND_TAX', '-520', { id: 'tx', instrumentUid: 'uid-sber' });
+    const wd = mapTbankOperations([ext, div, tax], 'acc', instruments).find((r) => r.tradeType === 'withdraw');
+    expect(wd?.price).toBe('870'); // 1000 − 520 × 1000/4000
   });
 });
 

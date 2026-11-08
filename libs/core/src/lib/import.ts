@@ -81,6 +81,11 @@ export interface RawRow {
    * и операция не создаётся — пользователь видит строку с понятной причиной.
    */
   skipReason?: string;
+  /**
+   * Общий ключ связанных строк одного факта, который разложен на несколько операций
+   * (дивиденд «на карту»: Dividend + Withdraw; валюта на счёт: Deposit + Buy валюты).
+   */
+  transferGroup?: string;
 }
 
 /** Итог резолва инструмента для одной строки (то, что нужно normalizeRow) */
@@ -148,7 +153,7 @@ function normalizeNumber(raw: string | undefined, fallback = '0'): string {
 /** Классификация типа операции из брокер-специфичной строки */
 export function classifyOperationType(
   raw: RawRow,
-): { type: z.infer<typeof OperationType>; confidence: 'ok' | 'warn'; reason?: string } {
+): { type: z.infer<typeof OperationType>; confidence: 'ok' | 'warn'; reason?: string } | { type: null; confidence: 'warn'; reason: string } {
   const t = (raw.tradeType ?? '').trim().toLowerCase();
   const between = (raw.betweenPortfolios ?? '').trim().toLowerCase();
 
@@ -175,16 +180,19 @@ export function classifyOperationType(
     налог: 'Tax',
     fee: 'Fee',
     комиссия: 'Fee',
+    transfer: 'Transfer',
+    перевод: 'Transfer',
   };
 
   const matched = map[t];
   if (matched) return { type: matched, confidence: 'ok' };
 
-  // не распознано — по умолчанию Buy, но помечаем как требующее проверки
+  // не распознано — НЕ угадываем (раньше по умолчанию был Buy, и «выплата на карту» молча
+  // становилась покупкой 0 × 0): строка не импортируется, причина видна в предпросмотре
   return {
-    type: 'Buy',
+    type: null,
     confidence: 'warn',
-    reason: `Неизвестный тип операции: "${raw.tradeType}". Проверьте вручную.`,
+    reason: `Неизвестный тип операции: "${raw.tradeType}" — строка не учтена. Нужна поддержка типа в парсере.`,
   };
 }
 
@@ -249,6 +257,7 @@ export function normalizeRow(
 
   // confidence/reason ниже могут быть понижены до warn, тип операции — нет
   const classified = classifyOperationType(raw);
+  if (classified.type === null) return { error: classified.reason };
   const type = classified.type;
   let confidence = classified.confidence;
   let reason = classified.reason;
@@ -287,6 +296,7 @@ export function normalizeRow(
     note: raw.note?.trim() || undefined,
     brokerRef: raw.brokerRef,
     executedAt: normalizeTime(raw.time),
+    transferGroup: raw.transferGroup,
   };
 
   return { operation, confidence, reason, dedupeKey: makeDedupeKey(operation), systemUncertain };

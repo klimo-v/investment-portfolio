@@ -482,6 +482,7 @@ export class ImportService {
           note: row.operation.note ?? null,
           brokerRef: row.operation.brokerRef ?? null,
           executedAt: row.operation.executedAt ?? null,
+          transferGroup: row.operation.transferGroup ?? null,
           importBatchId: batchId,
         })
         .run();

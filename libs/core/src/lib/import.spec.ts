@@ -46,8 +46,9 @@ describe('classifyOperationType', () => {
     expect(classifyOperationType({ date: '', tradeType: 'Withdraw' }).type).toBe('Withdraw');
     expect(classifyOperationType({ date: '', tradeType: 'Tax' }).type).toBe('Tax');
   });
-  it('неизвестный тип → warn', () => {
+  it('неизвестный тип не становится Buy: type null и причина', () => {
     const r = classifyOperationType({ date: '', tradeType: 'НечтоСтранное' });
+    expect(r.type).toBeNull();
     expect(r.confidence).toBe('warn');
     expect(r.reason).toContain('Неизвестный');
   });
