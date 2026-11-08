@@ -260,13 +260,23 @@ export function mapTbankOperations(
 
     if (PAYOUT_TYPES.has(tradeType)) {
       const withheld = item.id ? withheldByParent.get(item.id) : undefined;
-      const net = moneyToDecimal(item.payment).abs().minus(withheld ?? 0);
+      // Корректировка налога — единственный налог со знаком: зачисление (payment > 0) — возврат
+      // ранее удержанного. Хранится как Tax с ОТРИЦАТЕЛЬНОЙ суммой: кэш вычитает налог, поэтому
+      // минус на минус даёт приход. Через abs() знак терялся, и возврат превращался в удержание.
+      const isTaxRefund =
+        item.type === 'OPERATION_TYPE_TAX_CORRECTION' && moneyToDecimal(item.payment).gt(0);
+      const gross = moneyToDecimal(item.payment).abs();
+      const net = (isTaxRefund ? gross.neg() : gross).minus(withheld ?? 0);
       rows.push({
         ...base,
         quantity: '1',
         price: net.toFixed(),
         fee: '0',
-        note: withheld ? `${item.description ?? tradeType} нетто (налог учтён)` : item.description,
+        note: isTaxRefund
+          ? `${item.description ?? 'Корректировка налога'} (возврат)`
+          : withheld
+            ? `${item.description ?? tradeType} нетто (налог учтён)`
+            : item.description,
         // для выплат номер операции у брокера свой в API и в XLSX-отчёте — общего
         // ключа нет, поэтому пересечение периодов с файловым импортом ловится не
         // дедупликацией, а диапазоном дат (по умолчанию — с последней операции в базе)

@@ -181,6 +181,26 @@ describe('mapTbankOperations — выплаты и налоги', () => {
     expect(rows[0]).toMatchObject({ tradeType: 'tax', quantity: '1', price: '442' });
   });
 
+  it('корректировка налога: зачисление — возврат (отрицательный Tax), списание — удержание', () => {
+    const correction = (id: string, units: string): TbankOperationItem => ({
+      id,
+      date: '2025-05-06T00:00:00Z',
+      type: 'OPERATION_TYPE_TAX_CORRECTION',
+      description: 'Корректировка налога',
+      state: 'OPERATION_STATE_EXECUTED',
+      payment: { currency: 'rub', units, nano: 0 },
+    });
+    const rows = mapTbankOperations(
+      [correction('tc-refund', '2689'), correction('tc-withhold', '-2689')],
+      '2000000001',
+    );
+
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toMatchObject({ tradeType: 'tax', price: '-2689' });
+    expect(rows[0].note).toContain('возврат');
+    expect(rows[1]).toMatchObject({ tradeType: 'tax', price: '2689' });
+  });
+
   it('пополнение счёта: вся сумма в цене, без инструмента', () => {
     const rows = mapTbankOperations(
       [

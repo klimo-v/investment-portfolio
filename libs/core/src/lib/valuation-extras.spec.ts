@@ -81,6 +81,16 @@ describe('cashSeries: кэш из ряда = кэш из журнала', () => 
     // налоги 39 + 101 и комиссия 25; Fee по фьючерсу (3) в итог не идёт
     expect(last(without) - last(withCosts)).toBeCloseTo(39 + 101 + 25, 6);
   });
+
+  it('возврат налога (Tax с отрицательной суммой) увеличивает итог ряда, кэш ряда = кэш журнала', () => {
+    const refund = mk({ date: '2026-04-03', operationType: 'Tax', quantity: '1', price: '-101' });
+    const ops = [...OPS, refund];
+    const s = valuationSeries(ops, PRICES, { till: '2026-06-30', groupBy: 'portfolio', futureIds: FUT });
+    const base = series('portfolio');
+    const last = (x: typeof s) => x.groups.reduce((sum, g) => sum + Number(g.points[g.points.length - 1].totalRub), 0);
+    expect(last(s) - last(base)).toBeCloseTo(101, 6);
+    expect(cashSeries(s).at(-1)).toBe(cashBalanceRub(ops, FUT).toFixed(2));
+  });
 });
 
 describe('valuationEvents: выплаты и продажи для маркеров', () => {
