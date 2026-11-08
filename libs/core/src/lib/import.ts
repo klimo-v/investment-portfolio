@@ -144,7 +144,7 @@ function normalizeTime(raw: string | undefined): string | undefined {
 }
 
 /** Убирает разделители разрядов и приводит к десятичной строке */
-function normalizeNumber(raw: string | undefined, fallback = '0'): string {
+export function normalizeNumber(raw: string | undefined, fallback = '0'): string {
   if (!raw) return fallback;
   const cleaned = raw.replace(/\s/g, '').replace(/,(?=\d{3}\b)/g, '').replace(',', '.');
   return /^-?\d+(\.\d+)?$/.test(cleaned) ? cleaned : fallback;
@@ -345,7 +345,7 @@ export function attachParentFees(rows: RawRow[]): RawRow[] {
 export type FieldSource = 'broker' | 'annotation';
 
 /** Поля операции, за которые отвечает брокер */
-export type BrokerField = 'fee' | 'price' | 'quantity' | 'executedAt';
+export type BrokerField = 'fee' | 'price' | 'quantity' | 'executedAt' | 'fxRate';
 
 export interface FieldChange {
   field: BrokerField;
@@ -368,12 +368,13 @@ const same = (a: string, b: string): boolean => new Decimal(a).eq(new Decimal(b)
  *  - `fee`: обновляется, только если пришла положительная комиссия, отличная от
  *    сохранённой. Комиссия «0» не затирает уже известную (источник мог её не знать).
  *  - `price`, `quantity`: любое расхождение — брокер прав.
+ *  - `fxRate`: любое расхождение — брокер прав (курс обязателен для нерублёвых строк, см. foreign-cash.ts).
  *  - `executedAt`: обновляется, если источник дал время и оно отличается; пустое время
  *    существующее не стирает.
  */
 export function mergeBrokerFields(
-  existing: Pick<Operation, 'fee' | 'price' | 'quantity' | 'executedAt'>,
-  incoming: Pick<Operation, 'fee' | 'price' | 'quantity' | 'executedAt'>,
+  existing: Pick<Operation, 'fee' | 'price' | 'quantity' | 'executedAt' | 'fxRate'>,
+  incoming: Pick<Operation, 'fee' | 'price' | 'quantity' | 'executedAt' | 'fxRate'>,
   source: FieldSource = 'broker',
 ): FieldChange[] {
   if (source !== 'broker') return [];
@@ -388,6 +389,12 @@ export function mergeBrokerFields(
   }
   if (!same(existing.quantity, incoming.quantity)) {
     changes.push({ field: 'quantity', from: existing.quantity, to: incoming.quantity });
+  }
+  // курс к рублю: нерублёвая сумма с курсом 1 читалась как рубли (валютное пополнение) — брокерский курс исправляет
+  const exFx = existing.fxRate ?? '1';
+  const inFx = incoming.fxRate ?? '1';
+  if (!same(exFx, inFx)) {
+    changes.push({ field: 'fxRate', from: exFx, to: inFx });
   }
   if (incoming.executedAt && incoming.executedAt !== existing.executedAt) {
     changes.push({ field: 'executedAt', from: existing.executedAt ?? null, to: incoming.executedAt });

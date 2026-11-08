@@ -5,6 +5,7 @@ export * from './lib/engine';
 export * from './lib/cash';
 export * from './lib/metrics';
 export * from './lib/import';
+export * from './lib/foreign-cash';
 export * from './lib/isin';
 export * from './lib/instrument-identity';
 export * from './lib/futures';

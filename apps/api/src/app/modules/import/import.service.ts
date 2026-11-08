@@ -1,9 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import { BadRequestException, Inject, Injectable } from '@nestjs/common';
-import { desc, eq } from 'drizzle-orm';
+import { and, desc, eq, lte } from 'drizzle-orm';
 import ExcelJS from 'exceljs';
 import {
   attachParentFees,
+  expandForeignCash,
+  fxInstrumentId,
   identityKey,
   mergeBrokerFields,
   normalizeRawRows,
@@ -11,6 +13,7 @@ import {
   makeDedupeKey,
   parseBrokerHtmlReportWithMarks,
   type FieldChange,
+  type ForeignCashLookups,
   type IdentityChoice,
   type InstrumentIdentifiers,
   type InstrumentSuggestion,
@@ -28,6 +31,7 @@ import {
   portfolios,
   instruments,
   quotes,
+  priceHistory,
   type OperationRow,
 } from '../../../db/schema';
 import { DB } from '../../db/drizzle.module';
@@ -165,6 +169,27 @@ export class ImportService {
     return { ...(this.uploads.get(uploadId) as ParsedUpload), uploadId };
   }
 
+  /** Источники курсов для `expandForeignCash`: ЦБ из истории цен (fx:CCY) и продажи валютной пары в журнале */
+  private foreignCashLookups(): ForeignCashLookups {
+    return {
+      cbrRate: (currency, date) =>
+        this.db
+          .select({ price: priceHistory.price })
+          .from(priceHistory)
+          .where(and(eq(priceHistory.instrumentId, fxInstrumentId(currency)), lte(priceHistory.date, date)))
+          .orderBy(desc(priceHistory.date))
+          .limit(1)
+          .get()?.price ?? null,
+      journalSales: (pairTicker, date) =>
+        this.db
+          .select({ quantity: operations.quantity, price: operations.price })
+          .from(operations)
+          .innerJoin(instruments, eq(instruments.id, operations.instrumentId))
+          .where(and(eq(instruments.ticker, pairTicker), eq(operations.date, date), eq(operations.operationType, 'Sell')))
+          .all(),
+    };
+  }
+
   /**
    * Кладёт готовые строки в кэш загрузок и возвращает `uploadId`.
    *
@@ -184,7 +209,9 @@ export class ImportService {
     // комиссия отдельной строкой по ссылке на сделку прибавляется к fee сделки
     // (core/import.ts: attachParentFees); коды инструментов приводятся к единому виду,
     // ISIN/figi/uid раскладываются по идентификаторам (core: normalizeRawRows)
-    this.uploads.set(uploadId, { rows: normalizeRawRows(attachParentFees(rows)), marks, settlements });
+    // нерублёвые деньги: валютное пополнение/вывод → пара обычных операций, курс обязателен (core/foreign-cash.ts)
+    const expanded = expandForeignCash(attachParentFees(rows), this.foreignCashLookups());
+    this.uploads.set(uploadId, { rows: normalizeRawRows(expanded), marks, settlements });
     if (this.uploads.size > ImportService.MAX_UPLOADS) {
       const oldest = this.uploads.keys().next().value;
       if (oldest) this.uploads.delete(oldest);
@@ -453,7 +480,7 @@ export class ImportService {
       if (row.confidence === 'update') {
         // обновляем ТОЛЬКО поля, за которые отвечает брокер (core/import.ts:
         // mergeBrokerFields); система, заметки и прочая разметка остаются как были
-        const patch: Partial<Pick<OperationRow, 'fee' | 'price' | 'quantity' | 'executedAt'>> = {};
+        const patch: Partial<Pick<OperationRow, 'fee' | 'price' | 'quantity' | 'executedAt' | 'fxRate'>> = {};
         for (const c of row.changes ?? []) patch[c.field] = c.to;
         if (row.existingId && Object.keys(patch).length > 0) {
           this.db.update(operations).set(patch).where(eq(operations.id, row.existingId)).run();
