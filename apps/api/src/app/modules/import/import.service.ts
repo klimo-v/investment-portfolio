@@ -480,7 +480,7 @@ export class ImportService {
       if (row.confidence === 'update') {
         // обновляем ТОЛЬКО поля, за которые отвечает брокер (core/import.ts:
         // mergeBrokerFields); система, заметки и прочая разметка остаются как были
-        const patch: Partial<Pick<OperationRow, 'fee' | 'price' | 'quantity' | 'executedAt' | 'fxRate'>> = {};
+        const patch: Record<string, string> = {};
         for (const c of row.changes ?? []) patch[c.field] = c.to;
         if (row.existingId && Object.keys(patch).length > 0) {
           this.db.update(operations).set(patch).where(eq(operations.id, row.existingId)).run();

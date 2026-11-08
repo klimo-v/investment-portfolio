@@ -94,3 +94,20 @@ describe('mergeBrokerFields', () => {
     expect(mergeBrokerFields(existing, { fee: '19.54', price: '1', quantity: '1', executedAt: '01:00:00' }, 'annotation')).toEqual([]);
   });
 });
+
+describe('mergeBrokerFields: починка артефактов старого парсера', () => {
+  const stored = { fee: '0', price: '0', quantity: '0', executedAt: null, fxRate: '1', operationType: 'Buy' as const };
+  const incoming = { fee: '0', price: '3916.5', quantity: '1', executedAt: '14:35:05', fxRate: '1', operationType: 'Dividend' as const, transferGroup: 'divext:1' };
+
+  it('пустая «покупка» 0 × 0 по тому же номеру становится дивидендом: тип, сумма, связь', () => {
+    const fields = mergeBrokerFields(stored, incoming).map((c) => c.field);
+    expect(fields).toEqual(expect.arrayContaining(['operationType', 'price', 'quantity', 'transferGroup', 'executedAt']));
+    expect(mergeBrokerFields(stored, incoming).find((c) => c.field === 'operationType')).toMatchObject({ from: 'Buy', to: 'Dividend' });
+  });
+
+  it('настоящая покупка тип не меняет; связь уже проставлена — не трогается', () => {
+    const real = { ...stored, quantity: '10', price: '100' };
+    expect(mergeBrokerFields(real, incoming).some((c) => c.field === 'operationType')).toBe(false);
+    expect(mergeBrokerFields({ ...stored, transferGroup: 'divext:1' }, incoming).some((c) => c.field === 'transferGroup')).toBe(false);
+  });
+});

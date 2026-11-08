@@ -345,7 +345,7 @@ export function attachParentFees(rows: RawRow[]): RawRow[] {
 export type FieldSource = 'broker' | 'annotation';
 
 /** Поля операции, за которые отвечает брокер */
-export type BrokerField = 'fee' | 'price' | 'quantity' | 'executedAt' | 'fxRate';
+export type BrokerField = 'fee' | 'price' | 'quantity' | 'executedAt' | 'fxRate' | 'operationType' | 'transferGroup';
 
 export interface FieldChange {
   field: BrokerField;
@@ -373,8 +373,10 @@ const same = (a: string, b: string): boolean => new Decimal(a).eq(new Decimal(b)
  *    существующее не стирает.
  */
 export function mergeBrokerFields(
-  existing: Pick<Operation, 'fee' | 'price' | 'quantity' | 'executedAt' | 'fxRate'>,
-  incoming: Pick<Operation, 'fee' | 'price' | 'quantity' | 'executedAt' | 'fxRate'>,
+  existing: Pick<Operation, 'fee' | 'price' | 'quantity' | 'executedAt' | 'fxRate'> &
+    Partial<Pick<Operation, 'operationType' | 'transferGroup'>>,
+  incoming: Pick<Operation, 'fee' | 'price' | 'quantity' | 'executedAt' | 'fxRate'> &
+    Partial<Pick<Operation, 'operationType' | 'transferGroup'>>,
   source: FieldSource = 'broker',
 ): FieldChange[] {
   if (source !== 'broker') return [];
@@ -395,6 +397,22 @@ export function mergeBrokerFields(
   const inFx = incoming.fxRate ?? '1';
   if (!same(exFx, inFx)) {
     changes.push({ field: 'fxRate', from: exFx, to: inFx });
+  }
+  // Починка артефакта старого парсера: неизвестный тип операции (напр. дивиденд «на карту») раньше
+  // становился Buy 0 × 0. Если по тому же номеру брокер теперь даёт другой тип, а в базе пустая
+  // «покупка» без количества и цены — тип исправляется (показывается в предпросмотре как изменение).
+  if (
+    existing.operationType === 'Buy' &&
+    incoming.operationType &&
+    incoming.operationType !== 'Buy' &&
+    new Decimal(existing.quantity).isZero() &&
+    new Decimal(existing.price).isZero()
+  ) {
+    changes.push({ field: 'operationType', from: existing.operationType, to: incoming.operationType });
+  }
+  // связь частей одного факта (дивиденд на карту, валютный ввод) проставляется один раз
+  if (incoming.transferGroup && !existing.transferGroup) {
+    changes.push({ field: 'transferGroup', from: null, to: incoming.transferGroup });
   }
   if (incoming.executedAt && incoming.executedAt !== existing.executedAt) {
     changes.push({ field: 'executedAt', from: existing.executedAt ?? null, to: incoming.executedAt });
