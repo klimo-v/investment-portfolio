@@ -633,6 +633,19 @@ export const PerformanceSchema = z.object({
   total: PeriodPerformanceSchema,
   bySystem: z.array(PerformanceRowSchema),
   byPortfolio: z.array(PerformanceRowSchema),
+  /** предупреждения о полноте журнала (libs/core/journal-completeness.ts); inPeriod — задевает выбранный период */
+  warnings: z.array(
+    z.object({
+      kind: z.enum(['missing-coupon', 'negative-cash']),
+      instrumentId: z.string().nullable(),
+      ticker: z.string().nullable(),
+      date: z.string(),
+      dateTo: z.string().nullable(),
+      amountRub: decimalString.nullable(),
+      message: z.string(),
+      inPeriod: z.boolean(),
+    }),
+  ),
   /** инструменты, оценённые не по цене дня на конец периода (перенос цены / нет цены) */
   carried: z.array(z.object({ instrumentId: z.string(), reason: z.enum(['no-price', 'no-fx', 'carried']), priceDate: z.string().nullable() })),
 });

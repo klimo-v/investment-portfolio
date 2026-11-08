@@ -4,11 +4,12 @@ import { drizzle, type BetterSQLite3Database } from 'drizzle-orm/better-sqlite3'
 import { migrate } from 'drizzle-orm/better-sqlite3/migrator';
 import Decimal from 'decimal.js';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { PerformanceQuerySchema } from '@core';
+import { PerformanceQuerySchema, type CouponScheduleRow } from '@core';
 import { instruments, operations, portfolios, priceHistory, systems } from '../../../db/schema';
 import { OperationsService } from '../operations/operations.service';
 import { PriceHistoryService } from '../quotes/price-history.service';
 import type { QuotesService } from '../quotes/quotes.service';
+import type { CouponScheduleService } from '../quotes/coupon-schedule.service';
 import { PerformanceService } from './performance.service';
 import { ValuationService } from './valuation.service';
 
@@ -17,6 +18,9 @@ const day = (offset: number) => new Date(Date.now() + offset * 86_400_000).toISO
 
 let db: BetterSQLite3Database;
 let service: PerformanceService;
+let ops: OperationsService;
+let valuation: ValuationService;
+let makeService: (valuation: ValuationService, ops: OperationsService, schedule: CouponScheduleRow[]) => PerformanceService;
 
 function op(o: { date: string; type: string; system?: string; portfolio?: string; instrument?: string | null; qty?: string; price?: string }) {
   db.insert(operations)
@@ -35,6 +39,8 @@ function op(o: { date: string; type: string; system?: string; portfolio?: string
 }
 
 beforeEach(() => {
+  makeService = (valuation, ops, schedule) =>
+    new PerformanceService(db, valuation, ops, { ensure: async () => undefined, list: () => schedule } as unknown as CouponScheduleService);
   const sqlite = new Database(':memory:');
   migrate(drizzle(sqlite), { migrationsFolder: 'src/db/migrations' });
   db = drizzle(sqlite);
@@ -58,9 +64,9 @@ beforeEach(() => {
   px('SBER', day(-5), '110');
   px('GAZP', day(-29), '200');
   px('GAZP', day(-5), '190');
-  const ops = new OperationsService(db, quotesStub);
-  const valuation = new ValuationService(db, ops, new PriceHistoryService(db, []), quotesStub);
-  service = new PerformanceService(db, valuation, ops);
+  ops = new OperationsService(db, quotesStub);
+  valuation = new ValuationService(db, ops, new PriceHistoryService(db, []), quotesStub);
+  service = makeService(valuation, ops, []);
 });
 
 describe('PerformanceService: единый DTO периода', () => {
@@ -106,5 +112,38 @@ describe('PerformanceService: единый DTO периода', () => {
     expect(PerformanceQuerySchema.safeParse({ scope: 'system' }).success).toBe(false);
     expect(PerformanceQuerySchema.safeParse({ scope: 'all', from: '2026-02-01', till: '2026-01-01' }).success).toBe(false);
     expect(PerformanceQuerySchema.safeParse({}).success).toBe(true);
+  });
+});
+
+describe('PerformanceService: предупреждения о полноте журнала', () => {
+  it('без графика купонов и с покрытым кэшем предупреждений нет', async () => {
+    expect((await service.performance({ scope: 'all' })).warnings).toEqual([]);
+  });
+
+  it('пропущенный купон из графика биржи попадает в warnings и помечает период', async () => {
+    db.insert(instruments).values({ id: 'OFZ', ticker: 'SU-TEST', type: 'Bond', currency: 'RUB', marketSource: 'moex' }).run();
+    op({ date: day(-29), type: 'Buy', instrument: 'OFZ', qty: '10', price: '100' });
+    db.insert(priceHistory).values({ instrumentId: 'OFZ', date: day(-29), price: '100', currency: 'RUB', source: 'moex' }).run();
+    const coupon = { instrumentId: 'OFZ', couponDate: day(-20), recordDate: day(-21), amountRub: '30' };
+    const withSchedule = makeService(valuation, ops, [coupon]);
+    const dto = await withSchedule.performance({ scope: 'all', from: day(-25) });
+    expect(dto.warnings).toHaveLength(1);
+    expect(dto.warnings[0]).toMatchObject({ kind: 'missing-coupon', ticker: 'SU-TEST', date: day(-20), amountRub: '300.00', inPeriod: true });
+    // период после предупреждения его не задевает
+    expect((await withSchedule.performance({ scope: 'all', from: day(-10) })).warnings[0].inPeriod).toBe(false);
+    // купон внесён — предупреждения нет
+    op({ date: day(-19), type: 'Coupon', instrument: 'OFZ', qty: '1', price: '300' });
+    expect((await withSchedule.performance({ scope: 'all' })).warnings).toEqual([]);
+  });
+
+  it('отрицательный кэш у контура со своим кэшем даёт предупреждение; у системы — нет', async () => {
+    op({ date: day(-5), type: 'Buy', qty: '1000', price: '100' }); // покупка на 100 000 при вводе 100 000 + 50 000 на других счетах
+    const all = await service.performance({ scope: 'all' });
+    // на счёте 1: ввод 100 000 − покупки (100×100 + 1000×100) < 0
+    const pf = await service.performance({ scope: 'portfolio', id: 'p1' });
+    expect(pf.warnings.some((w) => w.kind === 'negative-cash')).toBe(true);
+    expect(all.warnings.every((w) => w.kind === 'negative-cash' || w.kind === 'missing-coupon')).toBe(true);
+    const sys = await service.performance({ scope: 'system', id: 's1' });
+    expect(sys.warnings.some((w) => w.kind === 'negative-cash')).toBe(false);
   });
 });

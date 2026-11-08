@@ -1,6 +1,8 @@
 import { Inject, Injectable } from '@nestjs/common';
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
 import {
+  cashSeries,
+  journalCompleteness,
   payoutsInPeriod,
   periodPerformance,
   PerformanceSchema,
@@ -8,11 +10,13 @@ import {
   type PerformanceContour,
   type PerformanceDto,
   type PerformanceQuery,
+  warningTouchesPeriod,
   type ValuationSeriesDto,
 } from '@core';
-import { portfolios, systems } from '../../../db/schema';
+import { instruments, portfolios, systems } from '../../../db/schema';
 import { DB } from '../../db/drizzle.module';
 import { OperationsService } from '../operations/operations.service';
+import { CouponScheduleService } from '../quotes/coupon-schedule.service';
 import { ValuationService } from './valuation.service';
 
 /**
@@ -30,6 +34,7 @@ export class PerformanceService {
     @Inject(DB) private readonly db: BetterSQLite3Database,
     private readonly valuation: ValuationService,
     private readonly operations: OperationsService,
+    private readonly coupons: CouponScheduleService,
   ) {}
 
   async performance(query: PerformanceQuery): Promise<PerformanceDto> {
@@ -77,6 +82,8 @@ export class PerformanceService {
       });
     }
 
+    const warnings = await this.completeness(ops, filtered, till, contour === 'wealth' ? base : null);
+
     return PerformanceSchema.parse({
       scope: query.scope,
       id: query.id ?? null,
@@ -85,7 +92,43 @@ export class PerformanceService {
       total,
       bySystem,
       byPortfolio,
+      warnings: warnings.map((w) => ({ ...w, inPeriod: warningTouchesPeriod(w, query.from, till) })),
       carried: carriedAtEnd(base),
+    });
+  }
+
+  /**
+   * Полнота журнала для выбранного среза: купоны по графику биржи (график грузится и кэшируется
+   * в БД) и вычисленный кэш (только у контура со своим кэшем — `cashFrom` не null).
+   */
+  private async completeness(
+    ops: ReturnType<OperationsService['list']>,
+    filter: { systemId?: string; portfolioId?: string },
+    till: string,
+    cashFrom: ValuationSeriesDto | null,
+  ) {
+    const scoped = ops.filter(
+      (o) =>
+        o.date <= till &&
+        (!filter.systemId || o.systemId === filter.systemId) &&
+        (!filter.portfolioId || o.portfolioId === filter.portfolioId),
+    );
+    const firstOpDate = new Map<string, string>();
+    for (const o of scoped) {
+      if (!o.instrumentId || (o.operationType !== 'Buy' && o.operationType !== 'Sell')) continue;
+      const known = firstOpDate.get(o.instrumentId);
+      if (known === undefined || o.date < known) firstOpDate.set(o.instrumentId, o.date);
+    }
+    await this.coupons.ensure(firstOpDate, till);
+    const tickers = new Map(this.db.select().from(instruments).all().map((i) => [i.id, i.ticker]));
+    const dates = cashFrom?.groups[0]?.points.map((p) => p.date) ?? [];
+    const cash = cashFrom ? cashSeries(cashFrom).map((cashRub, i) => ({ date: dates[i], cashRub })) : undefined;
+    return journalCompleteness({
+      operations: scoped,
+      schedules: this.coupons.list([...firstOpDate.keys()]),
+      cash,
+      tickers,
+      today: till,
     });
   }
 }

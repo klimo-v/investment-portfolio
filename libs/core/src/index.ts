@@ -21,3 +21,4 @@ export * from './lib/valuation-extras';
 export * from './lib/twr';
 export * from './lib/period-performance';
 export * from './lib/benchmark';
+export * from './lib/journal-completeness';

@@ -10,6 +10,7 @@ import { DataRevision } from '../../shared/data-revision';
 import { DashboardFilters } from '../../widgets/dashboard-filters/dashboard-filters';
 import { dashboardFilter } from '../../widgets/dashboard-filters/dashboard-filter.state';
 import { SummaryKpis } from '../../widgets/summary-kpis/summary-kpis';
+import { DataQuality } from '../../widgets/data-quality/data-quality';
 import {
   EffectivenessTable,
   type EffGroupBy,
@@ -38,6 +39,7 @@ import { PnlBarChart } from '../../widgets/pnl-bar-chart/pnl-bar-chart';
   imports: [
     StateMessage,
     DashboardFilters,
+    DataQuality,
     SummaryKpis,
     EffectivenessTable,
     BenchmarkChart,
@@ -73,7 +75,10 @@ import { PnlBarChart } from '../../widgets/pnl-bar-chart/pnl-bar-chart';
         а скрыто всё только пока данных нет вообще — на первой загрузке.
       -->
     } @else if (summary.hasValue()) {
+      <app-data-quality [warnings]="performance.value()?.warnings ?? []" [carried]="performance.value()?.carried ?? []" />
+
       <app-summary-kpis
+        [dataWarnings]="periodWarnings()"
         [totals]="totals()"
         [cash]="cash()"
         [performance]="performance.value()?.total"
@@ -242,6 +247,12 @@ export class DashboardPage {
         : { scope: 'all', from: r.from, till: r.till };
   });
   protected readonly performance = performanceResource(this.performanceFilter);
+
+  /** Предупреждения о данных, задевающие выбранный период: пропуски журнала и дыры в ценах на конец периода */
+  protected readonly periodWarnings = computed(() => {
+    const p = this.performance.value();
+    return p ? p.warnings.filter((w) => w.inPeriod).length + p.carried.length : 0;
+  });
 
   private static readonly EMPTY: Effectiveness = {
     investedRub: 0,

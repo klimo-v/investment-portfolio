@@ -10,6 +10,8 @@ import { MoexHistoryProvider } from './moex-history.provider';
 import { CbrHistoryProvider } from './cbr-history.provider';
 import { BinanceHistoryProvider } from './binance-history.provider';
 import { PRICE_HISTORY_PROVIDERS } from './price-history.provider';
+import { COUPON_SCHEDULE_PROVIDER, MoexCouponProvider } from './coupon-schedule.provider';
+import { CouponScheduleService } from './coupon-schedule.service';
 import { PriceHistoryService } from './price-history.service';
 
 @Module({
@@ -29,7 +31,10 @@ import { PriceHistoryService } from './price-history.service';
     },
     PriceHistoryService,
     BenchmarkService,
+    MoexCouponProvider,
+    { provide: COUPON_SCHEDULE_PROVIDER, useExisting: MoexCouponProvider },
+    CouponScheduleService,
   ],
-  exports: [QuotesService, PriceHistoryService],
+  exports: [QuotesService, PriceHistoryService, CouponScheduleService],
 })
 export class QuotesModule {}

@@ -55,6 +55,9 @@ import {
         <mat-card-subtitle>Результат за период <app-hint [text]="resultHint" label="Результат за период" /></mat-card-subtitle>
         <mat-card-title [class]="cls(resultRub())">{{ money(resultRub()) }}</mat-card-title>
         <div class="sub">
+          @if (dataWarnings() > 0) {
+            <div class="warn">⚠ период задет предупреждениями о данных ({{ dataWarnings() }})</div>
+          }
           @if (performance(); as p) {
             @if (p.breakdown.realizedRub !== null && p.breakdown.payoutsRub !== null) {
               реализ.
@@ -75,14 +78,14 @@ import {
         label="Доходность стратегии (TWR)"
         [value]="pct(performance()?.twr?.pct ?? null)"
         [tone]="tone(performance()?.twr?.pct ?? null)"
-        [sub]="performance()?.twr?.pct == null ? noMetric(performance()?.twr?.reason) : '= график «Портфель против рынка»'"
+        [sub]="withWarning(performance()?.twr?.pct == null ? noMetric(performance()?.twr?.reason) : '= график «Портфель против рынка»')"
         hint="Time-weighted return: насколько хорошо работал капитал независимо от того, когда вы вносили и выводили деньги. Сравнима с индексом рынка. Совпадает с последней точкой линии «Портфель» на графике «Портфель против рынка»."
       />
       <app-kpi-card
         [label]="moneyReturnLabel()"
         [value]="pct(performance()?.mwr?.pct ?? null)"
         [tone]="tone(performance()?.mwr?.pct ?? null)"
-        [sub]="performance()?.mwr?.pct == null ? noMetric(performance()?.mwr?.reason) : ''"
+        [sub]="withWarning(performance()?.mwr?.pct == null ? noMetric(performance()?.mwr?.reason) : '')"
         [hint]="moneyReturnHint()"
       />
       <app-kpi-card
@@ -110,6 +113,9 @@ import {
         height: 100%;
         box-sizing: border-box;
       }
+      .warn {
+        color: var(--app-warning, #b26a00);
+      }
       .sub {
         margin-top: 4px;
         font-size: 12px;
@@ -123,6 +129,8 @@ export class SummaryKpis {
   readonly cash = input.required<Cash>();
   /** Единый расчёт периода (GET /api/performance); undefined — ещё грузится */
   readonly performance = input<PeriodPerformanceDto | undefined>(undefined);
+  /** Сколько предупреждений о данных задевает период: карточки помечаются, но не блокируются */
+  readonly dataWarnings = input(0);
   /** Просадка в процентах; null — меньше двух дней, считать не из чего */
   readonly drawdownPct = input<number | null>(null);
 
@@ -150,6 +158,12 @@ export class SummaryKpis {
       : 'Результат за период, делённый на средний капитал периода (с учётом того, сколько времени работал каждый ввод). Короче года в годовые не пересчитываем — аннуализация даёт шум.') +
     ' Может законно отличаться от TWR: если крупный ввод пришёлся перед ростом или падением, ваши деньги отработали иначе, чем стратегия.',
   );
+
+  /** Подпись карточки плюс пометка, если период задевают предупреждения о данных */
+  protected withWarning(sub: string): string {
+    const mark = this.dataWarnings() > 0 ? `⚠ данные неполны (${this.dataWarnings()})` : '';
+    return [sub, mark].filter(Boolean).join(' · ');
+  }
 
   protected num(v: string): number {
     return Number(v);

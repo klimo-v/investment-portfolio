@@ -172,6 +172,42 @@ export const instrumentIdentifiers = sqliteTable(
 );
 export type InstrumentIdentifierRow = typeof instrumentIdentifiers.$inferSelect;
 
+/**
+ * График купонов облигаций с MOEX ISS — кэш для проверки полноты журнала (journalCompleteness).
+ * Отдельная таблица, а не price_history: это не цены, а расписание событий, у него своя форма
+ * (дата выплаты и дата фиксации) и свой срок годности. Расписание почти не меняется, а запрос
+ * к бирже на каждый заход на дашборд лишний — поэтому храним и перезагружаем по сроку (см.
+ * coupon_schedule_loads). Удаление инструмента (слияние дублей) каскадно чистит расписание.
+ */
+export const couponSchedule = sqliteTable(
+  'coupon_schedule',
+  {
+    instrumentId: text('instrument_id')
+      .notNull()
+      .references(() => instruments.id, { onDelete: 'cascade' }),
+    couponDate: text('coupon_date').notNull(),
+    recordDate: text('record_date'),
+    /** купон на одну бумагу, ₽ (value_rub ISS) */
+    amountRub: text('amount_rub'),
+  },
+  (t) => [primaryKey({ columns: [t.instrumentId, t.couponDate] })],
+);
+export type CouponScheduleDbRow = typeof couponSchedule.$inferSelect;
+
+/**
+ * Когда и до какой даты график загружен по бумаге. Отдельно от строк, чтобы помнить и пустой
+ * результат (бумага без купонов / биржа ничего не вернула) и не повторять запрос до истечения срока.
+ */
+export const couponScheduleLoads = sqliteTable('coupon_schedule_loads', {
+  instrumentId: text('instrument_id')
+    .primaryKey()
+    .references(() => instruments.id, { onDelete: 'cascade' }),
+  loadedAt: text('loaded_at').notNull(),
+  /** график запрошен за [covered_from, covered_till]: бумагу могли купить раньше, чем грузили, — тогда догружаем */
+  coveredFrom: text('covered_from').notNull(),
+  coveredTill: text('covered_till').notNull(),
+});
+
 export type SystemRow = typeof systems.$inferSelect;
 export type PortfolioRow = typeof portfolios.$inferSelect;
 export type InstrumentRow = typeof instruments.$inferSelect;
