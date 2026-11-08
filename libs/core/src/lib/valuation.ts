@@ -1,4 +1,5 @@
 import Decimal from 'decimal.js';
+import { twrLevels } from './twr';
 import type { Operation } from './schemas';
 import { marketValueRub, TradeLedger, type TradeResult } from './engine';
 import { futureUnrealizedPnl } from './futures-engine';
@@ -360,22 +361,12 @@ function fxRateAt(currency: string, day: string, cursor: PriceCursor): Decimal |
 export function timeWeightedIndex(
   points: readonly { totalRub: number; netContributionsRub: number }[],
 ): number[] {
-  const index: number[] = [];
-  let level = 100;
-  let prevWealth: number | null = null;
-  let prevContrib = 0;
-  for (const p of points) {
-    const wealth = p.netContributionsRub + p.totalRub;
-    if (prevWealth !== null && prevWealth > 0) {
-      const flow = p.netContributionsRub - prevContrib;
-      const base = prevWealth + Math.max(flow, 0); // ввод — в начале дня, вывод — в конце
-      level *= 1 + (wealth - prevWealth - flow) / base;
-    }
-    index.push(level);
-    prevWealth = wealth;
-    prevContrib = p.netContributionsRub;
-  }
-  return index;
+  // богатство W = чистый ввод + итог; поток дня — изменение чистого ввода (первая точка — старт)
+  const inputs = points.map((p, i) => ({
+    value: new Decimal(p.netContributionsRub).plus(p.totalRub),
+    flow: new Decimal(p.netContributionsRub).minus(i > 0 ? points[i - 1].netContributionsRub : 0),
+  }));
+  return twrLevels(inputs, null).levels.map((l) => l.toNumber());
 }
 
 /**

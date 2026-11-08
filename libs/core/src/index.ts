@@ -17,3 +17,5 @@ export * from './lib/futures-settlement';
 export * from './lib/annotations';
 export * from './lib/price-history';
 export * from './lib/valuation';
+export * from './lib/twr';
+export * from './lib/period-performance';
