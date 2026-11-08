@@ -99,7 +99,7 @@ export interface PeriodPerformance {
   twr: {
     /** TWR за период, %; null — не было капитала */
     pct: number | null;
-    /** ряд индекса: последняя точка ≡ pct + 100 (один и тот же расчёт) */
+    /** ряд индекса с точкой базы (100) первой: последняя точка ≡ pct + 100 (один и тот же расчёт) */
     series: TwrPoint[];
     reason: PerformanceUnavailable | null;
   };
@@ -219,7 +219,9 @@ export function periodPerformance(series: ValuationSeries, options: PeriodPerfor
   // TWR: ряд индекса и итог — один массив
   const twr = twrLevels(inputs, start.value);
   const seriesPoints: TwrPoint[] = [];
-  if (realBase) seriesPoints.push({ date: realBase.date, index: 100 });
+  // база 100 — день ДО периода (у периода с первой операции это условный день перед первой точкой):
+  // тогда доходность первого дня входит в ряд, а ориентир нормируется на ту же дату
+  seriesPoints.push({ date: baseDate, index: 100 });
   period.forEach((d, i) => seriesPoints.push({ date: d.date, index: twr.levels[i].toNumber() }));
   const lastLevel = twr.levels[twr.levels.length - 1];
   // контур позиций без вложенного капитала (система только из фьючерсов: V — это переоценка, не деньги)

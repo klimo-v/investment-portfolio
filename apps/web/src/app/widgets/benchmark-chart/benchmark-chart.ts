@@ -1,40 +1,55 @@
-import { ChangeDetectionStrategy, Component, computed, inject, input } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, inject, input, output } from '@angular/core';
 import { MatCardModule } from '@angular/material/card';
+import { MatFormFieldModule } from '@angular/material/form-field';
+import { MatSelectModule } from '@angular/material/select';
 import type { ChartConfiguration } from 'chart.js';
-import type { BenchmarkPoint } from '@core';
+import { BENCHMARK_INDEXES, type BenchmarkResponse } from '@core';
 import { chartSemantic, seriesColor, ThemeService } from '@web-shared';
 import { ChartCanvas } from '../chart-canvas/chart-canvas';
 
 /**
- * Годовая ставка вклада-ориентира для линии «Депозит» (что было бы, положи те же
- * деньги на вклад). Допущение — при желании выносится в настройки; ориентир —
- * ключевая ставка периода.
- */
-const DEPOSIT_ANNUAL_RATE = 0.16;
-
-/**
- * «Портфель против рынка»: рост ₽100, вложенных в начале периода — портфель (по
- * доходности из журнала и истории цен, без ввода/вывода денег), индекс МосБиржи и вклад под фиксированную ставку.
+ * «Портфель против рынка»: доходность стратегии (TWR, без ваших вводов и выводов), выбранный
+ * ориентир и денежный рынок на базе 100 в первый день периода.
  *
- * Нормировка на 100 обязательна: абсолютные рубли портфеля и пункты индекса
- * несопоставимы, а вопрос «обгоняю ли я рынок» — именно про относительный рост.
+ * Нормировка на 100 обязательна: рубли портфеля и пункты индекса несопоставимы, а вопрос
+ * «обгоняю ли я рынок» — про относительный рост. Все три ряда приходят готовыми с бэка
+ * (портфель — из /api/performance, ориентир — из /api/benchmark), на фронте ничего не
+ * пересчитывается: последняя точка линии «Портфель» совпадает с карточкой TWR.
+ *
+ * Ориентир по умолчанию — индекс МосБиржи полной доходности (нетто): дивиденды портфеля сравниваются
+ * с индексом, в котором дивиденды тоже есть. IMOEX (ценовой) остаётся выбираемым с пометкой.
  */
 @Component({
   selector: 'app-benchmark-chart',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [MatCardModule, ChartCanvas],
+  imports: [MatCardModule, MatFormFieldModule, MatSelectModule, ChartCanvas],
   template: `
     <mat-card>
-      <h3>Портфель против рынка</h3>
+      <div class="head">
+        <h3>Портфель против рынка</h3>
+        <mat-form-field appearance="outline" subscriptSizing="dynamic" class="picker">
+          <mat-label>Ориентир</mat-label>
+          <mat-select [value]="selected()" (valueChange)="selectedChange.emit($event)">
+            @for (b of options; track b.secid) {
+              <mat-option [value]="b.secid">{{ b.label }}</mat-option>
+            }
+          </mat-select>
+        </mat-form-field>
+      </div>
       <p class="note">
-        Рост ₽100, вложенных в начале периода: ваш портфель, индекс МосБиржи (IMOEX)
-        и вклад под {{ depositRatePct }}% годовых. По дневной стоимости портфеля из
-        журнала операций и истории цен.
+        Рост ₽100 на начало периода: доходность вашей стратегии (TWR — без учёта ваших вводов и выводов),
+        выбранный ориентир и денежный рынок (RUSFAR).
+        @if (note(); as n) {
+          {{ n }}
+        }
       </p>
       @if (config(); as cfg) {
         <app-chart-canvas [config]="cfg" />
       } @else {
-        <p class="note">Нужно минимум два дня истории портфеля и данные индекса.</p>
+        <p class="note">Нужно минимум два дня истории портфеля.</p>
+      }
+      @if (benchmark() && !benchmark()?.index) {
+        <p class="note warn">Ряд выбранного ориентира не загружен (источник MOEX недоступен) — показаны портфель и денежный рынок.</p>
       }
     </mat-card>
   `,
@@ -43,93 +58,98 @@ const DEPOSIT_ANNUAL_RATE = 0.16;
       mat-card {
         padding: 16px;
       }
+      .head {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 12px;
+        flex-wrap: wrap;
+        margin-bottom: 8px;
+      }
       h3 {
-        margin: 0 0 8px;
+        margin: 0;
         font-weight: 500;
+      }
+      .picker {
+        min-width: 260px;
       }
       .note {
         margin: 0 0 12px;
         font-size: 13px;
         color: var(--app-text-muted);
       }
+      .warn {
+        margin: 12px 0 0;
+      }
     `,
   ],
 })
 export class BenchmarkChart {
-  /** Индекс доходности портфеля (любая база; нормируется здесь) по возрастанию даты, без потоков денег */
+  /** Индекс доходности портфеля (TWR, база 100 в первый день), по возрастанию даты */
   readonly values = input.required<readonly { date: string; valueRub: number }[]>();
-  /** История индекса; порядок неважен — сортируется здесь */
-  readonly points = input<readonly BenchmarkPoint[]>([]);
+  /** Выбранный индекс и денежный рынок на той же базе; undefined — ещё грузится */
+  readonly benchmark = input<BenchmarkResponse | undefined>(undefined);
+  readonly selected = input.required<string>();
+  readonly selectedChange = output<string>();
+
+  protected readonly options = BENCHMARK_INDEXES;
 
   private readonly theme = inject(ThemeService);
   private readonly cc = computed(() => chartSemantic(this.theme.isDark()));
 
-  protected readonly depositRatePct = (DEPOSIT_ANNUAL_RATE * 100).toFixed(0);
+  protected readonly note = computed(() => this.benchmark()?.index?.note ?? '');
 
   /** null — данных для сравнения недостаточно */
   protected readonly config = computed<ChartConfiguration<'line'> | null>(() => {
-    let s = [...this.values()];
-    const b = [...this.points()].sort((a, b) => a.date.localeCompare(b.date));
-    if (s.length < 2 || b.length === 0) return null;
-
-    // база нормировки — первый день, когда в портфеле что-то было (до первой покупки стоимость 0)
-    const firstHeld = s.findIndex((r) => r.valueRub > 0);
-    if (firstHeld < 0) return null;
-    s = s.slice(firstHeld);
+    const s = this.values();
     if (s.length < 2) return null;
-    const baseValue = s[0].valueRub;
-
-    // Индекс торгуется не каждый день, а ряд портфеля идёт по календарным дням:
-    // выравниваем по «последнему закрытию на дату или раньше»
-    const closeOnOrBefore = (date: string): number => {
-      let close = b[0].close;
-      for (const p of b) {
-        if (p.date <= date) close = p.close;
-        else break;
-      }
-      return close;
+    const labels = s.map((r) => r.date);
+    const byDate = (series: { date: string; index: number }[] | undefined): (number | null)[] => {
+      const map = new Map((series ?? []).map((p) => [p.date, p.index]));
+      return labels.map((d) => map.get(d) ?? null);
     };
-    const baseClose = closeOnOrBefore(s[0].date);
-    const baseTime = new Date(s[0].date + 'T00:00:00Z').getTime();
-    const dayMs = 24 * 60 * 60 * 1000;
-
-    const portfolio = s.map((r) => (r.valueRub / baseValue) * 100);
-    const imoex = s.map((r) => (closeOnOrBefore(r.date) / baseClose) * 100);
-    const deposit = s.map((r) => {
-      const years = (new Date(r.date + 'T00:00:00Z').getTime() - baseTime) / dayMs / 365;
-      return 100 * Math.pow(1 + DEPOSIT_ANNUAL_RATE, years);
-    });
+    const b = this.benchmark();
+    const index = b?.index;
+    const money = b?.moneyMarket;
 
     return {
       type: 'line',
       data: {
-        labels: s.map((r) => r.date),
+        labels,
         datasets: [
           {
-            label: 'Портфель',
-            data: portfolio,
+            label: 'Портфель (TWR)',
+            data: s.map((r) => r.valueRub),
             borderColor: seriesColor(0),
             backgroundColor: seriesColor(0),
             pointRadius: 2,
             tension: 0.2,
           },
-          {
-            label: 'IMOEX',
-            data: imoex,
-            borderColor: this.cc().benchmark,
-            backgroundColor: this.cc().benchmark,
-            pointRadius: 2,
-            tension: 0.2,
-          },
-          {
-            label: 'Депозит',
-            data: deposit,
-            borderColor: this.cc().deposit,
-            backgroundColor: this.cc().deposit,
-            pointRadius: 0,
-            borderDash: [6, 4],
-            tension: 0,
-          },
+          ...(index
+            ? [
+                {
+                  label: index.secid,
+                  data: byDate(index.series),
+                  borderColor: this.cc().benchmark,
+                  backgroundColor: this.cc().benchmark,
+                  pointRadius: 2,
+                  tension: 0.2,
+                },
+              ]
+            : []),
+          ...(money
+            ? [
+                {
+                  label: 'Денежный рынок (RUSFAR)',
+                  data: byDate(money.series),
+                  borderColor: this.cc().deposit,
+                  backgroundColor: this.cc().deposit,
+                  pointRadius: 0,
+                  borderDash: [6, 4],
+                  tension: 0,
+                },
+              ]
+            : []),
         ],
       },
       options: {

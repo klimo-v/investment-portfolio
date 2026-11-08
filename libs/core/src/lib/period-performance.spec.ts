@@ -182,6 +182,13 @@ describe('periodPerformance — инварианты на ряде из журн
     expect(new Decimal(head.resultRub).plus(mid.resultRub).toFixed(2)).toBe(whole.resultRub);
   });
 
+  it('ряд индекса начинается с точки базы 100 — и у периода с первой операции (условный день перед первой точкой)', () => {
+    const all = periodPerformance(series('portfolio'), { contour: 'wealth' });
+    expect(all.twr.series[0]).toEqual({ date: '2026-01-05', index: 100 }); // ряд идёт с первой сделки (06.01)
+    const part = periodPerformance(series('portfolio'), { from: '2026-02-01', contour: 'wealth' });
+    expect(part.twr.series[0]).toEqual({ date: '2026-01-31', index: 100 });
+  });
+
   it('«Всё время»: база нулевая, поток первого дня — весь стартовый капитал', () => {
     const perf = periodPerformance(series('portfolio'), { contour: 'wealth' });
     expect(perf.baseDate).toBeNull();

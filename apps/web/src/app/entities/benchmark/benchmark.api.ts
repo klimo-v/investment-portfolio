@@ -1,34 +1,33 @@
-import type { Signal } from '@angular/core';
+import { inject, type Signal } from '@angular/core';
 import { httpResource, type HttpResourceRef } from '@angular/common/http';
-import { z } from 'zod';
-import { BenchmarkPointSchema, type BenchmarkPoint } from '@core';
+import { BenchmarkResponseSchema, type BenchmarkResponse, type BenchmarkSeriesDto } from '@core';
+import { DataRevision } from '../../shared/data-revision';
 
-/** Диапазон дат запроса истории индекса */
-export interface BenchmarkRange {
+/** Что и за какой период сравниваем с портфелем */
+export interface BenchmarkQuery {
+  secid: string;
   from: string;
   till: string;
 }
 
 /**
- * История бенчмарка (индекс IMOEX) для линии «Портфель vs рынок» на дашборде
- * (docs/05-review-usability.md §1). Диапазон приходит сигналом от страницы (он
- * считается по датам ряда стоимости) и читается ЛЕНИВО внутри URL-функции: пока он null,
- * httpResource простаивает на undefined-URL и запрос не уходит.
- *
- * Функция, а не root-сервис с публичным `range`: у сервиса значение переживало
- * уход со страницы, и при возврате ресурс успевал сходить со СТАРЫМ диапазоном
- * прежде, чем эффект страницы записывал новый.
+ * Ориентир для линии «Портфель против рынка» (GET /api/benchmark): выбранный индекс и линия
+ * «Денежный рынок» на базе 100 на первый день периода. Ряды строит бэк из price_history —
+ * фронт только рисует. Запрос приходит сигналом от страницы (период берётся из ряда TWR) и
+ * читается лениво внутри URL-функции: пока он null, ресурс простаивает и запрос не уходит.
  */
 export function benchmarkResource(
-  range: Signal<BenchmarkRange | null>,
-): HttpResourceRef<BenchmarkPoint[] | undefined> {
+  query: Signal<BenchmarkQuery | null>,
+): HttpResourceRef<BenchmarkResponse | undefined> {
+  const revision = inject(DataRevision);
   return httpResource(
     () => {
-      const r = range();
-      return r ? `/api/quotes/benchmark?from=${r.from}&till=${r.till}` : undefined;
+      revision.value();
+      const q = query();
+      return q ? `/api/benchmark?secid=${q.secid}&from=${q.from}&till=${q.till}` : undefined;
     },
-    { parse: z.array(BenchmarkPointSchema).parse },
+    { parse: BenchmarkResponseSchema.parse },
   );
 }
 
-export type { BenchmarkPoint };
+export type { BenchmarkResponse, BenchmarkSeriesDto };

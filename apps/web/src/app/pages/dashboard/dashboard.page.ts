@@ -1,8 +1,9 @@
 import { ChangeDetectionStrategy, Component, computed, inject, signal } from '@angular/core';
-import { maxDrawdown, type Cash, type Effectiveness } from '@core';
+import { BENCHMARK_INDEXES, DEFAULT_BENCHMARK, maxDrawdown, type Cash, type Effectiveness } from '@core';
 import { StateMessage } from '@web-shared';
 import { summaryResource, type SummaryFilter } from '../../entities/summary/summary.api';
-import { benchmarkResource, type BenchmarkRange } from '../../entities/benchmark/benchmark.api';
+import { benchmarkResource, type BenchmarkQuery } from '../../entities/benchmark/benchmark.api';
+import { parseEnum, queryParams } from '../../shared/query-param';
 import { valuationResource, type ValuationFilter } from '../../entities/valuation/valuation.api';
 import { performanceResource, type PerformanceFilter } from '../../entities/performance/performance.api';
 import { DataRevision } from '../../shared/data-revision';
@@ -94,7 +95,12 @@ import { PnlBarChart } from '../../widgets/pnl-bar-chart/pnl-bar-chart';
         -->
         <div class="wide">
           @defer (on viewport) {
-            <app-benchmark-chart [values]="portfolioValues()" [points]="benchmark.value() ?? []" />
+            <app-benchmark-chart
+              [values]="portfolioValues()"
+              [benchmark]="benchmark.value()"
+              [selected]="benchmarkSecid()"
+              (selectedChange)="selectBenchmark($event)"
+            />
           } @placeholder {
             <div class="chart-box"></div>
           }
@@ -307,15 +313,26 @@ export class DashboardPage {
     return maxDrawdown(v.map((r) => r.valueRub)) * 100;
   });
 
+  /** Выбранный ориентир живёт в адресной строке (?benchmark=), как и остальной фильтр дашборда */
+  private readonly urlParams = queryParams();
+  private readonly rawBenchmark = this.urlParams.read('benchmark');
+  protected readonly benchmarkSecid = computed(() =>
+    parseEnum(this.rawBenchmark(), BENCHMARK_INDEXES.map((b) => b.secid), DEFAULT_BENCHMARK),
+  );
+
+  protected selectBenchmark(secid: string): void {
+    void this.urlParams.patch({ benchmark: secid === DEFAULT_BENCHMARK ? null : secid });
+  }
+
   /**
-   * Окно запроса истории индекса — от первого дня ряда до сегодня. null (дней меньше
-   * двух) означает «не запрашивать»: сравнивать не с чем.
+   * Окно запроса ориентира — ровно даты ряда TWR (от точки базы до конца): оба ряда нормируются
+   * на 100 в один день. null (дней меньше двух) означает «не запрашивать»: сравнивать не с чем.
    */
-  private readonly benchmarkRange = computed<BenchmarkRange | null>(() => {
+  private readonly benchmarkQuery = computed<BenchmarkQuery | null>(() => {
     const s = this.portfolioValues();
     if (s.length < 2) return null;
-    return { from: s[0].date, till: new Date().toISOString().slice(0, 10) };
+    return { secid: this.benchmarkSecid(), from: s[0].date, till: s[s.length - 1].date };
   });
 
-  protected readonly benchmark = benchmarkResource(this.benchmarkRange);
+  protected readonly benchmark = benchmarkResource(this.benchmarkQuery);
 }
