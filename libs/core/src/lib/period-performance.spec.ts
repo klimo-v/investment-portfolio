@@ -251,6 +251,29 @@ describe('periodPerformance — инварианты на ряде из журн
     expect(perf.mwr.reason).toBe('no-capital');
   });
 
+  it('система: комиссия до первой покупки не обнуляет TWR (регрессия: −100% навсегда)', () => {
+    const ops = [
+      mk({ date: '2026-02-02', operationType: 'Fee', quantity: '1', price: '1198' }), // издержка на системе без позиций
+      mk({ date: '2026-02-04', operationType: 'Buy', instrumentId: 'SBER', quantity: '10', price: '100' }),
+    ];
+    const prices = [px('SBER', '2026-02-04', '100'), px('SBER', '2026-02-06', '110')];
+    const s = valuationSeries(ops, prices, { till: '2026-02-06', groupBy: 'system', systemId: 's1' });
+    const perf = periodPerformance(s, { contour: 'positions', groupKey: 's1' });
+    expect(perf.twr.pct).toBeCloseTo(10, 6);
+    expect(perf.twr.series.every((p) => p.index > 0)).toBe(true);
+  });
+
+  it('фьючерсная система с отрицательной «стоимостью» (убыток по открытой позиции): причина «нет капитала», а не «журнал неполон»', () => {
+    const ops = [mk({ date: '2026-03-05', operationType: 'Buy', instrumentId: 'CNY-12.26', quantity: '2', price: '12000', systemId: 's9' })];
+    const prices = [px('CNY-12.26', '2026-03-05', '12000'), px('CNY-12.26', '2026-03-09', '11000')];
+    const s = valuationSeries(ops, prices, { till: '2026-03-12', groupBy: 'system', futureIds: new Set(['CNY-12.26']) });
+    const perf = periodPerformance(s, { contour: 'positions', groupKey: 's9' });
+    expect(Number(perf.endValueRub)).toBeLessThan(0); // «стоимость» фьючерса — переоценка, и она в минусе
+    expect(perf.twr.pct).toBeNull();
+    expect(perf.twr.reason).toBe('no-capital');
+    expect(perf.mwr.reason).toBe('no-capital');
+  });
+
   it('период без точек → no-data', () => {
     const perf = periodPerformance(series('portfolio'), { from: '2027-01-01', contour: 'wealth' });
     expect(perf.twr.reason).toBe('no-data');
@@ -291,6 +314,24 @@ describe('periodPerformance: перевод денег и неполный жу�
     expect(perf.mwr.reason).toBe('negative-capital');
     expect(perf.dietzPct).toBeNull();
     expect(perf.xirrPct).toBeNull();
+  });
+
+  it('копейки в минус после полного вывода (−402 ₽ при капитале в миллионы) проценты не обесценивают', () => {
+    const f: PeriodFixture = {
+      name: 'x',
+      description: '',
+      points: [
+        { date: '2025-03-06', marketValueRub: 500_000, totalRub: 0, netContributionsRub: 500_000 },
+        // выведено всё и ещё 402 ₽ комиссий сверху: богатство −402
+        { date: '2025-03-07', marketValueRub: 0, totalRub: -402, netContributionsRub: 0 },
+        { date: '2025-03-10', marketValueRub: 2_000_000, totalRub: -402, netContributionsRub: 2_000_000 },
+        { date: '2025-12-31', marketValueRub: 2_200_000, totalRub: 199_598, netContributionsRub: 2_000_000 },
+      ],
+      expected: { resultRub: 0, twrIndex: 0, mwrPct: 0, mwrTolerancePp: 0 },
+    };
+    const perf = periodPerformance(seriesOf(f), { from: '2025-03-07', contour: 'wealth' });
+    expect(perf.twr.reason).toBeNull();
+    expect(perf.twr.pct).not.toBeNull();
   });
 
   it('нулевой капитал до первого ввода — норма, а не «отрицательный»: проценты считаются', () => {

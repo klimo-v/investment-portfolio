@@ -37,6 +37,13 @@ const DAY_MS = 86_400_000;
 /** Период короче этого числа дней показываем доходностью за период, не годовой (аннуализация шумит) */
 export const ANNUALIZE_FROM_DAYS = 365;
 
+/**
+ * Допуск отрицательного капитала — доля пикового капитала периода. Копейки в минус на почти пустом счёте
+ * (комиссии и налоги после полного вывода: −402 ₽ при капитале 3,9 млн ₽) проценты не обесценивают; существенный
+ * минус (покупки без внесённых денег) — да.
+ */
+export const NEGATIVE_CAPITAL_TOLERANCE = 0.001;
+
 export type PerformanceContour = 'wealth' | 'positions';
 
 /** Почему метрику нельзя посчитать */
@@ -235,15 +242,18 @@ export function periodPerformance(series: ValuationSeries, options: PeriodPerfor
   // Капитал контура был отрицательным (покупки без внесённых денег): TWR пропускает такие дни, а Dietz и XIRR
   // считают их по-своему — цифры расходились втрое без оговорки. Проценты тогда не показываем: результат в ₽
   // верен, а причину («журнал неполон») пользователь видит в предупреждении о кэше.
+  const peak = inputs.reduce((m, d) => (d.value.gt(m) ? d.value : m), start.value);
+  const floor = peak.mul(NEGATIVE_CAPITAL_TOLERANCE).neg();
   let prevValue = start.value;
   let negativeDays = 0;
   for (const d of inputs) {
-    if (prevValue.lt(0)) negativeDays++;
+    if (prevValue.lt(floor)) negativeDays++;
     prevValue = d.value;
   }
   const reliable = negativeDays === 0;
   const twrPct = reliable && hasCapital && twr.capitalDays > 0 ? lastLevel.minus(100).toNumber() : null;
-  const unavailable: PerformanceUnavailable = reliable ? 'no-capital' : 'negative-capital';
+  // у контура без капитала (система из одних фьючерсов) «стоимость» бывает отрицательной — это не неполный журнал
+  const unavailable: PerformanceUnavailable = !hasCapital || reliable ? 'no-capital' : 'negative-capital';
 
   // Modified Dietz: ввод работает с начала дня (вес включает день потока), вывод — с конца
   const total = daysBetween(baseDate, end.date);
