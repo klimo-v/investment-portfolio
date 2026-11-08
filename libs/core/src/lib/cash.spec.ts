@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { cashBalanceRub } from './cash';
+import { cashBalanceRub, cashDelta, dailyCash, dailyCashAt } from './cash';
 import type { Operation } from './schemas';
 
 /**
@@ -132,5 +132,26 @@ describe('cashBalanceRub', () => {
     // 0.1 + 0.2 во float даёт 0.30000000000000004
     const balance = cashBalanceRub([cash('Deposit', '0.1'), cash('Deposit', '0.2')]);
     expect(balance.toString()).toBe('0.3');
+  });
+});
+
+describe('cashDelta / dailyCash', () => {
+  it('cashDelta — единственный знак: продажа с комиссией, налог со знаком минус, фьючерс — ноль', () => {
+    expect(cashDelta(op({ operationType: 'Sell', quantity: '10', price: '5', fee: '1' })).toFixed(2)).toBe('49.00');
+    expect(cashDelta(cash('Tax', '-100')).toFixed(2)).toBe('100.00');
+    expect(cashDelta(op({ operationType: 'Buy', instrumentId: 'F', quantity: '1', price: '9' }), new Set(['F'])).toString()).toBe('0');
+  });
+
+  it('нарастающий итог по дням; последняя точка = cashBalanceRub; продажа без позиции учтена отдельно', () => {
+    const ops = [
+      op({ date: '2025-01-01', operationType: 'Deposit', instrumentId: null, quantity: '1', price: '1000' }),
+      op({ date: '2025-01-03', operationType: 'Sell', instrumentId: 'X', quantity: '10', price: '10', fee: '2' }),
+    ];
+    const daily = dailyCash(ops);
+    expect(daily.map((d) => d.cashRub.toFixed(2))).toEqual(['1000.00', '1098.00']);
+    expect(daily[1].orphanSellsRub.toFixed(2)).toBe('98.00');
+    expect(dailyCashAt(daily, '2025-01-02').cashRub.toFixed(2)).toBe('1000.00');
+    expect(dailyCashAt(daily, '2024-12-31').cashRub.toString()).toBe('0');
+    expect(cashBalanceRub(ops).toFixed(2)).toBe('1098.00');
   });
 });

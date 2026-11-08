@@ -143,7 +143,7 @@ export class ValuationService {
       ...result,
       groups: result.groups.map((g) => ({ ...g, name: names.get(g.key) ?? g.key })),
       hasCash,
-      cashRub: hasCash ? cashSeries(result) : [],
+      cashRub: hasCash ? cashSeries(result, ops, { portfolioId: query.portfolioId, futureIds }) : [],
       events,
     });
   }

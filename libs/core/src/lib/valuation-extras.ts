@@ -1,5 +1,6 @@
 import Decimal from 'decimal.js';
 import type { Operation } from './schemas';
+import { dailyCash, dailyCashAt } from './cash';
 import { incomeAmountRub, type ValuationSeries } from './valuation';
 
 /**
@@ -12,27 +13,26 @@ Decimal.set({ precision: 40 });
 const ZERO = new Decimal(0);
 
 /**
- * Кэш на каждый день ряда: богатство минус стоимость позиций = чистый ввод + итог − рыночная стоимость
- * (то же, что чистый ввод + зафиксированное − вложено). Продажа переливает стоимость из позиции в
- * кэш, выплата добавляет в кэш — поэтому верхушка стека «позиции + деньги» = богатство и не падает.
+ * Кэш на каждый день ряда — из ЖУРНАЛА (dailyCash, cash.ts), а не как «богатство − стоимость»:
+ * один расчёт на всё приложение (П4). Фильтры `portfolioId`/`systemId` — те же, с какими
+ * построен ряд; фьючерсы — `futureIds`.
  *
- * Имеет смысл для контура со своим кэшем (весь журнал или один счёт), не для системы/инструмента.
- * На сегодня совпадает с cashBalanceRub (cash.ts): ту же сумму дают журнал и ряд, если в ряд
- * входят и отдельные налоги/комиссии (valuation.ts). Отрицательный кэш — в журнале не хватает
- * ввода денег (сигнал полноты журнала).
+ * Инвариант: чистый ввод + итог − стоимость = кэш − продажи без позиции (`orphanSellsRub`):
+ * продажа без позиции в сделки не попадает, а деньги двигает. Отрицательный кэш — в журнале
+ * не хватает ввода денег (сигнал полноты журнала).
  */
-export function cashSeries(series: ValuationSeries): string[] {
+export function cashSeries(
+  series: ValuationSeries,
+  operations: readonly Operation[],
+  scope: { portfolioId?: string; systemId?: string; futureIds?: ReadonlySet<string> } = {},
+): string[] {
   const first = series.groups[0];
   if (!first) return [];
-  return first.points.map((_, i) => {
-    let result = ZERO;
-    let market = ZERO;
-    for (const g of series.groups) {
-      result = result.plus(g.points[i].totalRub);
-      market = market.plus(g.points[i].marketValueRub);
-    }
-    return new Decimal(series.netContributionsRub[i] ?? 0).plus(result).minus(market).toFixed(2);
-  });
+  const scoped = operations.filter(
+    (o) => (!scope.portfolioId || o.portfolioId === scope.portfolioId) && (!scope.systemId || o.systemId === scope.systemId),
+  );
+  const daily = dailyCash(scoped, scope.futureIds);
+  return first.points.map((p) => dailyCashAt(daily, p.date).cashRub.toFixed(2));
 }
 
 export type ValuationEventKind = 'payout' | 'sale';

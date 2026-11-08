@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Operation } from './schemas';
-import { cashBalanceRub } from './cash';
+import { cashBalanceRub, dailyCash, orphanSellsRub } from './cash';
 import { cashSeries, valuationEvents } from './valuation-extras';
 import { valuationSeries, type PriceObservation } from './valuation';
 
@@ -47,13 +47,13 @@ const series = (groupBy: 'portfolio' | 'system' | 'instrument', till = '2026-06-
 
 describe('cashSeries: кэш из ряда = кэш из журнала', () => {
   it.each(['portfolio', 'system', 'instrument'] as const)('на сегодня совпадает с cashBalanceRub (%s) — до копейки', (groupBy) => {
-    const cash = cashSeries(series(groupBy));
+    const cash = cashSeries(series(groupBy), OPS, { futureIds: FUT });
     expect(cash[cash.length - 1]).toBe(cashBalanceRub(OPS, FUT).toFixed(2));
   });
 
   it('совпадает на любую дату, а не только на последнюю', () => {
     for (const till of ['2026-01-10', '2026-03-02', '2026-04-10', '2026-05-20']) {
-      const cash = cashSeries(series('instrument', till));
+      const cash = cashSeries(series('instrument', till), OPS, { futureIds: FUT });
       const upTo = OPS.filter((o) => o.date <= till);
       expect(cash[cash.length - 1], till).toBe(cashBalanceRub(upTo, FUT).toFixed(2));
     }
@@ -62,7 +62,7 @@ describe('cashSeries: кэш из ряда = кэш из журнала', () => 
   it('продажа переливает стоимость в кэш: богатство (позиции + кэш) в день продажи не падает', () => {
     // цена GAZP уже 190 накануне, поэтому в день продажи по 190 рыночного движения нет
     const s = valuationSeries(OPS, [...PRICES, px('GAZP', '2026-05-09', '190')], { till: '2026-06-30', groupBy: 'instrument', futureIds: FUT });
-    const cash = cashSeries(s);
+    const cash = cashSeries(s, OPS, { futureIds: FUT });
     const i = s.groups[0].points.findIndex((p) => p.date === '2026-05-10'); // продажа всех GAZP
     const positions = (k: number) => s.groups.reduce((sum, g) => sum + Number(g.points[k].marketValueRub), 0);
     expect(positions(i)).toBeLessThan(positions(i - 1) - 9000); // 50 × 190 = 9 500 // стоимость позиций упала на проданное
@@ -89,7 +89,32 @@ describe('cashSeries: кэш из ряда = кэш из журнала', () => 
     const base = series('portfolio');
     const last = (x: typeof s) => x.groups.reduce((sum, g) => sum + Number(g.points[g.points.length - 1].totalRub), 0);
     expect(last(s) - last(base)).toBeCloseTo(101, 6);
-    expect(cashSeries(s).at(-1)).toBe(cashBalanceRub(ops, FUT).toFixed(2));
+    expect(cashSeries(s, ops, { futureIds: FUT }).at(-1)).toBe(cashBalanceRub(ops, FUT).toFixed(2));
+  });
+
+  it('инвариант: чистый ввод + итог − стоимость = кэш − продажи без позиции (на каждый день)', () => {
+    // продажа CNYRUB без покупки: деньги пришли, позиции нет
+    const ops = [
+      ...OPS,
+      mk({ date: '2026-02-01', operationType: 'Sell', instrumentId: 'CNYRUB', quantity: '1000', price: '12', fee: '5' }),
+    ];
+    const s = valuationSeries(ops, PRICES, { till: '2026-06-30', groupBy: 'portfolio', futureIds: FUT });
+    const cash = cashSeries(s, ops, { futureIds: FUT });
+    const daily = dailyCash(ops, FUT);
+    s.groups[0].points.forEach((p, i) => {
+      const result = s.groups.reduce((sum, g) => sum + Number(g.points[i].totalRub), 0);
+      const market = s.groups.reduce((sum, g) => sum + Number(g.points[i].marketValueRub), 0);
+      const orphan = daily.filter((d) => d.date <= p.date).at(-1)?.orphanSellsRub.toNumber() ?? 0;
+      expect(Number(s.netContributionsRub[i]) + result - market, p.date).toBeCloseTo(Number(cash[i]) - orphan, 2);
+    });
+    expect(orphanSellsRub(ops, FUT).toFixed(2)).toBe('11995.00'); // 1000 × 12 − 5
+    expect(cash.at(-1)).toBe(cashBalanceRub(ops, FUT).toFixed(2));
+  });
+
+  it('фильтр по счёту: кэш ряда = кэш журнала этого счёта', () => {
+    const s = valuationSeries(OPS, PRICES, { till: '2026-06-30', groupBy: 'system', portfolioId: 'p1', futureIds: FUT });
+    const p1 = OPS.filter((o) => o.portfolioId === 'p1');
+    expect(cashSeries(s, OPS, { portfolioId: 'p1', futureIds: FUT }).at(-1)).toBe(cashBalanceRub(p1, FUT).toFixed(2));
   });
 });
 

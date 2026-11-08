@@ -1,7 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
 import {
-  cashSeries,
   journalCompleteness,
   payoutsInPeriod,
   periodPerformance,
@@ -127,7 +126,7 @@ export class PerformanceService {
     await this.coupons.ensure(firstOpDate, till);
     const tickers = new Map(this.db.select().from(instruments).all().map((i) => [i.id, i.ticker]));
     const dates = cashFrom?.groups[0]?.points.map((p) => p.date) ?? [];
-    const cash = cashFrom ? cashSeries(cashFrom).map((cashRub, i) => ({ date: dates[i], cashRub })) : undefined;
+    const cash = cashFrom ? cashFrom.cashRub.map((cashRub, i) => ({ date: dates[i], cashRub })) : undefined;
     return journalCompleteness({
       operations: scoped,
       schedules: this.coupons.list([...firstOpDate.keys()]),

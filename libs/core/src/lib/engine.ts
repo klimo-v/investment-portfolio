@@ -417,6 +417,8 @@ export class TradeLedger {
   private readonly lastClosed = new Map<string, TradeResult>();
   /** позиция фьючерса по ключу (нужна, чтобы применять сделки по порядку) */
   private readonly futurePos = new Map<string, FuturePosition>();
+  /** продажи без позиции: выручка нетто комиссии в рублях (см. cash.ts, orphanSellsRub) */
+  readonly orphanSells: { date: string; instrumentId: string; amountRub: Decimal }[] = [];
 
   constructor(
     private readonly options: EngineOptions = {},
@@ -478,7 +480,12 @@ export class TradeLedger {
 
     if (op.operationType === 'Sell') {
       const trade = open.get(key);
-      if (!trade) return; // продажа без открытой сделки — некорректные данные, пропускаем
+      if (!trade) {
+        // продажа без открытой сделки — некорректные данные: в сделки не идёт, но деньги
+        // она двигает (cashDelta) — запоминаем, чтобы расхождение было названо, а не скрыто
+        this.orphanSells.push({ date: op.date, instrumentId: op.instrumentId, amountRub: qty.mul(price).minus(fee).mul(fxRate) });
+        return;
+      }
 
       const costOfSold = trade.avgBuyPrice.mul(qty);
       const proceeds = qty.mul(price).minus(fee);
