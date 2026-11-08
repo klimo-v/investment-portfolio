@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import type { PriceProvider, Quote } from './price-provider';
+import { fetchWithTimeout } from './http';
 
 /**
  * Провайдер цен криптовалют Binance (Adapter к единому PriceProvider, CLAUDE.md §7).
@@ -24,7 +25,7 @@ export class BinanceProvider implements PriceProvider {
     }
 
     try {
-      const res = await fetch(
+      const res = await fetchWithTimeout(
         `https://api.binance.com/api/v3/ticker/price?symbol=${encodeURIComponent(base + 'USDT')}`,
       );
       if (!res.ok) return null;

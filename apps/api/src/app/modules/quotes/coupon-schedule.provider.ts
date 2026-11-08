@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import Decimal from 'decimal.js';
+import { fetchWithTimeout } from './http';
 
 /**
  * График купонов облигации с MOEX ISS (statistics/engines/stock/markets/bonds/bondization/{SECID}).
@@ -55,6 +56,8 @@ export const COUPON_SCHEDULE_PROVIDER = Symbol('COUPON_SCHEDULE_PROVIDER');
  * начало списка), а по ограниченному окну — все выплаты окна.
  */
 const WINDOW_YEARS = 3;
+/** Предохранитель от бесконечного цикла при кривых датах: 10 окон по 3 года = 30 лет истории */
+const MAX_WINDOWS = 10;
 
 function addYears(iso: string, years: number): string {
   const d = new Date(`${iso}T00:00:00Z`);
@@ -66,13 +69,13 @@ function addYears(iso: string, years: number): string {
 export class MoexCouponProvider implements CouponScheduleProvider {
   async getCoupons(secid: string, from: string, till: string): Promise<ParsedCoupon[]> {
     const all = new Map<string, ParsedCoupon>();
-    for (let start = from; start <= till; ) {
+    for (let start = from, n = 0; start <= till && n < MAX_WINDOWS; n++) {
       const next = addYears(start, WINDOW_YEARS);
       const end = next > till ? till : new Date(Date.parse(next) - 86_400_000).toISOString().slice(0, 10);
       const url =
         `https://iss.moex.com/iss/statistics/engines/stock/markets/bonds/bondization/${encodeURIComponent(secid)}.json` +
-        `?iss.meta=off&iss.only=coupons&coupons.columns=coupondate,recorddate,value_rub&from=${start}&till=${end}`;
-      const res = await fetch(url);
+        `?iss.meta=off&iss.only=coupons&coupons.columns=coupondate,recorddate,value_rub&from=${encodeURIComponent(start)}&till=${encodeURIComponent(end)}`;
+      const res = await fetchWithTimeout(url);
       if (!res.ok) throw new Error(`MOEX ISS bondization ${secid}: HTTP ${res.status}`);
       const json = (await res.json()) as IssCouponsResponse;
       // HTTP 200 без блока купонов — неожиданный формат (переименование колонок, заглушка биржи), а не

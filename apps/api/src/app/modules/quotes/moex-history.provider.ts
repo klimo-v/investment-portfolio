@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import Decimal from 'decimal.js';
 import { futuresMultiplier, scaleByPowerOfTen, tickerToExchangeCode } from '@core';
 import type { HistoryPoint, HistoryTarget, PriceHistoryProvider } from './price-history.provider';
+import { fetchWithTimeout } from './http';
 
 /**
  * История цен MOEX ISS: акции/ETF, облигации (с НКД на дату), валюта (SELT), фьючерсы.
@@ -177,8 +178,8 @@ export class MoexHistoryProvider implements PriceHistoryProvider {
     for (let start = 0; start < 20_000; start += PAGE) {
       const url =
         `https://iss.moex.com/iss/history/engines/${PATH[kind]}/securities/${encodeURIComponent(secid)}.json` +
-        `?iss.meta=off&iss.only=history&history.columns=${COLUMNS[kind]}&from=${from}&till=${till}&start=${start}`;
-      const res = await fetch(url);
+        `?iss.meta=off&iss.only=history&history.columns=${COLUMNS[kind]}&from=${encodeURIComponent(from)}&till=${encodeURIComponent(till)}&start=${start}`;
+      const res = await fetchWithTimeout(url);
       if (!res.ok) throw new Error(`MOEX ISS history ${secid}: HTTP ${res.status}`);
       const section = ((await res.json()) as IssHistoryResponse).history;
       if (!section) break;

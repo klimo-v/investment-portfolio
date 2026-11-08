@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import Decimal from 'decimal.js';
 import type { HistoryPoint, HistoryTarget, PriceHistoryProvider } from './price-history.provider';
+import { fetchWithTimeout } from './http';
 
 /**
  * Дневные свечи Binance (klines) для крипты. Как и текущая цена (binance.provider.ts):
@@ -57,7 +58,7 @@ export class BinanceHistoryProvider implements PriceHistoryProvider {
       const url =
         `https://api.binance.com/api/v3/klines?symbol=${encodeURIComponent(base + 'USDT')}` +
         `&interval=1d&startTime=${start}&endTime=${end}&limit=${LIMIT}`;
-      const res = await fetch(url);
+      const res = await fetchWithTimeout(url);
       if (!res.ok) throw new Error(`Binance ${base}: HTTP ${res.status}`);
       const klines = (await res.json()) as Kline[];
       if (klines.length === 0) break;

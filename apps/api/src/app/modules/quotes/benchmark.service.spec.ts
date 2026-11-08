@@ -72,12 +72,22 @@ describe('BenchmarkService', () => {
 
 describe('BenchmarkController: валидация', () => {
   const controller = new BenchmarkController({ benchmark: async () => ({ index: null, moneyMarket: null }) } as unknown as BenchmarkService);
+  const q = (o: Record<string, string>) => controller.get(o);
 
-  it('неизвестный SECID, RUSFAR как индекс и кривые даты отклоняются; по умолчанию — MCFTRR', async () => {
-    expect(() => controller.get('2026-01-01', '2026-02-01', 'SBER')).toThrow(BadRequestException);
-    expect(() => controller.get('2026-01-01', '2026-02-01', 'RUSFAR')).toThrow(BadRequestException);
-    expect(() => controller.get('2026-02-01', '2026-01-01', 'IMOEX')).toThrow(BadRequestException);
-    expect(() => controller.get('вчера', '2026-01-01', 'IMOEX')).toThrow(BadRequestException);
-    await expect(controller.get('2026-01-01', '2026-02-01', undefined as unknown as string)).resolves.toBeDefined();
+  it('неизвестный SECID, RUSFAR как индекс, кривые и несуществующие даты, перевёрнутое окно — 400; по умолчанию MCFTRR', async () => {
+    expect(() => q({ from: '2026-01-01', till: '2026-02-01', secid: 'SBER' })).toThrow(BadRequestException);
+    expect(() => q({ from: '2026-01-01', till: '2026-02-01', secid: 'RUSFAR' })).toThrow(BadRequestException);
+    expect(() => q({ from: '2026-02-01', till: '2026-01-01', secid: 'IMOEX' })).toThrow(BadRequestException);
+    expect(() => q({ from: 'вчера', till: '2026-01-01', secid: 'IMOEX' })).toThrow(BadRequestException);
+    expect(() => q({ from: '2025-13-45', till: '2026-01-01' })).toThrow(BadRequestException);
+    expect(() => q({ from: '2026-02-30', till: '2026-03-01' })).toThrow(BadRequestException);
+    expect(() => q({ till: '2026-01-01' })).toThrow(BadRequestException);
+    await expect(q({ from: '2026-01-01', till: '2026-02-01' })).resolves.toBeDefined();
+  });
+
+  it('окно длиннее 20 лет отклоняется — иначе цикл по дням и страницы ISS растут без границ', () => {
+    expect(() => q({ from: '0001-01-01', till: '2026-01-01' })).toThrow(BadRequestException);
+    expect(() => q({ from: '2000-01-01', till: '2026-01-01' })).toThrow(BadRequestException); // 26 лет
+    expect(() => q({ from: '2010-01-01', till: '2026-01-01' })).not.toThrow();
   });
 });

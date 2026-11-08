@@ -264,6 +264,7 @@ export const BenchmarkResponseSchema = z.object({
 });
 export type BenchmarkResponse = z.infer<typeof BenchmarkResponseSchema>;
 
+
 /** Статус сделки: открыта / частично закрыта / закрыта по остатку количества */
 export const TradeStatus = z.enum(['Open', 'Partial', 'Closed']);
 export type TradeStatus = z.infer<typeof TradeStatus>;
@@ -499,7 +500,15 @@ export const SystemPerformanceSchema = z.object({
 export type SystemPerformance = z.infer<typeof SystemPerformanceSchema>;
 
 /** Query-параметры GET /api/systems/:systemId/performance (как у operations/summary) */
-const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Дата в формате YYYY-MM-DD');
+const isoDate = z
+  .string()
+  .regex(/^\d{4}-\d{2}-\d{2}$/, 'Дата в формате YYYY-MM-DD')
+  // форма верна, а даты нет (2025-13-45, 2026-02-30) — Date.parse в UTC нормализует такое, а не отвергает
+  .refine((v) => {
+    const d = new Date(`${v}T00:00:00Z`);
+    // refine выполняется и после неудачного regex: мусорная строка не должна бросать RangeError
+    return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === v;
+  }, 'Несуществующая календарная дата');
 export const SystemPerformanceQuerySchema = z
   .object({
     portfolioId: z.string().min(1).optional(),
@@ -650,3 +659,18 @@ export const PerformanceSchema = z.object({
   carried: z.array(z.object({ instrumentId: z.string(), reason: z.enum(['no-price', 'no-fx', 'carried']), priceDate: z.string().nullable() })),
 });
 export type PerformanceDto = z.infer<typeof PerformanceSchema>;
+
+/** Предел окна запроса ориентира: дальше ряды не нужны, а цикл по календарным дням и страницы ISS растут линейно */
+export const BENCHMARK_MAX_SPAN_DAYS = 366 * 20;
+
+export const BenchmarkQuerySchema = z
+  .object({
+    secid: z.enum(['MCFTRR', 'RGBITR', 'RUCBTRNS', 'IMOEX']).default('MCFTRR'),
+    from: isoDate,
+    till: isoDate,
+  })
+  .refine((q) => q.from <= q.till, { message: '`from` не может быть позже `till`' })
+  .refine((q) => (Date.parse(q.till) - Date.parse(q.from)) / 86_400_000 <= BENCHMARK_MAX_SPAN_DAYS, {
+    message: 'Окно запроса не должно превышать 20 лет',
+  });
+export type BenchmarkQuery = z.infer<typeof BenchmarkQuerySchema>;

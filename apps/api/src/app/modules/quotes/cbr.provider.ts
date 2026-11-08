@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { fetchWithTimeout } from './http';
 
 /**
  * Курсы валют ЦБ РФ (cbr-xml-daily.ru — удобная JSON-обёртка над ЦБ).
@@ -37,7 +38,7 @@ export class CbrProvider {
       return this.cache.rates;
     }
     try {
-      const res = await fetch('https://www.cbr-xml-daily.ru/daily_json.js');
+      const res = await fetchWithTimeout('https://www.cbr-xml-daily.ru/daily_json.js');
       if (!res.ok) return this.cache?.rates ?? {};
       const json = (await res.json()) as CbrResponse;
       const rates: Record<string, number> = {};

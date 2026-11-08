@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import Decimal from 'decimal.js';
 import type { PriceProvider, Quote } from './price-provider';
+import { fetchWithTimeout } from './http';
 
 /**
  * Провайдер цен MOEX ISS (Adapter к единому PriceProvider, CLAUDE.md §7).
@@ -85,7 +86,7 @@ export class MoexProvider implements PriceProvider {
       : `iss.only=marketdata&marketdata.columns=${priceColumns}`;
     const url = `https://iss.moex.com/iss/${market}/securities/${encodeURIComponent(ticker)}.json?iss.meta=off&${only}`;
     try {
-      const res = await fetch(url);
+      const res = await fetchWithTimeout(url);
       if (!res.ok) return null;
       return parseIssQuote((await res.json()) as IssResponse, isBonds);
     } catch {

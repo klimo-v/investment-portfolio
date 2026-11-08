@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import Decimal from 'decimal.js';
 import type { HistoryPoint, HistoryTarget, PriceHistoryProvider } from './price-history.provider';
+import { fetchWithTimeout } from './http';
 
 /**
  * История официальных курсов ЦБ РФ (XML_dynamic.asp): один запрос на валюту и период.
@@ -62,7 +63,7 @@ export class CbrHistoryProvider implements PriceHistoryProvider {
     if (!code) return [];
     const url =
       `https://www.cbr.ru/scripts/XML_dynamic.asp?date_req1=${cbrDate(from)}&date_req2=${cbrDate(till)}&VAL_NM_RQ=${code}`;
-    const res = await fetch(url);
+    const res = await fetchWithTimeout(url);
     if (!res.ok) throw new Error(`ЦБ ${target.ticker}: HTTP ${res.status}`);
     // ответ в windows-1251, но числа и даты — ASCII, так что декодирование не критично
     const xml = new TextDecoder('windows-1251').decode(await res.arrayBuffer());
