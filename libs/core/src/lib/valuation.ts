@@ -117,6 +117,24 @@ export function incomeAmountRub(op: Operation): Decimal {
   return new Decimal(op.quantity).mul(op.price).mul(op.fxRate ?? '1');
 }
 
+/**
+ * Отдельный налог или комиссия (операции Tax/Fee): деньги со счёта ушли, на позиции они не
+ * влияют (движок их не разносит по сделкам), поэтому в итог ряда входят отдельным потоком
+ * со знаком «минус» — иначе богатство завышено на удержанные налоги и комиссии, а вычисленный
+ * кэш расходится с cashBalanceRub. Операции по фьючерсам пропускаем: их комиссии уже внутри
+ * реализованного результата (способ А), как и в cashBalanceRub.
+ */
+export function isStandaloneCost(op: Operation, futureIds?: ReadonlySet<string>): boolean {
+  if (op.operationType !== 'Tax' && op.operationType !== 'Fee') return false;
+  return !(futureIds && op.instrumentId && futureIds.has(op.instrumentId));
+}
+
+/** Сумма отдельного налога/комиссии в рублях (положительная; плюс колонка `fee`, как в cashBalanceRub) */
+export function costAmountRub(op: Operation): Decimal {
+  const fx = new Decimal(op.fxRate ?? '1');
+  return new Decimal(op.quantity).mul(op.price).mul(fx).plus(new Decimal(op.fee ?? '0').mul(fx));
+}
+
 const ZERO = new Decimal(0);
 const DAY_MS = 86_400_000;
 
@@ -190,16 +208,18 @@ export function valuationSeries(
     )
     .sort(compareOperations);
 
+  // выплаты без инструмента (+) и отдельные налоги/комиссии (−) — потоки в «зафиксированное» группы
   const incomeOps = operations
     .filter(
       (o) =>
-        isUnattributedIncome(o) &&
+        (isUnattributedIncome(o) || isStandaloneCost(o, options.futureIds)) &&
         o.date <= options.till &&
         (!options.systemId || o.systemId === options.systemId) &&
         (!options.portfolioId || o.portfolioId === options.portfolioId),
     )
     .sort((a, b) => a.date.localeCompare(b.date));
-  const incomeKeyOf = (o: Operation): string => (options.groupBy === 'instrument' ? NO_INSTRUMENT_GROUP : keyOf(o));
+  const incomeKeyOf = (o: Operation): string =>
+    options.groupBy === 'instrument' ? (o.instrumentId ?? NO_INSTRUMENT_GROUP) : keyOf(o);
 
   const keys = [...new Set([...ops.map(keyOf), ...incomeOps.map(incomeKeyOf)])].sort();
   if (ops.length === 0) {
@@ -238,7 +258,8 @@ export function valuationSeries(
     while (nextIncome < incomeOps.length && incomeOps[nextIncome].date <= day) {
       const o = incomeOps[nextIncome++];
       const k = incomeKeyOf(o);
-      fixedByKey.set(k, (fixedByKey.get(k) ?? ZERO).plus(incomeAmountRub(o)));
+      const delta = isStandaloneCost(o, options.futureIds) ? costAmountRub(o).neg() : incomeAmountRub(o);
+      fixedByKey.set(k, (fixedByKey.get(k) ?? ZERO).plus(delta));
     }
     while (nextCash < cashOps.length && cashOps[nextCash].date <= day) {
       const o = cashOps[nextCash++];
