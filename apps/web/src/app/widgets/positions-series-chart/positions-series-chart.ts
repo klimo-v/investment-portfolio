@@ -158,7 +158,9 @@ export class PositionsSeriesChart {
             ? [
                 {
                   label: 'Деньги',
-                  data: cash,
+                  // в стеке рисуем не ниже нуля: отрицательный слой Chart.js откладывает вниз от оси, а не вычитает
+                  // из вершины стека; настоящий (отрицательный) остаток виден в подсказке и в строке «Итого»
+                  data: cash.map((c) => Math.max(c, 0)),
                   borderColor: this.cc().neutral,
                   backgroundColor: alpha(this.cc().neutral),
                   borderWidth: 1,
@@ -230,7 +232,7 @@ export class PositionsSeriesChart {
             // строки маркеров в списке значений не нужны: события перечислены отдельным блоком ниже
             filter: (item) => !item.dataset.label?.startsWith('▲') && !item.dataset.label?.startsWith('◆'),
             callbacks: {
-              label: (c) => `${c.dataset.label}: ${formatRub(c.parsed.y)}`,
+              label: (c) => `${c.dataset.label}: ${formatRub(c.dataset.label === 'Деньги' ? (cash[c.dataIndex] ?? c.parsed.y) : c.parsed.y)}`,
               afterBody: (items) =>
                 items.length > 0 ? [...(eventsByIndex.get(items[0].dataIndex) ?? []), ...carriedAt(items[0].dataIndex)] : [],
             },
