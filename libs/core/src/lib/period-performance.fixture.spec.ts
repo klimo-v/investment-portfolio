@@ -1,14 +1,24 @@
 import { describe, expect, it } from 'vitest';
 import { xirr, type CashFlow } from './metrics';
-import { timeWeightedIndex } from './valuation';
+import Decimal from 'decimal.js';
+import { twrLevels } from './twr';
 import { PERIOD_FIXTURES, type PeriodFixture } from './period-performance.fixture';
 
 /**
  * Эталоны этапа 0: ручные ответы фикстур сверяются с УЖЕ существующим кодом
- * (timeWeightedIndex, xirr), чтобы убедиться, что цифры в фикстурах верны, ещё до появления
+ * (twrLevels, xirr), чтобы убедиться, что цифры в фикстурах верны, ещё до появления
  * periodPerformance. Потоки для XIRR собираются здесь по правилу из плана (§2.1):
  * отток V_start по рынку на дату базы, внешние потоки на их даты, приток V_end на конец.
  */
+
+/** Индекс по богатству точек фикстуры: поток дня — изменение чистого ввода, первая точка — старт */
+function timeWeightedIndex(points: readonly { totalRub: number; netContributionsRub: number }[]): number[] {
+  const inputs = points.map((p, i) => ({
+    value: new Decimal(p.netContributionsRub).plus(p.totalRub),
+    flow: new Decimal(p.netContributionsRub).minus(i > 0 ? points[i - 1].netContributionsRub : 0),
+  }));
+  return twrLevels(inputs, null).levels.map((l) => l.toNumber());
+}
 
 const wealth = (p: PeriodFixture['points'][number]): number => p.netContributionsRub + p.totalRub;
 

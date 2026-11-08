@@ -2,8 +2,7 @@ import Decimal from 'decimal.js';
 
 /**
  * Примитивы time-weighted return (TWR) на Decimal — единственная реализация цепочки
- * дневных доходностей: из неё считаются и `timeWeightedIndex` (valuation.ts), и
- * `periodPerformance` (period-performance.ts).
+ * дневных доходностей: из неё считается `periodPerformance` (period-performance.ts).
  *
  * Дневная доходность при капитале V и внешнем потоке F (+ = деньги внутрь):
  *   r = (V_t − V_{t−1} − F_t) / (V_{t−1} + max(F_t, 0))

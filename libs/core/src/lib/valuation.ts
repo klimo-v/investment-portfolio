@@ -1,5 +1,4 @@
 import Decimal from 'decimal.js';
-import { twrLevels } from './twr';
 import type { Operation } from './schemas';
 import { marketValueRub, TradeLedger, type TradeResult } from './engine';
 import { futureUnrealizedPnl } from './futures-engine';
@@ -343,30 +342,6 @@ function fxRateAt(currency: string, day: string, cursor: PriceCursor): Decimal |
   if (c === 'RUB') return new Decimal(1);
   const obs = cursor.at(fxInstrumentId(c), day);
   return obs ? new Decimal(obs.price) : null;
-}
-
-/**
- * Индекс доходности портфеля с очисткой от потоков (time-weighted return), база 100.
- *
- * Стоимость позиций для графика динамики не годится: продажа переводит деньги в кэш и роняет
- * «стоимость» без всякого убытка, довнесение двигает её вверх без прибыли. Поэтому берём
- * богатство W = чистый ввод + итог (зафиксированное + переоценка): это «позиции + кэш», в
- * котором продажа ничего не меняет. Остаётся отделить ввод/вывод денег: дневная доходность
- * r = (W_t − W_{t−1} − поток_t) / W_{t−1}, индекс — цепочка (1 + r). Дни до первого W > 0
- * стоят на базе 100; если богатство ушло в ≤ 0, доходность дня считаем нулевой (делить не на что).
- *
- * Поток = изменение чистого ввода; предполагается, что ввод/вывод денег внесён в журнал
- * (Deposit/Withdraw) — иначе довнесение будет выглядеть как прибыль.
- */
-export function timeWeightedIndex(
-  points: readonly { totalRub: number; netContributionsRub: number }[],
-): number[] {
-  // богатство W = чистый ввод + итог; поток дня — изменение чистого ввода (первая точка — старт)
-  const inputs = points.map((p, i) => ({
-    value: new Decimal(p.netContributionsRub).plus(p.totalRub),
-    flow: new Decimal(p.netContributionsRub).minus(i > 0 ? points[i - 1].netContributionsRub : 0),
-  }));
-  return twrLevels(inputs, null).levels.map((l) => l.toNumber());
 }
 
 /**

@@ -3,11 +3,8 @@ import { maxDrawdown, type Cash, type Effectiveness } from '@core';
 import { StateMessage } from '@web-shared';
 import { summaryResource, type SummaryFilter } from '../../entities/summary/summary.api';
 import { benchmarkResource, type BenchmarkRange } from '../../entities/benchmark/benchmark.api';
-import {
-  portfolioIndex,
-  valuationResource,
-  type ValuationFilter,
-} from '../../entities/valuation/valuation.api';
+import { valuationResource, type ValuationFilter } from '../../entities/valuation/valuation.api';
+import { performanceResource, type PerformanceFilter } from '../../entities/performance/performance.api';
 import { DataRevision } from '../../shared/data-revision';
 import { DashboardFilters } from '../../widgets/dashboard-filters/dashboard-filters';
 import { dashboardFilter } from '../../widgets/dashboard-filters/dashboard-filter.state';
@@ -58,7 +55,7 @@ import { PnlBarChart } from '../../widgets/pnl-bar-chart/pnl-bar-chart';
       <app-dashboard-filters />
     </div>
 
-    @if (summary.error()) {
+    @if (summary.error() || performance.error()) {
       <app-state-message
         kind="error"
         title="Не удалось загрузить сводку"
@@ -78,8 +75,8 @@ import { PnlBarChart } from '../../widgets/pnl-bar-chart/pnl-bar-chart';
       <app-summary-kpis
         [totals]="totals()"
         [cash]="cash()"
+        [performance]="performance.value()?.total"
         [drawdownPct]="maxDrawdownPct()"
-        [pnlHint]="pnlHint"
       />
 
       <app-effectiveness-table
@@ -179,17 +176,14 @@ export class DashboardPage {
   protected readonly groupBy = signal<EffGroupBy>('system');
 
   /**
-   * P&L = реализ. + нереализ. + дивиденды. Реализ./дивиденды — за выбранный период
-   * (продажи/выплаты внутри окна), нереализ. — состояние остатка сейчас. Частый
-   * вопрос: «Вложено − Стоимость − Дивиденды» даёт другое число, потому что
-   * молча выбрасывает уже зафиксированную реализованную прибыль/убыток.
+   * Результат за период = изменение стоимости портфеля минус внесённые деньги = зафиксированное
+   * (продажи, дивиденды, купоны ВНУТРИ периода) + переоценка остатка ЗА период. Прибыль,
+   * заработанная до начала периода, в него не входит. Раньше «P&L» брал переоценку за всю
+   * историю удерживаемых позиций, из-за чего за «текущий год» он включал и прошлые годы.
    */
   protected readonly pnlHint =
-    'P&L = реализ. + нереализ. + дивиденды/купоны за выбранный период. Реализ./' +
-    'дивиденды — от продаж/выплат ВНУТРИ периода, эти деньги уже ваши независимо ' +
-    'от того, вывели вы их или реинвестировали. Нереализ. — переоценка текущего ' +
-    'остатка, от периода не зависит. «Вложено − Стоимость − Дивиденды» даст другое ' +
-    'число — оно молча теряет уже зафиксированную реализованную прибыль/убыток.';
+    'Результат за период = зафиксированное (продажи, дивиденды, купоны внутри периода) + ' +
+    'переоценка остатка именно за период. Прибыль, заработанная до начала периода, сюда не входит.';
 
   private readonly summaryFilter = computed<SummaryFilter>(() => {
     const r = this.filter.range();
@@ -226,6 +220,23 @@ export class DashboardPage {
   });
   protected readonly valuation = valuationResource(this.valuationFilter);
 
+  /**
+   * Единый расчёт доходности периода (GET /api/performance): карточки, линия «Портфель» против
+   * рынка, просадка и таблица эффективности берутся из ОДНОГО DTO. Контур: выбрана система —
+   * позиции системы (в пределах счёта, если он выбран); выбран счёт — его богатство; иначе весь журнал.
+   */
+  private readonly performanceFilter = computed<PerformanceFilter>(() => {
+    const r = this.filter.range();
+    const system = this.filter.system();
+    const portfolio = this.filter.portfolio();
+    return system
+      ? { scope: 'system', id: system, portfolioId: portfolio ?? undefined, from: r.from, till: r.till }
+      : portfolio
+        ? { scope: 'portfolio', id: portfolio, from: r.from, till: r.till }
+        : { scope: 'all', from: r.from, till: r.till };
+  });
+  protected readonly performance = performanceResource(this.performanceFilter);
+
   private static readonly EMPTY: Effectiveness = {
     investedRub: 0,
     currentValueRub: 0,
@@ -233,9 +244,7 @@ export class DashboardPage {
     unrealizedPnlRub: 0,
     dividendsRub: 0,
     pnlRub: 0,
-    roiPct: null,
     dividendYieldPct: null,
-    xirrPct: null,
   };
   private static readonly EMPTY_CASH: Cash = { cashRub: 0, totalValueRub: 0 };
 
@@ -246,21 +255,37 @@ export class DashboardPage {
     () => this.summary.value()?.cash ?? DashboardPage.EMPTY_CASH,
   );
 
-  /** Строки разреза — по системам или по портфелям */
+  /**
+   * Строки разреза — по системам или по портфелям: суммы на сегодня из сводки, доходность за
+   * период из единого расчёта (по id). Строка без расчёта не показывается.
+   */
   protected readonly effRows = computed<EffRow[]>(() => {
     const s = this.summary.value();
-    if (!s) return [];
-    // Аннотация обязательна: без неё тип выводится как объединение ДВУХ массивов
-    // (bySystem[] | byPortfolio[]), а такое объединение не подходит под readonly T[]
-    const rows: EffRow[] =
-      this.groupBy() === 'system'
-        ? s.bySystem.map((r) => ({ ...r, id: r.systemId }))
-        : s.byPortfolio.map((r) => ({ ...r, id: r.portfolioId }));
-    return rows;
+    const p = this.performance.value();
+    if (!s || !p) return [];
+    const bySystem = this.groupBy() === 'system';
+    const sums = new Map<string, Effectiveness>(
+      bySystem ? s.bySystem.map((r) => [r.systemId, r]) : s.byPortfolio.map((r) => [r.portfolioId, r]),
+    );
+    return (bySystem ? p.bySystem : p.byPortfolio).map((row) => {
+      const e = sums.get(row.id) ?? DashboardPage.EMPTY;
+      return {
+        id: row.id,
+        name: row.name,
+        investedRub: e.investedRub,
+        currentValueRub: e.currentValueRub,
+        dividendsRub: e.dividendsRub,
+        dividendYieldPct: e.dividendYieldPct,
+        performance: row.performance,
+      };
+    });
   });
 
+  /** «Результат по системам» — из того же расчёта, что и карточки: рубли за период, а не за всю историю */
   protected readonly systemBars = computed(() =>
-    (this.summary.value()?.bySystem ?? []).map((r) => ({ label: r.name, pnlRub: r.pnlRub })),
+    (this.performance.value()?.bySystem ?? [])
+      .map((r) => ({ label: r.name, pnlRub: Number(r.performance.resultRub) }))
+      .sort((a, b) => b.pnlRub - a.pnlRub),
   );
 
   protected readonly instrumentBars = computed(() =>
@@ -268,10 +293,12 @@ export class DashboardPage {
   );
 
   /**
-   * Индекс доходности портфеля (база 100) без влияния ввода/вывода денег и продаж — не
-   * «стоимость позиций»: та падает при каждой продаже и растёт при довнесении.
+   * Индекс доходности (TWR, база 100) без влияния ввода/вывода денег и продаж — ряд из того же
+   * расчёта, что и карточка: последняя точка линии = карточка «Доходность стратегии».
    */
-  protected readonly portfolioValues = computed(() => portfolioIndex(this.valuation.value()));
+  protected readonly portfolioValues = computed(() =>
+    (this.performance.value()?.total.twr.series ?? []).map((p) => ({ date: p.date, valueRub: p.index })),
+  );
 
   /** Просадка индекса доходности в процентах; null — меньше двух дней, считать не из чего */
   protected readonly maxDrawdownPct = computed(() => {

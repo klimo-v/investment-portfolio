@@ -500,7 +500,6 @@ export class OperationsService {
     const portfolioRows = this.db.select().from(portfolios).all();
     const systemName = new Map(systemRows.map((s) => [s.id, s.name]));
     const portfolioName = new Map(portfolioRows.map((p) => [p.id, p.name]));
-    const today = new Date().toISOString().slice(0, 10);
 
     // временной ряд по месяцам: поток кэша и доход (дивиденды/купоны) — по periodOps,
     // это честный срез «что происходило в этом окне»

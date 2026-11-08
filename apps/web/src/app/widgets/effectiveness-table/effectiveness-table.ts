@@ -4,7 +4,7 @@ import { MatTableModule } from '@angular/material/table';
 import { MatButtonToggleModule } from '@angular/material/button-toggle';
 import { MatSortModule } from '@angular/material/sort';
 import { RouterLink } from '@angular/router';
-import type { Effectiveness } from '@core';
+import type { PeriodPerformanceDto } from '@core';
 import {
   formatPercentOrDash,
   formatRub,
@@ -15,10 +15,18 @@ import {
   type SortState,
 } from '@web-shared';
 
-/** Строка разреза: метрики эффективности плюс имя системы или портфеля */
-export interface EffRow extends Effectiveness {
+/**
+ * Строка разреза: суммы на сегодня (вложено/стоимость/дивиденды — из сводки) плюс доходность
+ * за период из единого расчёта (GET /api/performance) — одна и та же функция для любой строки.
+ */
+export interface EffRow {
   id: string;
   name: string;
+  investedRub: number;
+  currentValueRub: number;
+  dividendsRub: number;
+  dividendYieldPct: number | null;
+  performance: PeriodPerformanceDto;
 }
 
 /** Разрез таблицы: по торговым системам или по портфелям */
@@ -29,7 +37,8 @@ export type EffGroupBy = 'system' | 'portfolio';
  *
  * Смысл виджета в том, что сравнивать можно только ОТНОСИТЕЛЬНЫЕ метрики: система
  * с +100 000 ₽ на вложенные 3 млн хуже, чем +60 000 ₽ на 500 тыс. Поэтому рядом с
- * рублями всегда стоят ROI и XIRR (docs/05-review-usability.md §1).
+ * рублями всегда стоят доходность стратегии (TWR) и доходность денег — обе из единого расчёта
+ * периода (docs/02-data-model.md).
  *
  * Сортировка своя: разрез маленький (единицы строк), режется на клиенте общим
  * sortRows() — «—» (неопределённая метрика) он держит внизу при любом направлении.
@@ -75,7 +84,7 @@ export type EffGroupBy = 'system' | 'portfolio';
           <ng-container matColumnDef="invested">
             <th mat-header-cell *matHeaderCellDef mat-sort-header
               >Вложено
-              <app-hint label="Вложено" text="Себестоимость ТЕКУЩЕГО остатка (открытых позиций). Уже закрытые (полностью проданные) позиции сюда не входят — их результат учтён отдельно в «Реализ.», а вложенный в них капитал уже вернулся при продаже. Поэтому P&L = Реализ. + Нереал. + Дивиденды, а не «Вложено − Стоимость − Дивиденды»." /></th
+              <app-hint label="Вложено" text="Себестоимость ТЕКУЩЕГО остатка (открытых позиций). Уже закрытые (полностью проданные) позиции сюда не входят — их результат учтён в «Зафикс.», а вложенный в них капитал уже вернулся при продаже. Это величина на сегодня, а не за период." /></th
             >
             <td mat-cell *matCellDef="let r">{{ money(r.investedRub) }}</td>
           </ng-container>
@@ -85,36 +94,44 @@ export type EffGroupBy = 'system' | 'portfolio';
           </ng-container>
           <ng-container matColumnDef="realized">
             <th mat-header-cell *matHeaderCellDef mat-sort-header
-              >Реализ. / Нереализ.
-              <app-hint label="Реализ. / Нереализ." text="Реализ. — результат от продаж ВНУТРИ выбранного периода (себестоимость проданного всё равно берётся по всей истории покупок). Нереал. — бумажная переоценка того, что держите сейчас (Стоимость − Вложено), от периода не зависит. P&L складывается из обоих плюс дивиденды/купоны." /></th
+              >Зафикс. / Переоценка
+              <app-hint label="Зафикс. / Переоценка" text="Зафикс. — продажи и выплаты (дивиденды, купоны) ВНУТРИ выбранного периода. Переоценка — изменение стоимости остатка именно за период: прибыль, заработанная до его начала, сюда не входит. Вместе они дают «Результат»." /></th
             >
             <td mat-cell *matCellDef="let r">
-              <span [class]="cls(r.realizedPnlRub)">{{ money(r.realizedPnlRub) }}</span>
+              <span [class]="cls(num(r.performance.breakdown.fixedRub))">{{ money(num(r.performance.breakdown.fixedRub)) }}</span>
               /
-              <span [class]="cls(r.unrealizedPnlRub)">{{ money(r.unrealizedPnlRub) }}</span>
+              <span [class]="cls(num(r.performance.breakdown.revaluationRub))">{{ money(num(r.performance.breakdown.revaluationRub)) }}</span>
             </td>
           </ng-container>
           <ng-container matColumnDef="pnl">
             <th mat-header-cell *matHeaderCellDef mat-sort-header
-              >P&L <app-hint [text]="pnlHint()" label="P&L" /></th
+              >Результат <app-hint [text]="pnlHint()" label="Результат" /></th
             >
-            <td mat-cell *matCellDef="let r" [class]="cls(r.pnlRub)">{{ money(r.pnlRub) }}</td>
+            <td mat-cell *matCellDef="let r" [class]="cls(num(r.performance.resultRub))">{{ money(num(r.performance.resultRub)) }}</td>
           </ng-container>
-          <ng-container matColumnDef="roi">
-            <th mat-header-cell *matHeaderCellDef mat-sort-header>ROI</th>
-            <td mat-cell *matCellDef="let r" [class]="cls(r.roiPct ?? 0)">{{ pct(r.roiPct) }}</td>
-          </ng-container>
-          <ng-container matColumnDef="xirr">
+          <ng-container matColumnDef="twr">
             <th mat-header-cell *matHeaderCellDef mat-sort-header
-              >XIRR
-              <app-hint label="XIRR" text="Денежно-взвешенная годовая доходность (IRR) по фактическим датам всех вложений/выводов и текущей стоимости остатка — не то же самое, что ROI за весь период (тот не годовой). «—» означает, что результат ненадёжен: слишком короткое окно операций или доходность экстраполируется с нереалистичным перекосом (напр. одна короткая прибыльная сделка внутри длинного окна) — тогда ориентируйтесь на P&L в рублях." /></th
+              >Доходность (TWR)
+              <app-hint label="Доходность (TWR)" text="Time-weighted return: доходность капитала независимо от того, когда вы вносили и выводили деньги. Сравнима между строками и с индексом. «—» — за период не было капитала (например, система только из фьючерсов): смотрите результат в рублях." /></th
             >
-            <td mat-cell *matCellDef="let r" [class]="cls(r.xirrPct ?? 0)">{{ pct(r.xirrPct) }}</td>
+            <td mat-cell *matCellDef="let r" [class]="cls(r.performance.twr.pct ?? 0)">{{ pct(r.performance.twr.pct) }}</td>
+          </ng-container>
+          <ng-container matColumnDef="mwr">
+            <th mat-header-cell *matHeaderCellDef mat-sort-header
+              >Доходность денег
+              <app-hint label="Доходность денег" text="Доходность ваших денег с учётом сумм и дат вводов. Период от года — в годовых (XIRR), короче — за период (результат / средний капитал). Может отличаться от TWR: так бывает, когда крупный ввод пришёлся перед ростом или падением." /></th
+            >
+            <td mat-cell *matCellDef="let r" [class]="cls(r.performance.mwr.pct ?? 0)">
+              {{ pct(r.performance.mwr.pct) }}
+              @if (r.performance.mwr.pct !== null) {
+                <span class="unit">{{ r.performance.mwr.kind === 'annual' ? 'год.' : 'за период' }}</span>
+              }
+            </td>
           </ng-container>
           <ng-container matColumnDef="dividends">
             <th mat-header-cell *matHeaderCellDef mat-sort-header
               >Дивиденды
-              <app-hint label="Дивиденды" text="Дивиденды и купоны, полученные вами деньгами ВНУТРИ выбранного периода — сумма операций типа «Дивиденд»/«Купон» из журнала, как есть. Именно эта сумма и входит в P&L (см. подсказку у P&L)." /></th
+              <app-hint label="Дивиденды" text="Дивиденды и купоны, полученные вами деньгами ВНУТРИ выбранного периода — сумма операций типа «Дивиденд»/«Купон» из журнала, как есть. Эта сумма входит в «Зафикс.» и в «Результат»." /></th
             >
             <td mat-cell *matCellDef="let r">{{ money(r.dividendsRub) }}</td>
           </ng-container>
@@ -148,6 +165,10 @@ export type EffGroupBy = 'system' | 'portfolio';
       table {
         width: 100%;
       }
+      .unit {
+        font-size: 11px;
+        color: var(--app-text-muted);
+      }
       .note {
         margin: 0;
         font-size: 13px;
@@ -161,7 +182,7 @@ export class EffectivenessTable {
   readonly groupBy = input.required<EffGroupBy>();
   /** Разрез выбирает страница — он же определяет, какие строки сюда приедут */
   readonly groupByChange = output<EffGroupBy>();
-  /** Текст подсказки к P&L — общий со страницей, поэтому вход, а не константа */
+  /** Текст подсказки к «Результату» — общий со страницей, поэтому вход, а не константа */
   readonly pnlHint = input('');
   /** Выбранный портфель — уходит в ссылку на страницу системы, чтобы срез сохранился */
   readonly portfolioId = input<string | null>(null);
@@ -172,8 +193,8 @@ export class EffectivenessTable {
     'value',
     'realized',
     'pnl',
-    'roi',
-    'xirr',
+    'twr',
+    'mwr',
     'dividends',
     'divyield',
   ];
@@ -190,13 +211,13 @@ export class EffectivenessTable {
       case 'value':
         return row.currentValueRub;
       case 'realized':
-        return row.realizedPnlRub;
+        return Number(row.performance.breakdown.fixedRub);
       case 'pnl':
-        return row.pnlRub;
-      case 'roi':
-        return row.roiPct;
-      case 'xirr':
-        return row.xirrPct;
+        return Number(row.performance.resultRub);
+      case 'twr':
+        return row.performance.twr.pct;
+      case 'mwr':
+        return row.performance.mwr.pct;
       case 'dividends':
         return row.dividendsRub;
       case 'divyield':
@@ -209,6 +230,10 @@ export class EffectivenessTable {
   protected readonly sortedRows = computed(() =>
     sortRows(this.rows(), this.sort(), (row, column) => this.sortKey(row, column)),
   );
+
+  protected num(v: string): number {
+    return Number(v);
+  }
 
   protected readonly money = formatRub;
   protected readonly pct = formatPercentOrDash;

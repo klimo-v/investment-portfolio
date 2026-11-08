@@ -1,6 +1,6 @@
 import { ChangeDetectionStrategy, Component, computed, input } from '@angular/core';
 import { MatCardModule } from '@angular/material/card';
-import type { Cash, Effectiveness } from '@core';
+import type { Cash, Effectiveness, PeriodPerformanceDto } from '@core';
 import {
   formatPercentOrDash,
   formatRub,
@@ -12,9 +12,9 @@ import {
 
 /**
  * Ряд ключевых показателей дашборда: сколько всего, из чего состоит, сколько
- * заработано и какой ценой (ROI, XIRR, просадка).
+ * заработано и какой ценой (результат, TWR, доходность денег, просадка).
  *
- * Абсолютный P&L намеренно соседствует с относительными метриками: по одним рублям
+ * Абсолютный результат намеренно соседствует с относительными метриками: по одним рублям
  * нельзя понять, хорошо это или плохо (docs/05-review-usability.md §1).
  */
 @Component({
@@ -47,32 +47,43 @@ import {
       />
 
       <!--
-        Единственная карточка с ручной разметкой: подстрока несёт ДВА значения со
-        своими знаками (реализ./нереализ.), а строковый вход sub покрасить их не
-        может. Ради одного случая усложнять app-kpi-card проекцией контента не стали.
+        Единственная карточка с ручной разметкой: подстрока несёт ТРИ значения со своими
+        знаками (реализ., выплаты, переоценка), а строковый вход sub покрасить их не может.
+        Ради одного случая усложнять app-kpi-card проекцией контента не стали.
       -->
       <mat-card class="kpi-manual">
-        <mat-card-subtitle>P&L <app-hint [text]="pnlHint()" label="P&L" /></mat-card-subtitle>
-        <mat-card-title [class]="cls(totals().pnlRub)">{{ money(totals().pnlRub) }}</mat-card-title>
+        <mat-card-subtitle>Результат за период <app-hint [text]="resultHint" label="Результат за период" /></mat-card-subtitle>
+        <mat-card-title [class]="cls(resultRub())">{{ money(resultRub()) }}</mat-card-title>
         <div class="sub">
-          реализ.
-          <span [class]="cls(totals().realizedPnlRub)">{{ money(totals().realizedPnlRub) }}</span>
-          · нереализ.
-          <span [class]="cls(totals().unrealizedPnlRub)">{{ money(totals().unrealizedPnlRub) }}</span>
+          @if (performance(); as p) {
+            @if (p.breakdown.realizedRub !== null && p.breakdown.payoutsRub !== null) {
+              реализ.
+              <span [class]="cls(num(p.breakdown.realizedRub))">{{ money(num(p.breakdown.realizedRub)) }}</span>
+              · выплаты
+              <span [class]="cls(num(p.breakdown.payoutsRub))">{{ money(num(p.breakdown.payoutsRub)) }}</span>
+            } @else {
+              реализ. + выплаты
+              <span [class]="cls(num(p.breakdown.fixedRub))">{{ money(num(p.breakdown.fixedRub)) }}</span>
+            }
+            · переоценка
+            <span [class]="cls(num(p.breakdown.revaluationRub))">{{ money(num(p.breakdown.revaluationRub)) }}</span>
+          }
         </div>
       </mat-card>
 
       <app-kpi-card
-        label="ROI"
-        [value]="pct(totals().roiPct)"
-        [tone]="tone(totals().roiPct)"
-        hint="P&L относительно вложенного (себестоимости держимого остатка). Фьючерсы не входят: вложений у них нет."
+        label="Доходность стратегии (TWR)"
+        [value]="pct(performance()?.twr?.pct ?? null)"
+        [tone]="tone(performance()?.twr?.pct ?? null)"
+        [sub]="performance()?.twr?.pct == null ? noMetric(performance()?.twr?.reason) : '= график «Портфель против рынка»'"
+        hint="Time-weighted return: насколько хорошо работал капитал независимо от того, когда вы вносили и выводили деньги. Сравнима с индексом рынка. Совпадает с последней точкой линии «Портфель» на графике «Портфель против рынка»."
       />
       <app-kpi-card
-        label="Доходность годовых (XIRR)"
-        [value]="pct(totals().xirrPct)"
-        [tone]="tone(totals().xirrPct)"
-        hint="Денежно-взвешенная годовая доходность с учётом дат вложений. Фьючерсы не входят."
+        [label]="moneyReturnLabel()"
+        [value]="pct(performance()?.mwr?.pct ?? null)"
+        [tone]="tone(performance()?.mwr?.pct ?? null)"
+        [sub]="performance()?.mwr?.pct == null ? noMetric(performance()?.mwr?.reason) : ''"
+        [hint]="moneyReturnHint()"
       />
       <app-kpi-card
         label="Дивиденды + купоны"
@@ -110,9 +121,10 @@ import {
 export class SummaryKpis {
   readonly totals = input.required<Effectiveness>();
   readonly cash = input.required<Cash>();
+  /** Единый расчёт периода (GET /api/performance); undefined — ещё грузится */
+  readonly performance = input<PeriodPerformanceDto | undefined>(undefined);
   /** Просадка в процентах; null — меньше двух дней, считать не из чего */
   readonly drawdownPct = input<number | null>(null);
-  readonly pnlHint = input('');
 
   /**
    * Остаток ушёл в минус — значит журнал не содержит части денежных движений
@@ -120,6 +132,32 @@ export class SummaryKpis {
    * здесь информативнее пустого места.
    */
   protected readonly cashIncomplete = computed(() => this.cash().cashRub < 0);
+
+  protected readonly resultHint =
+    'Сколько вы заработали ЗА выбранный период: изменение стоимости портфеля минус внесённые деньги. ' +
+    'Реализ. — продажи внутри периода, выплаты — дивиденды и купоны, переоценка — изменение стоимости ' +
+    'остатка именно за период (прибыль, заработанная до его начала, сюда не входит).';
+
+  protected readonly resultRub = computed(() => Number(this.performance()?.resultRub ?? 0));
+
+  /** Годовые для периода от года, иначе доходность за период — правило задаёт core (mwr.kind) */
+  protected readonly moneyReturnLabel = computed(() =>
+    this.performance()?.mwr.kind === 'annual' ? 'Доходность ваших денег, % годовых (XIRR)' : 'Доходность ваших денег за период',
+  );
+  protected readonly moneyReturnHint = computed(() =>
+    (this.performance()?.mwr.kind === 'annual'
+      ? 'Денежно-взвешенная годовая доходность (XIRR): учитывает суммы и даты ваших вводов и выводов, а капитал на начало периода берётся по рыночной стоимости.'
+      : 'Результат за период, делённый на средний капитал периода (с учётом того, сколько времени работал каждый ввод). Короче года в годовые не пересчитываем — аннуализация даёт шум.') +
+    ' Может законно отличаться от TWR: если крупный ввод пришёлся перед ростом или падением, ваши деньги отработали иначе, чем стратегия.',
+  );
+
+  protected num(v: string): number {
+    return Number(v);
+  }
+
+  protected noMetric(reason: string | null | undefined): string {
+    return reason === 'no-capital' ? 'нет капитала за период' : reason === 'xirr-undefined' ? 'не определена для этих потоков' : '';
+  }
 
   protected readonly money = formatRub;
   protected readonly pct = formatPercentOrDash;
