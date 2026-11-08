@@ -10,8 +10,6 @@ import {
   reconcileFuturesSettlement,
   marketValueRub,
   realizedPnlInRange,
-  xirr,
-  periodCashFlows,
   OperationSchema,
   OperationReassignSchema,
   type Effectiveness,
@@ -530,7 +528,6 @@ export class OperationsService {
         ...this.effectiveness(
           opsUpTo.filter((o) => o.systemId === systemId),
           positions.filter((p) => p.systemId === systemId),
-          today,
           filter.from,
           futureIds,
         ),
@@ -546,7 +543,6 @@ export class OperationsService {
         ...this.effectiveness(
           opsUpTo.filter((o) => o.portfolioId === portfolioId),
           positions.filter((p) => p.portfolioId === portfolioId),
-          today,
           filter.from,
           futureIds,
         ),
@@ -559,7 +555,7 @@ export class OperationsService {
       .map((p) => ({ ticker: p.ticker, pnlRub: Number(p.pnlRub) }))
       .sort((a, b) => b.pnlRub - a.pnlRub);
 
-    const totals = this.effectiveness(opsUpTo, positions, today, filter.from, futureIds);
+    const totals = this.effectiveness(opsUpTo, positions, filter.from, futureIds);
 
     // Свободные деньги считаем по opsUpTo, т.е. по ВСЕЙ истории до `till` и намеренно
     // без `filter.from`: остаток на счёте — величина на момент, а не за период
@@ -589,39 +585,14 @@ export class OperationsService {
    * (иначе была бы искажена, если покупка была до начала периода).
    * «Дивиденды» — прямая сумма Dividend/Coupon-операций ВНУТРИ периода
    * (себестоимость для этого не нужна, дата операции = дата получения денег).
-   * ROI и дивидендную доходность нормируем на «Вложено» — себестоимость
-   * держимого остатка (сходится с колонкой «Вложено» на странице «Сделки»), а не
-   * на сумму всех покупок: при перезаходах в позицию она кратно завышена
-   * оборотом. У полностью закрытых срезов вложено = 0 → ROI не определён (null):
-   * годовую доходность там показывает XIRR.
+   * Дивидендную доходность нормируем на «Вложено» — себестоимость держимого остатка
+   * (сходится с колонкой «Вложено» на странице «Сделки»), а не на сумму всех покупок.
    *
-   * XIRR считаем через periodCashFlows() (libs/core/metrics.ts) по фактическим
-   * потокам, плюс терминальный приток текущей стоимости остатка на сегодня. Если
-   * `periodFrom` задан, капитал, уже вложенный ДО начала периода И всё ещё
-   * удерживаемый (не проданный) к концу истории, сворачивается в один
-   * синтетический отток датой `periodFrom` — иначе на buy-and-hold без операций
-   * внутри окна не с чем сравнивать терминальный поток и xirr() всегда вернёт null.
-   *
-   * ВАЖНО (баг, найден и исправлен 2026-08-01): если внутри периода происходит
-   * продажа позиции, ОТКРЫТОЙ до periodFrom, её себестоимость НЕ сворачивается в
-   * синтетику на periodFrom — periodCashFlows() ведёт FIFO по лотам с их
-   * РЕАЛЬНЫМИ датами покупки: себестоимость проданной доли идёт оттоком на
-   * настоящую историческую дату покупки лота, а выручка — обычным притоком на
-   * дату продажи. В синтетику на periodFrom попадает только себестоимость того,
-   * что реально продолжает удерживаться. Без этого более ранние попытки давали
-   * либо задвоение капитала (вся себестоимость и вся выручка одновременно), либо
-   * заниженный XIRR (учёт только realized P&L), либо завышенный (компенсация
-   * себестоимости на дату periodFrom вместо настоящей даты покупки) — см.
-   * подробный doc-comment и историю трёх итераций в libs/core/metrics.ts.
+   * ROI и XIRR здесь больше НЕ считаются: доходность за период — единый расчёт
+   * libs/core/period-performance.ts (GET /api/performance). Тут остались суммы в рублях
+   * для карточек «Вложено»/«Стоимость» и разреза.
    */
-  private effectiveness(
-    ops: Operation[],
-    positions: Position[],
-    today: string,
-    periodFrom: string | undefined,
-    /** фьючерсные инструменты: вне XIRR и ROI, их результат — в P&L */
-    futureIds: ReadonlySet<string>,
-  ): Effectiveness {
+  private effectiveness(ops: Operation[], positions: Position[], periodFrom: string | undefined, futureIds: ReadonlySet<string>): Effectiveness {
     const periodOps = periodFrom ? ops.filter((o) => o.date >= periodFrom) : ops;
 
     const currentValueRub = positions.reduce((s, p) => s + Number(p.currentValueRub ?? 0), 0);
@@ -639,21 +610,6 @@ export class OperationsService {
     );
     const pnlRub = realizedPnlRub + unrealizedPnlRub + dividendsRub;
 
-    // Фьючерсы вне XIRR (их денежных вложений нет — оценка это нереализованный результат)
-    // и вне ROI (результат без знаменателя исказил бы процент): считаем «без них».
-    const futuresPnlRub =
-      realized
-        .filter((r) => futureIds.has(r.instrumentId))
-        .reduce((s, r) => s + r.realizedPnlRub.toNumber(), 0) +
-      positions
-        .filter((p) => futureIds.has(p.instrumentId))
-        .reduce((s, p) => s + Number(p.currentValueRub ?? 0), 0);
-    const spotValueRub = positions
-      .filter((p) => !futureIds.has(p.instrumentId))
-      .reduce((s, p) => s + Number(p.currentValueRub ?? 0), 0);
-    const flows = periodCashFlows(ops, periodFrom, spotValueRub, today, futureIds);
-    const rate = xirr(flows);
-
     return {
       investedRub,
       currentValueRub,
@@ -661,9 +617,7 @@ export class OperationsService {
       unrealizedPnlRub,
       dividendsRub,
       pnlRub,
-      roiPct: investedRub > 0 ? ((pnlRub - futuresPnlRub) / investedRub) * 100 : null,
       dividendYieldPct: investedRub > 0 ? (dividendsRub / investedRub) * 100 : null,
-      xirrPct: rate === null ? null : rate * 100,
     };
   }
 }

@@ -8,7 +8,6 @@ import {
 } from './engine';
 import { futureUnrealizedPnl } from './futures-engine';
 import { cashBalanceRub } from './cash';
-import { periodCashFlows } from './metrics';
 import { compareOperations } from './operation-order';
 
 /**
@@ -155,9 +154,6 @@ describe('фьючерсы: прочие функции движка', () => {
     expect(cashBalanceRub([dep, ...OPS]).toString()).not.toBe(cash.toString());
   });
 
-  it('periodCashFlows: фьючерсы исключены из потоков XIRR', () => {
-    expect(periodCashFlows(OPS, undefined, 0, '2026-11-06', FUT)).toEqual([]);
-  });
 });
 
 describe('фьючерсы: краевые случаи', () => {

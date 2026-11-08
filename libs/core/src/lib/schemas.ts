@@ -188,9 +188,7 @@ export const EffectivenessSchema = z.object({
   unrealizedPnlRub: z.number(), // бумажная переоценка удерживаемого остатка
   dividendsRub: z.number(), // полученные дивиденды + купоны
   pnlRub: z.number(), // realized + unrealized + dividends
-  roiPct: z.number().nullable(), // pnl / invested, %; null если вложено = 0 (всё закрыто)
   dividendYieldPct: z.number().nullable(), // dividends / invested, %
-  xirrPct: z.number().nullable(), // годовая денежно-взвешенная доходность, %
 });
 export type Effectiveness = z.infer<typeof EffectivenessSchema>;
 
@@ -537,3 +535,75 @@ export const ValuationQuerySchema = z
     message: '`from` не может быть позже `till`',
   });
 export type ValuationQuery = z.infer<typeof ValuationQuerySchema>;
+
+// --- Единый расчёт периода: GET /api/performance (libs/core/period-performance.ts) ---
+
+const PerformanceUnavailableSchema = z.enum(['no-capital', 'no-data', 'xirr-undefined']);
+
+/** Доходность за период по одному контуру: результат ₽, TWR, доходность денег, средний капитал */
+export const PeriodPerformanceSchema = z.object({
+  contour: z.enum(['wealth', 'positions']),
+  from: z.string().nullable(),
+  till: z.string().nullable(),
+  /** день базы (V_start); null — период с первой операции */
+  baseDate: z.string().nullable(),
+  days: z.number(),
+  startValueRub: decimalString,
+  endValueRub: decimalString,
+  netFlowRub: decimalString,
+  resultRub: decimalString,
+  breakdown: z.object({
+    /** Δ зафиксированного: продажи + выплаты (+ комиссии/расчёты фьючерсов) */
+    fixedRub: decimalString,
+    payoutsRub: decimalString.nullable(),
+    realizedRub: decimalString.nullable(),
+    revaluationRub: decimalString,
+  }),
+  twr: z.object({
+    pct: z.number().nullable(),
+    series: z.array(z.object({ date: z.string(), index: z.number() })),
+    reason: PerformanceUnavailableSchema.nullable(),
+  }),
+  mwr: z.object({
+    kind: z.enum(['annual', 'period']),
+    pct: z.number().nullable(),
+    reason: PerformanceUnavailableSchema.nullable(),
+  }),
+  xirrPct: z.number().nullable(),
+  dietzPct: z.number().nullable(),
+  averageCapitalRub: decimalString,
+});
+export type PeriodPerformanceDto = z.infer<typeof PeriodPerformanceSchema>;
+
+const PerformanceRowSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  performance: PeriodPerformanceSchema,
+});
+
+export const PerformanceQuerySchema = z
+  .object({
+    /** all — весь журнал; portfolio — один счёт (есть свой кэш); system — одна система (контур позиций) */
+    scope: z.enum(['all', 'portfolio', 'system']).default('all'),
+    id: z.string().min(1).optional(),
+    /** только для scope=system: ограничить систему одним портфелем (как фильтр дашборда) */
+    portfolioId: z.string().min(1).optional(),
+    from: isoDate.optional(),
+    till: isoDate.optional(),
+  })
+  .refine((q) => q.scope === 'all' || !!q.id, { message: 'для scope=portfolio|system нужен `id`' })
+  .refine((q) => !q.from || !q.till || q.from <= q.till, { message: '`from` не может быть позже `till`' });
+export type PerformanceQuery = z.infer<typeof PerformanceQuerySchema>;
+
+export const PerformanceSchema = z.object({
+  scope: z.enum(['all', 'portfolio', 'system']),
+  id: z.string().nullable(),
+  from: z.string().nullable(),
+  till: z.string(),
+  total: PeriodPerformanceSchema,
+  bySystem: z.array(PerformanceRowSchema),
+  byPortfolio: z.array(PerformanceRowSchema),
+  /** инструменты, оценённые не по цене дня на конец периода (перенос цены / нет цены) */
+  carried: z.array(z.object({ instrumentId: z.string(), reason: z.enum(['no-price', 'no-fx', 'carried']), priceDate: z.string().nullable() })),
+});
+export type PerformanceDto = z.infer<typeof PerformanceSchema>;

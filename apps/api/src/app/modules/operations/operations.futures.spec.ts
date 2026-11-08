@@ -109,7 +109,7 @@ describe('OperationsService — фьючерсы', () => {
     expect(total).toBeCloseTo(-10913 - FEES, 0);
   });
 
-  it('summary(): P&L = ВМ отчёта минус комиссии; деньги = вклад + реализованный; ROI не считается', async () => {
+  it('summary(): P&L = ВМ отчёта минус комиссии; деньги = вклад + реализованный', async () => {
     const s = await service.summary();
     expect(s.totals.pnlRub).toBeCloseTo(-10913 - FEES, 0);
     expect(s.totals.investedRub).toBe(0);
@@ -118,19 +118,16 @@ describe('OperationsService — фьючерсы', () => {
     expect(s.cash.cashRub).toBeCloseTo(100000 - 15201 - FEES, 0);
     // всего в портфеле = деньги + стоимость (нереализованный)
     expect(s.cash.totalValueRub).toBeCloseTo(100000 - 10913 - FEES, 0);
-    expect(s.totals.roiPct).toBeNull(); // вложено 0 → ROI не определён
-    expect(s.totals.xirrPct).toBeNull(); // фьючерсы вне XIRR
     expect(s.breakdown.find((b) => b.ticker === 'CNY-12.26')?.pnlRub).toBeCloseTo(-10913 - FEES, 0);
   });
 
-  it('summary(): ROI акций не искажается результатом фьючерса', async () => {
+  it('summary(): вложено — только спот, а P&L включает результат фьючерса', async () => {
     db.insert(operations)
       .values({ id: randomUUID(), date: '2026-10-02', systemId: 'sys', portfolioId: 'pf', instrumentId: 'SBER', operationType: 'Buy', quantity: '10', price: '100', currency: 'RUB' })
       .run();
     db.insert(quotes).values({ instrumentId: 'SBER', price: '110', currency: 'RUB', source: 'moex', asOf: '2026-11-05T00:00:00.000Z' }).run();
     const s = await service.summary();
     expect(s.totals.investedRub).toBe(1000);
-    expect(s.totals.roiPct).toBeCloseTo(10, 6); // (+100 по акциям) / 1000, фьючерс не входит
     expect(s.totals.pnlRub).toBeCloseTo(100 - 10913 - FEES, 0); // но в P&L фьючерс есть
   });
 
