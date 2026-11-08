@@ -530,6 +530,26 @@ export const ValuationSeriesSchema = z.object({
   ),
   /** накопленный чистый ввод средств (депозиты − выводы) по тем же датам, что и точки групп */
   netContributionsRub: z.array(decimalString),
+  /**
+   * Контур со своим кэшем (весь журнал или один счёт, без фильтра по системе): только тогда
+   * `cashRub` осмыслен. У системы/инструмента кэша нет — деньги от продаж и выплат уходят в общий кэш счёта.
+   */
+  hasCash: z.boolean().default(false),
+  /** кэш на каждый день ряда (богатство − позиции), по тем же датам, что и точки; пусто, если кэша нет */
+  cashRub: z.array(decimalString).default([]),
+  /** выплаты и продажи для маркеров на оси времени */
+  events: z
+    .array(
+      z.object({
+        date: z.string(),
+        kind: z.enum(['payout', 'sale']),
+        instrumentId: z.string().nullable(),
+        /** тикер или «Без инструмента» */
+        name: z.string(),
+        amountRub: decimalString,
+      }),
+    )
+    .default([]),
 });
 export type ValuationSeriesDto = z.infer<typeof ValuationSeriesSchema>;
 

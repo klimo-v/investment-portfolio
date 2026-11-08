@@ -3,6 +3,7 @@ import Database from 'better-sqlite3';
 import { drizzle, type BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
 import { migrate } from 'drizzle-orm/better-sqlite3/migrator';
 import { beforeEach, describe, expect, it } from 'vitest';
+import { cashBalanceRub } from '@core';
 import { instruments, operations, portfolios, priceHistory, quotes, systems } from '../../../db/schema';
 import { OperationsService } from '../operations/operations.service';
 import { PriceHistoryService } from '../quotes/price-history.service';
@@ -77,5 +78,47 @@ describe('одна текущая цена для сделок, позиций �
     db.insert(priceHistory).values({ instrumentId: 'SBER', date: day(-1), price: '130', currency: 'RUB', source: 'moex' }).run();
     const [trade] = await ops.trades();
     expect(trade.currentPrice).toBe('125');
+  });
+});
+
+describe('ValuationService: кэш и события для графика стоимости', () => {
+  const put = (o: { date: string; type: string; instrument?: string | null; qty?: string; price?: string }) =>
+    db
+      .insert(operations)
+      .values({
+        id: randomUUID(),
+        date: o.date,
+        systemId: 's',
+        portfolioId: 'p',
+        instrumentId: o.instrument === undefined ? 'SBER' : o.instrument,
+        operationType: o.type,
+        quantity: o.qty ?? '1',
+        price: o.price ?? '0',
+        currency: 'RUB',
+      })
+      .run();
+
+  it('кэш из ряда на сегодня = cashBalanceRub журнала; hasCash только без фильтра по системе', async () => {
+    put({ date: day(-12), type: 'Deposit', instrument: null, price: '5000' }); // вводим 5000 (покупка 10 × 100 из beforeEach)
+    put({ date: day(-5), type: 'Dividend', qty: '1', price: '120' });
+    put({ date: day(-4), type: 'Tax', qty: '1', price: '15' });
+    const s = await service.series({ groupBy: 'instrument' });
+    expect(s.hasCash).toBe(true);
+    const expected = cashBalanceRub(ops.list(), ops.futureIds()).toFixed(2);
+    expect(s.cashRub[s.cashRub.length - 1]).toBe(expected);
+    expect(expected).toBe('4105.00'); // 5000 − 1000 (покупка) + 120 − 15
+    const bySystem = await service.series({ groupBy: 'instrument', systemId: 's' });
+    expect(bySystem.hasCash).toBe(false);
+    expect(bySystem.cashRub).toEqual([]);
+  });
+
+  it('события: выплата и продажа с тикером для подписи маркера', async () => {
+    put({ date: day(-5), type: 'Dividend', qty: '1', price: '120' });
+    put({ date: day(-3), type: 'Sell', qty: '4', price: '110' });
+    const s = await service.series({ groupBy: 'instrument' });
+    expect(s.events).toEqual([
+      { date: day(-5), kind: 'payout', instrumentId: 'SBER', name: 'SBER', amountRub: '120.00' },
+      { date: day(-3), kind: 'sale', instrumentId: 'SBER', name: 'SBER', amountRub: '440.00' },
+    ]);
   });
 });

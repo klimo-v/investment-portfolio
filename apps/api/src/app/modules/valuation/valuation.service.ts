@@ -1,6 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
-import { fxInstrumentId, isFxInstrumentId, NO_INSTRUMENT_GROUP, ValuationSeriesSchema, valuationSeries, type PriceObservation, type ValuationQuery, type ValuationSeriesDto } from '@core';
+import { cashSeries, fxInstrumentId, isFxInstrumentId, NO_INSTRUMENT_GROUP, ValuationSeriesSchema, valuationEvents, valuationSeries, type PriceObservation, type ValuationQuery, type ValuationSeriesDto } from '@core';
 import { instruments, portfolios, quotes, systems } from '../../../db/schema';
 import { DB } from '../../db/drizzle.module';
 import { OperationsService } from '../operations/operations.service';
@@ -94,9 +94,20 @@ export class ValuationService {
     });
 
     const names = this.nameOf(query.groupBy);
+    // кэш осмыслен только у контура со своим кэшем — без фильтра по системе (см. valuation-extras.ts)
+    const hasCash = !query.systemId;
+    const tickers = this.nameOf('instrument');
+    const events = valuationEvents(ops, {
+      from: result.from ?? undefined,
+      till,
+      futureIds: this.operations.futureIds(),
+    }).map((e) => ({ ...e, name: e.instrumentId ? (tickers.get(e.instrumentId) ?? e.instrumentId) : (tickers.get(NO_INSTRUMENT_GROUP) ?? '') }));
     return ValuationSeriesSchema.parse({
       ...result,
       groups: result.groups.map((g) => ({ ...g, name: names.get(g.key) ?? g.key })),
+      hasCash,
+      cashRub: hasCash ? cashSeries(result) : [],
+      events,
     });
   }
 
