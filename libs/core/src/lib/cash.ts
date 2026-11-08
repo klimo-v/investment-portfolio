@@ -131,3 +131,13 @@ export function orphanSellsRub(operations: readonly Operation[], futureIds?: Rea
   const daily = dailyCash(operations, futureIds);
   return daily.length > 0 ? daily[daily.length - 1].orphanSellsRub : new Decimal(0);
 }
+
+/** Продажи без позиции (нетто комиссии, ₽) списком — для объяснения причины отрицательного кэша */
+export function orphanSellList(
+  operations: readonly Operation[],
+  futureIds?: ReadonlySet<string>,
+): { date: string; instrumentId: string; amountRub: Decimal }[] {
+  const ledger = new TradeLedger({ futureIds });
+  for (const op of [...operations].sort(compareOperations)) ledger.apply(op);
+  return ledger.orphanSells;
+}

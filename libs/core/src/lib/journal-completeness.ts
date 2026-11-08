@@ -1,5 +1,6 @@
 import Decimal from 'decimal.js';
 import type { Operation } from './schemas';
+import { cashDelta, orphanSellList } from './cash';
 
 /**
  * Полнота журнала: невидимые пропуски, которые тихо портят доходность. Если Coupon не
@@ -70,6 +71,8 @@ export interface CompletenessInput {
   /** кэш по дням (cashSeries) вместе с датами; undefined — у контура нет своего кэша (система) */
   cash?: readonly { date: string; cashRub: string }[];
   tickers: ReadonlyMap<string, string>;
+  /** фьючерсы: их сделки кэш не двигают (нужны, чтобы назвать причину отрицательного кэша) */
+  futureIds?: ReadonlySet<string>;
   /** сегодня: купоны, срок ожидания которых ещё не вышел, не проверяем */
   today: string;
 }
@@ -96,6 +99,40 @@ function push<K, V>(map: Map<K, V[]>, key: K, value: V): void {
   const list = map.get(key);
   if (list) list.push(value);
   else map.set(key, [value]);
+}
+
+/**
+ * Причина отрицательного кэша — по данным журнала, а не гадание:
+ *  - продажи без позиции (покупка вне периода импорта или валюта, пришедшая на счёт): деньги от
+ *    них в кэше есть, а позиции нет — по ним видно, что именно потеряно;
+ *  - самые крупные движения первого дня минуса — с них начинается провал.
+ */
+function negativeCashCause(input: CompletenessInput, firstDay: string): string {
+  const name = (id: string): string => input.tickers.get(id) ?? id;
+  const parts: string[] = [];
+
+  const orphans = orphanSellList(input.operations, input.futureIds);
+  if (orphans.length > 0) {
+    const shown = orphans
+      .slice(0, 3)
+      .map((o) => `${name(o.instrumentId)} ${fmtRub(o.amountRub)} (${o.date})`)
+      .join('; ');
+    const more = orphans.length > 3 ? ` и ещё ${orphans.length - 3}` : '';
+    parts.push(`продажи без позиции — покупка вне загруженного периода или валюта, пришедшая на счёт: ${shown}${more}`);
+  }
+
+  const dayOps = input.operations
+    .filter((o) => o.date === firstDay)
+    .map((o) => ({ o, delta: cashDelta(o, input.futureIds) }))
+    .filter((x) => !x.delta.isZero())
+    .sort((a, b) => b.delta.abs().comparedTo(a.delta.abs()))
+    .slice(0, 4);
+  if (dayOps.length > 0) {
+    const label = (o: Operation): string => (o.instrumentId ? `${o.operationType} ${name(o.instrumentId)}` : o.operationType);
+    parts.push(`движения первого дня: ${dayOps.map((x) => `${label(x.o)} ${x.delta.gt(0) ? '+' : '−'}${fmtRub(x.delta.abs())}`).join(', ')}`);
+  }
+
+  return parts.length > 0 ? ` Причина: ${parts.join('. ')}.` : '';
 }
 
 export function journalCompleteness(input: CompletenessInput): CompletenessWarning[] {
@@ -179,7 +216,8 @@ export function journalCompleteness(input: CompletenessInput): CompletenessWarni
         amountRub: worst.toFixed(2),
         message:
           `Кэш по журналу уходит ниже нуля (${days} дн., с ${first}, худший остаток ${fmtRub(worst)}): ` +
-          `не хватает пополнений или переводов — довнесение выглядит как прибыль, доходность искажена.`,
+          `не хватает пополнений или переводов — довнесение выглядит как прибыль, доходность искажена.` +
+          negativeCashCause(input, first),
       });
     }
   }

@@ -132,6 +132,7 @@ export class PerformanceService {
       schedules: this.coupons.list([...firstOpDate.keys()]),
       cash,
       tickers,
+      futureIds: this.operations.futureIds(),
       today: till,
     });
   }

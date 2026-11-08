@@ -106,6 +106,32 @@ describe('journalCompleteness: кэш ниже нуля', () => {
   });
 });
 
+describe('journalCompleteness: причина отрицательного кэша', () => {
+  const ops = [
+    mk({ date: '2026-03-01', operationType: 'Withdraw', quantity: '1', price: '253121.66' }),
+    mk({ date: '2026-03-01', operationType: 'Sell', instrumentId: 'CNY', quantity: '100', price: '12', fee: '2' }),
+    mk({ date: '2026-03-01', operationType: 'Deposit', quantity: '1', price: '10', currency: 'CNY' }),
+  ];
+  const names = new Map([['CNY', 'CNYRUB_TOM']]);
+
+  it('называет продажи без позиции (тикер, сумма, дата) и движения первого дня минуса', () => {
+    const cash = [{ date: '2026-03-01', cashRub: '-251923.66' }];
+    const [w] = journalCompleteness({ operations: ops, schedules: [], cash, tickers: names, today: '2026-11-07' });
+    expect(w.message).toContain('Причина');
+    expect(w.message).toContain('продажи без позиции');
+    expect(w.message).toContain('CNYRUB_TOM 1 198.00 ₽ (2026-03-01)');
+    expect(w.message).toContain('Withdraw −253 121.66 ₽');
+  });
+
+  it('без продаж без позиции причина — только движения первого дня', () => {
+    const cash = [{ date: '2026-03-01', cashRub: '-500.00' }];
+    const only = [mk({ date: '2026-03-01', operationType: 'Withdraw', quantity: '1', price: '500' })];
+    const [w] = journalCompleteness({ operations: only, schedules: [], cash, tickers: names, today: '2026-11-07' });
+    expect(w.message).not.toContain('продажи без позиции');
+    expect(w.message).toContain('движения первого дня: Withdraw −500.00 ₽');
+  });
+});
+
 describe('warningTouchesPeriod', () => {
   const w = { kind: 'negative-cash' as const, instrumentId: null, ticker: null, date: '2026-03-02', dateTo: '2026-03-05', amountRub: '-1', message: '' };
   it('пересечение периода с датами предупреждения', () => {
