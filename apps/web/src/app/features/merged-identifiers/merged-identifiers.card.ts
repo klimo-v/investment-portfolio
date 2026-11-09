@@ -1,7 +1,10 @@
 import { ChangeDetectionStrategy, Component, computed, inject } from '@angular/core';
+import { MatButtonModule } from '@angular/material/button';
 import { MatCardModule } from '@angular/material/card';
+import { MatDialog } from '@angular/material/dialog';
 import { DatePipe } from '@angular/common';
-import { ReferenceApi } from '../../entities/reference/reference.api';
+import { ReferenceApi, type InstrumentIdentifiers } from '../../entities/reference/reference.api';
+import { SplitInstrumentDialog } from '../split-instrument/split-instrument.dialog';
 
 const SCHEME_LABEL: Record<string, string> = {
   ticker: 'тикер',
@@ -22,7 +25,7 @@ const SCHEME_LABEL: Record<string, string> = {
 @Component({
   selector: 'app-merged-identifiers',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [MatCardModule, DatePipe],
+  imports: [MatCardModule, MatButtonModule, DatePipe],
   template: `
     @if (items().length > 0) {
       <mat-card class="merged">
@@ -49,10 +52,16 @@ const SCHEME_LABEL: Record<string, string> = {
                 Слито из <b>{{ m.sourceTicker }}</b
                 >{{ m.sourceName ? ' (' + m.sourceName + ')' : '' }},
                 {{ m.at.replace(' ', 'T') | date: 'dd.MM.yyyy HH:mm' }}{{ m.undone ? ' — отменено' : '' }}
+                @if (!m.undone) {
+                  <button mat-stroked-button (click)="undoMerge(i, m.id)">Отменить слияние…</button>
+                }
               </div>
             }
             @if (i.merges.length === 0) {
-              <div class="journal muted">Слито до включения журнала: дата и источник неизвестны.</div>
+              <div class="journal muted">
+                Слито до включения журнала: дата и источник неизвестны.
+                <button mat-stroked-button (click)="splitManually(i)">Выделить инструмент заново…</button>
+              </div>
             }
             @for (e of i.entries; track e.scheme + e.value) {
               <div class="code" [class.merged-code]="e.origin === 'merge'">
@@ -126,6 +135,18 @@ const SCHEME_LABEL: Record<string, string> = {
 export class MergedIdentifiersCard {
   private readonly reference = inject(ReferenceApi);
   protected readonly items = computed(() => this.reference.mergedIdentifiers.value() ?? []);
+  private readonly dialog = inject(MatDialog);
+
+  /** Откат слияния из журнала: тот же диалог разделения с планом по снимку */
+  protected undoMerge(i: InstrumentIdentifiers, mergeId: string): void {
+    this.dialog.open(SplitInstrumentDialog, { autoFocus: false, data: { instrumentId: i.instrumentId, ticker: i.ticker, mergeId } });
+  }
+
+  /** Слияние без записи в журнале: операции и коды выбирает пользователь */
+  protected splitManually(i: InstrumentIdentifiers): void {
+    this.dialog.open(SplitInstrumentDialog, { autoFocus: false, data: { instrumentId: i.instrumentId, ticker: i.ticker } });
+  }
+
   protected label(scheme: string): string {
     return SCHEME_LABEL[scheme] ?? scheme;
   }

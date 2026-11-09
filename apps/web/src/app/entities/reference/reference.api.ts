@@ -2,7 +2,8 @@ import { Injectable, inject, signal } from '@angular/core';
 import { HttpClient, httpResource } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
 import { z } from 'zod';
-import { InstrumentIdentifiersSchema, InstrumentSchema, PortfolioSchema, SystemSchema, type Portfolio, type System } from '@core';
+import type { MergeUndoPlan, SplitPlan, SplitRequest } from '@core';
+import { InstrumentIdentifiersSchema, SplitRequestSchema, InstrumentSchema, PortfolioSchema, SystemSchema, type Portfolio, type System } from '@core';
 import { withToastSuccess } from '@web-shared';
 import { DataRevision } from '../../shared/data-revision';
 
@@ -31,6 +32,9 @@ const PossibleDuplicateSchema = z.object({
   deterministic: z.boolean(),
 });
 export type PossibleDuplicate = z.infer<typeof PossibleDuplicateSchema>;
+/** Тело запроса разделения (до разбора Zod на сервере: поля с умолчаниями необязательны) */
+export type SplitRequestInput = z.input<typeof SplitRequestSchema>;
+
 const MergeIssueSchema = z.object({ code: z.string(), message: z.string() });
 const MergePreviewSchema = z.object({
   source: z.object({ id: z.string(), ticker: z.string(), name: z.string().nullable() }),
@@ -41,6 +45,13 @@ const MergePreviewSchema = z.object({
 });
 export type MergePreview = z.infer<typeof MergePreviewSchema>;
 export type { Portfolio, System };
+/** План отката слияния + предпросмотр разделения (ответ GET /instruments/merges/:id/undo-plan) */
+export interface MergeUndoView {
+  merge: { id: string; at: string; sourceId: string; sourceTicker: string; targetId: string; undone: boolean };
+  plan: MergeUndoPlan;
+  preview: SplitPlan['preview'] | null;
+}
+export type { MergeUndoPlan, SplitPlan, SplitRequest };
 export type InstrumentIdentifiers = z.infer<typeof InstrumentIdentifiersSchema>;
 
 @Injectable({ providedIn: 'root' })
@@ -135,6 +146,48 @@ export class ReferenceApi {
    * под разными кодами, а автоматически распознать дубль нельзя (см. диалог).
    * Затрагивает и позиции/сделки (DataRevision), и сам справочник (reloadTrigger).
    */
+  /** «Привязанные коды» одного инструмента (только чтение) */
+  instrumentIdentifiers(instrumentId: string): Promise<InstrumentIdentifiers> {
+    return firstValueFrom(this.http.get(`/api/instruments/${instrumentId}/identifiers`)).then((r) => InstrumentIdentifiersSchema.parse(r));
+  }
+
+  /** Предпросмотр разделения инструмента — без записи */
+  splitPreview(instrumentId: string, request: SplitRequestInput): Promise<SplitPlan> {
+    return firstValueFrom(this.http.post<SplitPlan>(`/api/instruments/${instrumentId}/split/preview`, request));
+  }
+
+  /** Выделить новый инструмент: переносит выбранные операции и коды. Меняет и справочник, и позиции */
+  async splitInstrument(instrumentId: string, request: SplitRequestInput): Promise<{ newInstrumentId: string; movedOperations: number }> {
+    const res = await firstValueFrom(
+      this.http.post<{ splitId: string; newInstrumentId: string; movedOperations: number }>(
+        `/api/instruments/${instrumentId}/split`,
+        request,
+        withToastSuccess('Инструмент выделен'),
+      ),
+    );
+    this.reloadTrigger.update((n) => n + 1);
+    this.revision.bump();
+    return res;
+  }
+
+  /** План отката слияния; `assignments` — явное распределение неясных операций */
+  undoPlan(mergeId: string, assignments: { toSource: string[]; toTarget: string[] }): Promise<MergeUndoView> {
+    const params = new URLSearchParams();
+    if (assignments.toSource.length > 0) params.set('toSource', assignments.toSource.join(','));
+    if (assignments.toTarget.length > 0) params.set('toTarget', assignments.toTarget.join(','));
+    const query = params.toString();
+    return firstValueFrom(this.http.get<MergeUndoView>(`/api/instruments/merges/${mergeId}/undo-plan${query ? `?${query}` : ''}`));
+  }
+
+  async undoMerge(
+    mergeId: string,
+    body: { assignments: { toSource: string[]; toTarget: string[] }; confirmOrphanSells: boolean },
+  ): Promise<void> {
+    await firstValueFrom(this.http.post(`/api/instruments/merges/${mergeId}/undo`, body, withToastSuccess('Слияние отменено')));
+    this.reloadTrigger.update((n) => n + 1);
+    this.revision.bump();
+  }
+
   /** Проверки слияния и последствия — без записи */
   async mergePreview(sourceId: string, targetId: string): Promise<MergePreview> {
     return MergePreviewSchema.parse(
