@@ -287,6 +287,7 @@ export class SplitInstrumentDialog {
   protected readonly unclearOps = signal<MergeUndoView['plan']['unclear']>([]);
   /** Номер последнего запроса плана: устаревший ответ не перезаписывает свежий */
   private undoRequestSeq = 0;
+  private previewSeq = 0;
 
   protected readonly previewData = computed(() => (this.isUndo ? this.undo()?.preview ?? null : this.manualPreview()?.preview ?? null));
   protected readonly warnings = computed(() => this.manualPreview()?.warnings ?? []);
@@ -328,22 +329,23 @@ export class SplitInstrumentDialog {
     // идентификатор по умолчанию совпадает с тикером, пока пользователь не правил его сам
     if (this.newId() === this.newTicker()) this.newId.set(v);
     this.newTicker.set(v);
-    this.manualPreview.set(null);
+    this.resetPreview();
   }
 
   protected resetPreview(): void {
+    this.previewSeq++; // ответ на запрос по старым значениям полей больше не применяется
     this.manualPreview.set(null);
     this.confirmOrphan.set(false);
   }
 
   protected toggleOp(id: string, checked: boolean): void {
     this.selectedOps.update((s) => toggled(s, id, checked));
-    this.manualPreview.set(null);
+    this.resetPreview();
   }
 
   protected toggleCode(key: string, checked: boolean): void {
     this.selectedCodes.update((s) => toggled(s, key, checked));
-    this.manualPreview.set(null);
+    this.resetPreview();
   }
 
   private async loadCodes(): Promise<void> {
@@ -375,10 +377,12 @@ export class SplitInstrumentDialog {
   protected async refreshPreview(): Promise<void> {
     this.failure.set(null);
     this.busy.set(true);
+    const seq = ++this.previewSeq;
     try {
-      this.manualPreview.set(await this.reference.splitPreview(this.data.instrumentId, this.manualRequest()));
+      const plan = await this.reference.splitPreview(this.data.instrumentId, this.manualRequest());
+      if (seq === this.previewSeq) this.manualPreview.set(plan);
     } catch (e) {
-      this.failure.set(describe(e));
+      if (seq === this.previewSeq) this.failure.set(describe(e));
     } finally {
       this.busy.set(false);
     }
