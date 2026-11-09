@@ -1,4 +1,4 @@
-import { BadRequestException, Body, Controller, Get, Post } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Get, Post, Query } from '@nestjs/common';
 import { z } from 'zod';
 import { AnnotationImportService } from './annotation-import.service';
 import { ImportService, type ImportFormat, type PreviewResult } from './import.service';
@@ -123,6 +123,16 @@ export class ImportController {
   @Get('tbank/accounts')
   tbankAccounts() {
     return this.tbankSync.accounts();
+  }
+
+  /**
+   * Сверка валютных остатков журнала с брокером (read-only, `GetPositions`). Возвращает только
+   * расхождения: пустой список — всё сходится. Сверка рублей отдельно не нужна (journalCompleteness).
+   */
+  @Get('tbank/currency-check')
+  async tbankCurrencyCheck(@Query('accountId') accountId?: string) {
+    if (!accountId) throw new BadRequestException('Укажите accountId');
+    return this.tbankSync.currencyCheck(accountId, this.service.journalCurrencyBalancesByAccount(accountId));
   }
 
   /**

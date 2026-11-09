@@ -2,7 +2,7 @@ import { Injectable, inject } from '@angular/core';
 import { HttpClient, httpResource } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
 import { z } from 'zod';
-import type { Operation } from '@core';
+import type { CurrencyMismatch, Operation } from '@core';
 import { withToastSuccess } from '@web-shared';
 
 /**
@@ -157,6 +157,13 @@ export class ImportApi {
   }> {
     return firstValueFrom(
       this.http.post<{ uploadId: string; rows: number }>('/api/import/tbank/fetch', req),
+    );
+  }
+
+  /** Сверка валютных остатков журнала с брокером (только расхождения; пусто — всё сходится) */
+  tbankCurrencyCheck(accountId: string): Promise<CurrencyMismatch[]> {
+    return firstValueFrom(
+      this.http.get<CurrencyMismatch[]>('/api/import/tbank/currency-check', { params: { accountId } }),
     );
   }
 

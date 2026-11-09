@@ -193,3 +193,16 @@ describe('слияние инструментов в разных валютах
     expect(rows()).toEqual([]);
   });
 });
+
+describe('PriceHistoryService.targetsFor: курсы валют', () => {
+  it('валютная пара CNYRUB_TOM (цена в рублях) тянет за собой курс ЦБ юаня fx:CNY', () => {
+    db.insert(instruments).values({ id: 'CNYRUB_TOM', ticker: 'CNYRUB_TOM', type: 'Currency', currency: 'RUB', marketSource: 'moex' }).run();
+    const targets = new PriceHistoryService(db, []).targetsFor(['CNYRUB_TOM']);
+    expect(targets.map((t) => t.instrumentId)).toEqual(['CNYRUB_TOM', 'fx:CNY']);
+    expect(targets.find((t) => t.instrumentId === 'fx:CNY')).toMatchObject({ kind: 'fx', marketSource: 'cbr' });
+  });
+
+  it('обычный рублёвый инструмент курсов не добавляет', () => {
+    expect(new PriceHistoryService(db, []).targetsFor(['SBER']).map((t) => t.instrumentId)).toEqual(['SBER']);
+  });
+});

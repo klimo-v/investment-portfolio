@@ -20,7 +20,9 @@ import {
   type RowIdentity,
   type FuturesSettlement,
   type RawRow,
+  type CurrencyBalance,
   type Operation,
+  journalCurrencyBalances,
   type FuturesMark,
 } from '@core';
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
@@ -169,6 +171,28 @@ export class ImportService {
     return { ...(this.uploads.get(uploadId) as ParsedUpload), uploadId };
   }
 
+  /**
+   * Количество каждой иностранной валюты в журнале портфеля, привязанного к счёту `accountRef`
+   * (для сверки с остатками брокера). Портфель не найден — пустой список.
+   */
+  journalCurrencyBalancesByAccount(accountRef: string): CurrencyBalance[] {
+    const [portfolio] = this.db.select().from(portfolios).where(eq(portfolios.accountRef, accountRef)).all();
+    if (!portfolio) return [];
+    const tickers = new Map(this.db.select({ id: instruments.id, ticker: instruments.ticker }).from(instruments).all().map((i) => [i.id, i.ticker]));
+    const ops = this.db.select().from(operations).where(eq(operations.portfolioId, portfolio.id)).all();
+    return journalCurrencyBalances(ops as Operation[], (id) => tickers.get(id));
+  }
+
+  /** Сделки валютной пары за день из журнала — курс ввода/вывода валюты не меняется от загрузки к загрузке */
+  private journalDayTrades(pairTicker: string, date: string, side: 'Buy' | 'Sell') {
+    return this.db
+      .select({ quantity: operations.quantity, price: operations.price })
+      .from(operations)
+      .innerJoin(instruments, eq(instruments.id, operations.instrumentId))
+      .where(and(eq(instruments.ticker, pairTicker), eq(operations.date, date), eq(operations.operationType, side)))
+      .all();
+  }
+
   /** Источники курсов для `expandForeignCash`: ЦБ из истории цен (fx:CCY) и продажи валютной пары в журнале */
   private foreignCashLookups(): ForeignCashLookups {
     return {
@@ -180,13 +204,8 @@ export class ImportService {
           .orderBy(desc(priceHistory.date))
           .limit(1)
           .get()?.price ?? null,
-      journalSales: (pairTicker, date) =>
-        this.db
-          .select({ quantity: operations.quantity, price: operations.price })
-          .from(operations)
-          .innerJoin(instruments, eq(instruments.id, operations.instrumentId))
-          .where(and(eq(instruments.ticker, pairTicker), eq(operations.date, date), eq(operations.operationType, 'Sell')))
-          .all(),
+      journalSales: (pairTicker, date) => this.journalDayTrades(pairTicker, date, 'Sell'),
+      journalBuys: (pairTicker, date) => this.journalDayTrades(pairTicker, date, 'Buy'),
     };
   }
 

@@ -1,5 +1,5 @@
 import { BadGatewayException, Injectable, UnauthorizedException } from '@nestjs/common';
-import type { TbankInstrumentRef, TbankOperationItem } from '@core';
+import { moneyToDecimal, type CurrencyBalance, type TbankInstrumentRef, type TbankMoneyValue, type TbankOperationItem } from '@core';
 import { TbankConfig } from './tbank.config';
 
 /**
@@ -21,6 +21,7 @@ const SERVICE = 'tinkoff.public.invest.api.contract.v1';
 type ReadMethod =
   | `${typeof SERVICE}.UsersService/GetAccounts`
   | `${typeof SERVICE}.OperationsService/GetOperationsByCursor`
+  | `${typeof SERVICE}.OperationsService/GetPositions`
   | `${typeof SERVICE}.InstrumentsService/GetInstrumentBy`;
 
 /** Счёт клиента у брокера */
@@ -104,6 +105,12 @@ export class TbankApiClient {
       {},
     );
     return (res.accounts ?? []).filter((a) => a.status !== 'ACCOUNT_STATUS_CLOSED');
+  }
+
+  /** Денежные остатки счёта по валютам (`money` из GetPositions): только чтение, для сверки с журналом */
+  async getMoneyBalances(accountId: string): Promise<CurrencyBalance[]> {
+    const res = await this.call<{ money?: TbankMoneyValue[] }>(`${SERVICE}.OperationsService/GetPositions`, { accountId });
+    return (res.money ?? []).map((m) => ({ currency: (m.currency ?? '').toUpperCase(), amount: moneyToDecimal(m).toFixed() }));
   }
 
   /** Одна страница истории операций по курсору */

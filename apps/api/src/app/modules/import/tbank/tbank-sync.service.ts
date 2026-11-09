@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { mapTbankOperations, type RawRow, type TbankInstrumentRef, type TbankOperationItem } from '@core';
+import { mapTbankOperations, reconcileCurrencyBalances, type CurrencyBalance, type CurrencyMismatch, type RawRow, type TbankInstrumentRef, type TbankOperationItem } from '@core';
 import { TbankApiClient, type TbankAccount } from './tbank-api.client';
 
 /**
@@ -26,6 +26,14 @@ export class TbankSyncService {
   /** Счета клиента для выбора в UI */
   accounts(): Promise<TbankAccount[]> {
     return this.api.getAccounts();
+  }
+
+  /**
+   * Сверка валютных остатков: `money` брокера против количества валюты в журнале (`journal`).
+   * Пустой результат — всё сходится; иначе — расхождения с названием валюты.
+   */
+  async currencyCheck(accountId: string, journal: CurrencyBalance[]): Promise<CurrencyMismatch[]> {
+    return reconcileCurrencyBalances(await this.api.getMoneyBalances(accountId), journal);
   }
 
   /**

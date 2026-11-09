@@ -1,3 +1,4 @@
+import type { CurrencyMismatch } from '@core';
 import { ChangeDetectionStrategy, Component, computed, inject, linkedSignal, signal } from '@angular/core';
 import { MatCardModule } from '@angular/material/card';
 import { MatButtonModule } from '@angular/material/button';
@@ -186,6 +187,13 @@ export function defaultSyncRange(
       }
     </mat-card>
 
+    @for (m of currencyMismatches(); track m.currency) {
+      <mat-card class="currency-warning">
+        Расхождение по валюте {{ m.currency }}: в журнале {{ m.journal }}, у брокера {{ m.broker }}.
+        Скорее всего, пропущено движение этой валюты (ввод, вывод или конвертация) — журнал неполный.
+      </mat-card>
+    }
+
     @if (preview()) {
       <mat-card class="summary">
         <app-status-chip tone="success">Распознано: {{ preview()!.summary.ok }}</app-status-chip>
@@ -328,6 +336,11 @@ export function defaultSyncRange(
         color: var(--app-text-muted);
       }
       .upload,
+      .currency-warning {
+        padding: 12px 16px;
+        margin-bottom: 12px;
+        color: var(--app-warn);
+      }
       .summary,
       .done {
         margin-bottom: 16px;
@@ -529,6 +542,8 @@ export class ImportPage {
    * и заново гонял бы его через парсер (docs/04-roadmap.md §3.1).
    */
   private uploadId: string | undefined;
+  /** Расхождения валютных остатков журнала с брокером (только для выгрузки из API) */
+  protected readonly currencyMismatches = signal<CurrencyMismatch[]>([]);
 
   /** Смена источника обнуляет всё, что относилось к предыдущему */
   protected setSource(source: ImportSource): void {
@@ -566,6 +581,7 @@ export class ImportPage {
         return;
       }
       await this.tryPreview();
+      void this.refreshCurrencyCheck(accountId);
     } catch (e: unknown) {
       this.errorMessage.set(extractErrorMessage(e, 'Не удалось получить операции у брокера.'));
     } finally {
@@ -573,9 +589,19 @@ export class ImportPage {
     }
   }
 
+  /** Сверка валют с брокером — подсказка, а не условие импорта: сбой запроса её просто скрывает */
+  private async refreshCurrencyCheck(accountId: string): Promise<void> {
+    try {
+      this.currencyMismatches.set(await this.api.tbankCurrencyCheck(accountId));
+    } catch {
+      this.currencyMismatches.set([]);
+    }
+  }
+
   /** Сброс состояния предыдущей загрузки (общий для обоих источников) */
   private resetInput(): void {
     this.errorMessage.set('');
+    this.currencyMismatches.set([]);
     this.lastBatch.set(null);
     this.preview.set(null);
     this.tickerSystemChoices.set({});
@@ -698,6 +724,8 @@ export class ImportPage {
       this.instrumentChoices.set({});
       this.seenUnresolved.set({});
       this.uploadId = undefined; // батч закоммичен — кэш файла на бэке уже очищен
+      const accountId = this.accountId();
+      if (this.source() !== 'file' && accountId) void this.refreshCurrencyCheck(accountId); // журнал изменился — сверяем заново
     } catch {
       this.errorMessage.set('Не удалось импортировать. Попробуйте ещё раз.');
     } finally {

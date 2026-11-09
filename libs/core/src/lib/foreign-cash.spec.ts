@@ -128,3 +128,67 @@ describe('mergeBrokerFields: курс', () => {
     expect(new Decimal(changes[0].to).gt(1)).toBe(true);
   });
 });
+
+/** 01.08.2024 как в API (синтетика с реальными суммами): покупка юаня за рубли и вывод его со счёта */
+const AUG: TbankOperationItem[] = [
+  {
+    ...base,
+    id: 'buy1',
+    date: '2024-08-01T12:05:51Z',
+    type: 'OPERATION_TYPE_BUY',
+    instrumentUid: 'cny',
+    instrumentType: 'currency',
+    quantity: '4226',
+    payment: rub('-49794', -960000000),
+    price: rub('11', 783000000),
+    tradesInfo: { trades: [{ num: '682470646', date: '2024-08-01T12:05:51Z', quantity: '4226', price: rub('11', 783000000) }] },
+  },
+  { ...base, id: 'out1', date: '2024-08-01T12:07:38Z', type: 'OPERATION_TYPE_OUTPUT', payment: { currency: 'cny', units: '-4226', nano: 0 } },
+];
+
+describe('вывод валюты: покупка в тот же день задаёт курс (01.08.2024), курса ЦБ нет', () => {
+  it('курс вывода — цена покупки дня; без курса ЦБ строка не отклоняется', () => {
+    const rows = expandForeignCash(mapTbankOperations(AUG, 'acc', INSTR), NO_CBR);
+    expect(rows.every((r) => !r.skipReason)).toBe(true);
+    const sell = rows.find((r) => r.tradeType === 'sell');
+    expect(sell?.ticker).toBe('CNYRUB_TOM');
+    expect(sell?.price).toBe('11.783');
+    expect(sell?.quantity).toBe('4226');
+    expect(sell?.brokerRef).toBe('out1:fx');
+  });
+
+  it('позиция юаня закрывается в ноль, продажа не остаётся без позиции, курсовой разницы нет', () => {
+    const ops = toOps(expandForeignCash(mapTbankOperations(AUG, 'acc', INSTR), NO_CBR));
+    const ledger = new TradeLedger();
+    for (const o of [...ops].sort(compareOperations)) ledger.apply(o);
+    expect(ledger.orphanSells).toHaveLength(0);
+    const [trade] = ledger.trades();
+    expect(trade.quantity.toFixed(2)).toBe('0.00');
+    expect(trade.realizedPnlRub.toFixed(2)).toBe('0.00');
+    // куплено за рубли и выведено вовне — деньги покинули счёт
+    expect(cashBalanceRub(ops).toFixed(2)).toBe('-49794.96');
+  });
+
+  it('покупка в журнале (БД) за тот же день задаёт курс вывода — повторный импорт одного вывода', () => {
+    const lk: ForeignCashLookups = { cbrRate: () => null, journalBuys: () => [{ quantity: '4226', price: '11.783' }, { quantity: '15634', price: '11.781' }] };
+    const w: RawRow = { date: '2024-08-01', currency: 'CNY', tradeType: 'withdraw', quantity: '1', price: '4226', brokerRef: 'o' };
+    const r = foreignCashRate('CNY', '2024-08-01', [w], lk, 'withdraw');
+    expect(r?.source).toBe('same-day-buy');
+    expect(r?.rate).toBe('11.78142558'); // средневзвешенная по двум покупкам
+  });
+
+  it('ввод валюты покупками дня не меняется: покупка не задаёт курс ввода', () => {
+    const lk: ForeignCashLookups = { cbrRate: () => null, journalBuys: () => [{ quantity: '100', price: '11' }] };
+    expect(foreignCashRate('CNY', '2024-08-01', [], lk, 'deposit')).toBeNull();
+  });
+
+  it('вывод: покупка приоритетнее продажи того же дня; нет ни той ни другой — ЦБ; нет и ЦБ — понятная ошибка', () => {
+    const buy: RawRow = { date: '2024-08-01', ticker: 'CNYRUB_TOM', tradeType: 'buy', quantity: '10', price: '11' };
+    const sell: RawRow = { date: '2024-08-01', ticker: 'CNYRUB_TOM', tradeType: 'sell', quantity: '10', price: '12' };
+    expect(foreignCashRate('CNY', '2024-08-01', [buy, sell], CBR_12, 'withdraw')?.rate).toBe('11');
+    expect(foreignCashRate('CNY', '2024-08-01', [sell], CBR_12, 'withdraw')?.source).toBe('same-day-sale');
+    expect(foreignCashRate('CNY', '2024-08-01', [], CBR_12, 'withdraw')?.source).toBe('cbr');
+    const w: RawRow = { date: '2024-08-01', currency: 'CNY', tradeType: 'withdraw', quantity: '1', price: '5', brokerRef: 'w' };
+    expect(expandForeignCash([w], NO_CBR)[0].skipReason).toMatch(/нет ни покупки и продажи/);
+  });
+});

@@ -1,7 +1,7 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
 import { and, eq, gte, inArray, lte } from 'drizzle-orm';
-import { fxInstrumentId, isMarketSource, type PriceSource } from '@core';
+import { currencyOfPairTicker, fxInstrumentId, isMarketSource, type PriceSource } from '@core';
 import { recordPrice } from '../../../db/price-history-store';
 import { instruments, priceHistory, quotes, type PriceHistoryRow } from '../../../db/schema';
 import { DB } from '../../db/drizzle.module';
@@ -65,7 +65,12 @@ export class PriceHistoryService {
     if (instrumentIds.length === 0) return [];
     const rows = this.db.select().from(instruments).where(inArray(instruments.id, [...instrumentIds])).all();
     const currencies = new Set<string>();
-    for (const i of rows) currencies.add(i.currency);
+    for (const i of rows) {
+      currencies.add(i.currency);
+      // валютная пара (CNYRUB_TOM) торгуется в рублях, но ввод/вывод юаня считается по курсу ЦБ этой валюты
+      const pairCurrency = currencyOfPairTicker(i.ticker);
+      if (pairCurrency) currencies.add(pairCurrency);
+    }
     for (const q of this.db.select().from(quotes).where(inArray(quotes.instrumentId, [...instrumentIds])).all()) {
       currencies.add(q.currency);
       if (q.accruedCurrency) currencies.add(q.accruedCurrency);
