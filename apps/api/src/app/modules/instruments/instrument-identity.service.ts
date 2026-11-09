@@ -6,6 +6,10 @@ import {
   findPossibleDuplicates,
   identityConflicts,
   MergePayloadV1,
+  planMergeUndo,
+  type MergeUndoPlan,
+  type SnapshotRow,
+  type SplitRequest,
   SplitPayloadV1,
   SplitRequestSchema,
   planInstrumentSplit,
@@ -40,6 +44,26 @@ import {
   quotes,
 } from '../../../db/schema';
 import { DB } from '../../db/drizzle.module';
+
+/** Явное распределение «неясных» операций при откате слияния */
+export interface UndoAssignments {
+  toSource?: string[];
+  toTarget?: string[];
+}
+
+export interface MergeUndoViewDto {
+  merge: { id: string; at: string; sourceId: string; sourceTicker: string; targetId: string; undone: boolean };
+  plan: MergeUndoPlan;
+  /** предпросмотр разделения по текущему распределению; null — источник нельзя восстановить (id занят / цели нет) */
+  preview: SplitPlan['preview'] | null;
+}
+
+/** Строка снимка совпадает с текущей строкой по всем сохранённым колонкам */
+function sameRow(current: Record<string, unknown>, recorded: SnapshotRow): boolean {
+  return Object.entries(recorded).every(([k, v]) => current[k] === v);
+}
+
+type Tx = Parameters<Parameters<BetterSQLite3Database['transaction']>[0]>[0];
 
 /** Предпросмотр слияния: проверки и последствия */
 export interface MergePreviewDto {
@@ -300,61 +324,73 @@ export class InstrumentIdentityService {
     if (plan.orphanSellsAppear && !request.confirmOrphanSells) {
       throw new BadRequestException(`Разделение требует подтверждения (confirmOrphanSells): ${plan.warnings.join(' ')}`);
     }
-    const ni = request.newInstrument;
-
-    return this.db.transaction((tx) => {
-      tx.insert(instruments)
-        .values({ id: ni.id, ticker: ni.ticker, type: ni.type, currency: ni.currency, isin: ni.isin ?? null, name: ni.name ?? null, marketSource: ni.marketSource })
-        .run();
-
-      // SQLite ограничивает число переменных запроса — переносим пачками
-      for (let i = 0; i < plan.movedOperationIds.length; i += 500) {
-        tx.update(operations)
-          .set({ instrumentId: ni.id })
-          .where(inArray(operations.id, plan.movedOperationIds.slice(i, i + 500)))
-          .run();
-      }
-      for (const e of plan.movedIdentifiers) {
-        tx.update(instrumentIdentifiers)
-          .set({ instrumentId: ni.id, origin: 'manual' })
-          .where(and(eq(instrumentIdentifiers.scheme, e.scheme as never), eq(instrumentIdentifiers.value, e.value)))
-          .run();
-      }
-      for (const e of plan.addedIdentifiers) insertIdentifier(tx, { scheme: e.scheme, value: e.value, instrumentId: ni.id, origin: 'manual' });
-
-      const before: Record<string, string | null> = {};
-      const after: Record<string, string | null> = {};
-      const patch = request.fieldPatches;
-      if (patch) {
-        const set: { name?: string | null; isin?: string | null } = {};
-        for (const key of ['name', 'isin'] as const) {
-          if (patch[key] === undefined) continue;
-          before[key] = instrument[key] ?? null;
-          after[key] = patch[key] ?? null;
-          set[key] = patch[key] ?? null;
-        }
-        if (Object.keys(set).length > 0) tx.update(instruments).set(set).where(eq(instruments.id, instrumentId)).run();
-      }
-
-      const payload: SplitPayload = {
-        version: 1,
-        instrumentId,
-        newInstrument: { id: ni.id, ticker: ni.ticker, type: ni.type, currency: ni.currency, isin: ni.isin ?? null, name: ni.name ?? null, marketSource: ni.marketSource },
-        movedOperationIds: plan.movedOperationIds,
-        movedIdentifiers: plan.movedIdentifiers,
-        addedIdentifiers: plan.addedIdentifiers,
-        fieldPatches: { before, after },
-        undoesMergeId: request.undoesMergeId ?? null,
-      };
-      const splitId = randomUUID();
-      tx.insert(instrumentHistory)
-        .values({ id: splitId, kind: 'split', sourceId: instrumentId, targetId: ni.id, payload: JSON.stringify(SplitPayloadV1.parse(payload)) })
-        .run();
-      return { splitId, newInstrumentId: ni.id, movedOperations: plan.movedOperationIds.length };
-    });
+    return this.db.transaction((tx) => this.executeSplit(tx, instrumentId, request, plan, instrument));
   }
 
-  private buildSplitPlan(instrumentId: string, request: ReturnType<typeof SplitRequestSchema.parse>) {
+  /** Тело разделения в переданной транзакции — общее для ручного split и отката слияния */
+  private executeSplit(
+    tx: Tx,
+    instrumentId: string,
+    request: ReturnType<typeof SplitRequestSchema.parse>,
+    plan: SplitPlan,
+    instrument: typeof instruments.$inferSelect,
+  ): { splitId: string; newInstrumentId: string; movedOperations: number } {
+    const ni = request.newInstrument;
+    tx.insert(instruments)
+      .values({ id: ni.id, ticker: ni.ticker, type: ni.type, currency: ni.currency, isin: ni.isin ?? null, name: ni.name ?? null, marketSource: ni.marketSource })
+      .run();
+
+    // SQLite ограничивает число переменных запроса — переносим пачками
+    for (let i = 0; i < plan.movedOperationIds.length; i += 500) {
+      tx.update(operations)
+        .set({ instrumentId: ni.id })
+        .where(inArray(operations.id, plan.movedOperationIds.slice(i, i + 500)))
+        .run();
+    }
+    for (const e of plan.movedIdentifiers) {
+      tx.update(instrumentIdentifiers)
+        .set({ instrumentId: ni.id, origin: 'manual' })
+        .where(and(eq(instrumentIdentifiers.scheme, e.scheme as never), eq(instrumentIdentifiers.value, e.value)))
+        .run();
+    }
+    for (const e of plan.addedIdentifiers) insertIdentifier(tx, { scheme: e.scheme, value: e.value, instrumentId: ni.id, origin: 'manual' });
+
+    const before: Record<string, string | null> = {};
+    const after: Record<string, string | null> = {};
+    const patch = request.fieldPatches;
+    if (patch) {
+      const set: { name?: string | null; isin?: string | null } = {};
+      for (const key of ['name', 'isin'] as const) {
+        if (patch[key] === undefined) continue;
+        before[key] = instrument[key] ?? null;
+        after[key] = patch[key] ?? null;
+        set[key] = patch[key] ?? null;
+      }
+      if (Object.keys(set).length > 0) tx.update(instruments).set(set).where(eq(instruments.id, instrumentId)).run();
+    }
+
+    const payload: SplitPayload = {
+      version: 1,
+      instrumentId,
+      newInstrument: { id: ni.id, ticker: ni.ticker, type: ni.type, currency: ni.currency, isin: ni.isin ?? null, name: ni.name ?? null, marketSource: ni.marketSource },
+      movedOperationIds: plan.movedOperationIds,
+      movedIdentifiers: plan.movedIdentifiers,
+      addedIdentifiers: plan.addedIdentifiers,
+      fieldPatches: { before, after },
+      undoesMergeId: request.undoesMergeId ?? null,
+    };
+    const splitId = randomUUID();
+    tx.insert(instrumentHistory)
+      .values({ id: splitId, kind: 'split', sourceId: instrumentId, targetId: ni.id, payload: JSON.stringify(SplitPayloadV1.parse(payload)) })
+      .run();
+    return { splitId, newInstrumentId: ni.id, movedOperations: plan.movedOperationIds.length };
+  }
+
+  private buildSplitPlan(
+    instrumentId: string,
+    request: ReturnType<typeof SplitRequestSchema.parse>,
+    allowEmptyOperations = false,
+  ) {
     const [instrument] = this.db.select().from(instruments).where(eq(instruments.id, instrumentId)).all();
     if (!instrument) throw new NotFoundException(`Инструмент не найден: ${instrumentId}`);
     const all = this.db.select({ id: instruments.id, type: instruments.type }).from(instruments).all();
@@ -365,9 +401,127 @@ export class InstrumentIdentityService {
       takenInstrumentIds: new Set(all.map((i) => i.id)),
       takenIdentifierKeys: new Set(this.db.select().from(instrumentIdentifiers).all().map((e) => `${e.scheme}:${e.value}`)),
       request,
+      allowEmptyOperations,
       futureIds: new Set(all.filter((i) => i.type === 'Future').map((i) => i.id)),
     });
     return { plan, instrument };
+  }
+
+  // ───────────────────────── откат слияния ─────────────────────────
+
+  /** План отката слияния из журнала (только чтение): распределение операций и кодов, ошибки, неясные операции */
+  undoPlan(mergeId: string, assignments?: UndoAssignments): MergeUndoViewDto {
+    const { row, payload } = this.loadMerge(mergeId);
+    const plan = this.buildUndoPlan(row, payload, assignments);
+    const target = this.db.select().from(instruments).where(eq(instruments.id, row.targetId)).get();
+    let preview: SplitPlan['preview'] | null = null;
+    if (target && !this.db.select().from(instruments).where(eq(instruments.id, payload.source.id)).get()) {
+      preview = this.buildSplitPlan(row.targetId, this.undoRequest(row, payload, plan, false), true).plan.preview;
+    }
+    return {
+      merge: { id: row.id, at: row.at, sourceId: row.sourceId, sourceTicker: payload.source.ticker, targetId: row.targetId, undone: row.undoneAt !== null },
+      plan,
+      preview,
+    };
+  }
+
+  /**
+   * Откат слияния: разделение, план которого заполнен по журналу, плюс точное восстановление из
+   * снимка — строка источника, котировка, цены и вариационная маржа. Всё в одной транзакции.
+   * Перезаписанные слиянием строки цели и поля цели возвращаются, только если с тех пор не менялись.
+   */
+  undoMerge(mergeId: string, raw: { assignments?: UndoAssignments; confirmOrphanSells?: boolean } = {}): { splitId: string; sourceId: string; movedOperations: number } {
+    const { row, payload } = this.loadMerge(mergeId);
+    const undo = this.buildUndoPlan(row, payload, raw.assignments);
+    if (undo.errors.length > 0) throw new BadRequestException(`Откат невозможен: ${undo.errors.join(' ')}`);
+    const request = this.undoRequest(row, payload, undo, raw.confirmOrphanSells === true);
+    const { plan, instrument: target } = this.buildSplitPlan(row.targetId, request, true);
+    if (plan.errors.length > 0) throw new BadRequestException(`Откат невозможен: ${plan.errors.join(' ')}`);
+    if (plan.orphanSellsAppear && !request.confirmOrphanSells) {
+      throw new BadRequestException(`Откат требует подтверждения (confirmOrphanSells): ${plan.warnings.join(' ')}`);
+    }
+    const sourceId = payload.source.id;
+
+    return this.db.transaction((tx) => {
+      const res = this.executeSplit(tx, row.targetId, request, plan, target);
+
+      // коды — с исходными origin и created_at; добавленные самим слиянием — как обычные коды импорта
+      const keyOf = (e: { scheme: string; value: string }) => and(eq(instrumentIdentifiers.scheme, e.scheme as never), eq(instrumentIdentifiers.value, e.value));
+      for (const e of payload.sourceIdentifiers) {
+        tx.update(instrumentIdentifiers).set({ origin: e.origin as never, createdAt: e.createdAt }).where(and(keyOf(e), eq(instrumentIdentifiers.instrumentId, sourceId))).run();
+      }
+      for (const e of payload.addedIdentifiers) {
+        tx.update(instrumentIdentifiers).set({ origin: 'import' }).where(and(keyOf(e), eq(instrumentIdentifiers.instrumentId, sourceId))).run();
+      }
+
+      if (payload.sourceQuote) tx.insert(quotes).values({ ...payload.sourceQuote, instrumentId: sourceId } as never).onConflictDoNothing().run();
+
+      // цены: строки источника — точно из снимка; строки цели, которые изменило слияние, — если не менялись после него
+      const targetPrice = (date: string) =>
+        tx.select().from(priceHistory).where(and(eq(priceHistory.instrumentId, row.targetId), eq(priceHistory.date, date))).get();
+      const priceKey = (date: string) => and(eq(priceHistory.instrumentId, row.targetId), eq(priceHistory.date, date));
+      if (payload.pricesTransferred) {
+        for (const ins of payload.targetPricesInserted) {
+          const cur = targetPrice(String(ins['date']));
+          if (cur && sameRow(cur, ins)) tx.delete(priceHistory).where(priceKey(String(ins['date']))).run();
+        }
+        for (const { before, after } of payload.targetPricesOverwritten) {
+          const cur = targetPrice(String(after['date']));
+          if (cur && sameRow(cur, after)) tx.update(priceHistory).set(before as never).where(priceKey(String(after['date']))).run();
+        }
+      }
+      for (const p of payload.sourcePrices) tx.insert(priceHistory).values({ ...p, instrumentId: sourceId } as never).onConflictDoNothing().run();
+
+      // вариационная маржа: перенесённое возвращается, потерянное при конфликте — восстанавливается
+      for (const r of payload.settlementsMoved) {
+        tx.run(sql`UPDATE OR IGNORE ${futuresSettlements} SET instrument_id = ${sourceId} WHERE instrument_id = ${row.targetId} AND portfolio_id = ${String(r['portfolioId'])} AND date = ${String(r['date'])}`);
+      }
+      for (const r of payload.settlementsLost) tx.insert(futuresSettlements).values({ ...r, instrumentId: sourceId } as never).onConflictDoNothing().run();
+
+      // поля цели, дописанные слиянием, возвращаются, если ещё равны записанному
+      const unfill: { isin?: null; name?: null } = {};
+      if (payload.targetFilled.isin !== undefined && target.isin === payload.targetFilled.isin) unfill.isin = null;
+      if (payload.targetFilled.name !== undefined && target.name === payload.targetFilled.name) unfill.name = null;
+      if (Object.keys(unfill).length > 0) tx.update(instruments).set(unfill).where(eq(instruments.id, row.targetId)).run();
+
+      tx.update(instrumentHistory).set({ undoneAt: sql`(datetime('now'))`, undoneBy: res.splitId }).where(eq(instrumentHistory.id, row.id)).run();
+      return { splitId: res.splitId, sourceId, movedOperations: res.movedOperations };
+    });
+  }
+
+  private loadMerge(mergeId: string) {
+    const row = this.db.select().from(instrumentHistory).where(and(eq(instrumentHistory.id, mergeId), eq(instrumentHistory.kind, 'merge'))).get();
+    if (!row) throw new NotFoundException(`Слияние не найдено в журнале: ${mergeId}`);
+    return { row, payload: parseMergePayload(row.payload) };
+  }
+
+  private buildUndoPlan(row: typeof instrumentHistory.$inferSelect, payload: MergePayload, assignments?: UndoAssignments): MergeUndoPlan {
+    const history = this.db.select().from(instrumentHistory).all(); // порядок вставки (rowid)
+    const index = history.findIndex((h) => h.id === row.id);
+    const touching = new Set([row.sourceId, row.targetId]);
+    const laterMerges = history
+      .slice(index + 1)
+      .filter((h) => h.kind === 'merge' && h.undoneAt === null && (touching.has(h.sourceId) || touching.has(h.targetId)))
+      .map((h) => ({ id: h.id, sourceTicker: parseMergePayload(h.payload).source.ticker, targetTicker: h.targetId }));
+    return planMergeUndo({
+      event: { id: row.id, at: row.at, sourceId: row.sourceId, targetId: row.targetId, undone: row.undoneAt !== null, payload },
+      laterMerges,
+      instrumentIds: new Set(this.db.select({ id: instruments.id }).from(instruments).all().map((i) => i.id)),
+      targetOperations: this.db.select().from(operations).where(eq(operations.instrumentId, row.targetId)).all(),
+      targetIdentifiers: this.entriesOf(row.targetId),
+      assignments,
+    });
+  }
+
+  /** Запрос на разделение, соответствующий плану отката: источник из снимка возвращается как «новый» инструмент */
+  private undoRequest(row: typeof instrumentHistory.$inferSelect, payload: MergePayload, undo: MergeUndoPlan, confirmOrphanSells: boolean): SplitRequest {
+    return SplitRequestSchema.parse({
+      newInstrument: payload.source,
+      operationIds: undo.toSource,
+      identifierKeys: undo.identifiersToSource.map((e) => `${e.scheme}:${e.value}`),
+      confirmOrphanSells,
+      undoesMergeId: row.id,
+    });
   }
 
   /**

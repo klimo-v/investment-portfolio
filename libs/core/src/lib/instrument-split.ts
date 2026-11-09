@@ -60,6 +60,8 @@ export interface SplitInput {
   takenIdentifierKeys: ReadonlySet<string>;
   request: SplitRequest;
   futureIds?: ReadonlySet<string>;
+  /** откат слияния источника без операций допустим: пустой выбор операций — не ошибка */
+  allowEmptyOperations?: boolean;
 }
 
 export interface SplitPositionPreview {
@@ -118,7 +120,7 @@ export function planInstrumentSplit(input: SplitInput): SplitPlan {
   const warnings: string[] = [];
 
   if (input.takenInstrumentIds.has(req.newInstrument.id)) errors.push(`Идентификатор уже занят: ${req.newInstrument.id}.`);
-  if (req.operationIds.length === 0) errors.push('Не выбрано ни одной операции для нового инструмента.');
+  if (req.operationIds.length === 0 && !input.allowEmptyOperations) errors.push('Не выбрано ни одной операции для нового инструмента.');
 
   const byId = new Map(input.operations.map((o) => [o.id, o]));
   const wanted = new Set(req.operationIds);
