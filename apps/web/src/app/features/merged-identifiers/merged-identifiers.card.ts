@@ -1,132 +1,42 @@
 import { ChangeDetectionStrategy, Component, computed, inject } from '@angular/core';
 import { MatButtonModule } from '@angular/material/button';
-import { MatCardModule } from '@angular/material/card';
 import { MatDialog } from '@angular/material/dialog';
-import { DatePipe } from '@angular/common';
-import { ReferenceApi, type InstrumentIdentifiers } from '../../entities/reference/reference.api';
-import { SplitInstrumentDialog } from '../split-instrument/split-instrument.dialog';
-
-const SCHEME_LABEL: Record<string, string> = {
-  ticker: 'тикер',
-  isin: 'ISIN',
-  figi: 'figi',
-  tbank_uid: 'tbank_uid',
-  broker_code: 'код брокера',
-  name: 'название',
-};
+import { MatIconModule } from '@angular/material/icon';
+import { ReferenceApi } from '../../entities/reference/reference.api';
+import { MergedIdentifiersDialog } from './merged-identifiers.dialog';
 
 /**
- * «Привязанные коды»: инструменты, к которым слиянием присоединены чужие коды. Только чтение.
- * Слияние необратимо и раньше нигде не показывалось — ошибочное (юань в золото) оставалось
- * незамеченным, пока оценка не выросла до миллионов. Пометка срабатывает, когда у инструмента
- * больше одного биржевого тикера (libs/core: identityConflicts).
- * Дата — «код добавлен», а не дата слияния: слияние created_at не обновляет, дату слияния даст журнал.
+ * Кнопка «Привязанные коды» (вместо раскрытой карточки — она занимала много места на странице).
+ * Показывается, только если есть инструменты со слитыми кодами; подозрительное слияние
+ * (больше одного биржевого тикера) подсвечивается. Вся информация — в модалке.
  */
 @Component({
   selector: 'app-merged-identifiers',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [MatCardModule, MatButtonModule, DatePipe],
+  imports: [MatButtonModule, MatIconModule],
   template: `
     @if (items().length > 0) {
-      <mat-card class="merged">
-        <h2 class="title">Привязанные коды</h2>
-        <p class="hint">
-          Инструменты, к которым при слиянии присоединены другие коды. У слияний из журнала указаны источник и дата; дата у кода — когда код добавлен,
-          а не когда выполнено слияние.
-        </p>
-        @for (i of items(); track i.instrumentId) {
-          <div class="instrument">
-            <div class="head">
-              <b>{{ i.ticker }}</b>
-              @if (i.name) {
-                <span class="muted">{{ i.name }}</span>
-              }
-              @if (i.conflicting) {
-                <span class="warn">
-                  Подозрительное слияние: несколько тикеров — {{ i.tickers.join(', ') }}
-                </span>
-              }
-            </div>
-            @for (m of i.merges; track m.id) {
-              <div class="journal">
-                Слито из <b>{{ m.sourceTicker }}</b
-                >{{ m.sourceName ? ' (' + m.sourceName + ')' : '' }},
-                {{ m.at.replace(' ', 'T') | date: 'dd.MM.yyyy HH:mm' }}{{ m.undone ? ' — отменено' : '' }}
-                @if (!m.undone) {
-                  <button mat-stroked-button (click)="undoMerge(i, m.id)">Отменить слияние…</button>
-                }
-              </div>
-            }
-            @if (i.merges.length === 0) {
-              <div class="journal muted">
-                Слито до включения журнала: дата и источник неизвестны.
-                <button mat-stroked-button (click)="splitManually(i)">Выделить инструмент заново…</button>
-              </div>
-            }
-            @for (e of i.entries; track e.scheme + e.value) {
-              <div class="code" [class.merged-code]="e.origin === 'merge'">
-                <span class="scheme">{{ label(e.scheme) }}</span>
-                <span class="value">{{ e.value }}</span>
-                <span class="muted">
-                  {{ e.origin === 'merge' ? 'слит' : e.origin === 'manual' ? 'вручную' : 'импорт' }},
-                  код добавлен {{ e.createdAt.replace(' ', 'T') | date: 'dd.MM.yyyy HH:mm' }}
-                </span>
-              </div>
-            }
-          </div>
+      <div class="row">
+        <button mat-stroked-button (click)="open()">
+          <mat-icon>{{ suspicious() > 0 ? 'warning' : 'link' }}</mat-icon>
+          Привязанные коды ({{ items().length }})
+        </button>
+        @if (suspicious() > 0) {
+          <span class="warn">Подозрительных слияний: {{ suspicious() }}</span>
         }
-      </mat-card>
+      </div>
     }
   `,
   styles: [
     `
-      .merged {
-        padding: 16px;
+      .row {
+        display: flex;
+        align-items: center;
+        gap: 12px;
         margin-bottom: 16px;
       }
-      .title {
-        margin: 0 0 4px;
-        font-size: 1rem;
-      }
-      .hint,
-      .muted {
-        color: var(--app-text-muted);
-        font-size: 0.85em;
-      }
-      .hint {
-        margin: 0 0 8px;
-      }
-      .instrument {
-        padding: 6px 0;
-      }
-      .head {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 12px;
-        align-items: baseline;
-      }
       .warn {
-        color: var(--mat-sys-error, #b3261e);
-        font-weight: 500;
-      }
-      .journal {
-        padding-left: 12px;
-      }
-      .code {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 12px;
-        padding-left: 12px;
-      }
-      .scheme {
-        min-width: 90px;
-        color: var(--app-text-muted);
-      }
-      .value {
-        font-family: monospace;
-        min-width: 200px;
-      }
-      .merged-code .value {
+        color: var(--app-warn);
         font-weight: 500;
       }
     `,
@@ -134,20 +44,12 @@ const SCHEME_LABEL: Record<string, string> = {
 })
 export class MergedIdentifiersCard {
   private readonly reference = inject(ReferenceApi);
-  protected readonly items = computed(() => this.reference.mergedIdentifiers.value() ?? []);
   private readonly dialog = inject(MatDialog);
 
-  /** Откат слияния из журнала: тот же диалог разделения с планом по снимку */
-  protected undoMerge(i: InstrumentIdentifiers, mergeId: string): void {
-    this.dialog.open(SplitInstrumentDialog, { autoFocus: false, data: { instrumentId: i.instrumentId, ticker: i.ticker, mergeId } });
-  }
+  protected readonly items = computed(() => this.reference.mergedIdentifiers.value() ?? []);
+  protected readonly suspicious = computed(() => this.items().filter((i) => i.conflicting).length);
 
-  /** Слияние без записи в журнале: операции и коды выбирает пользователь */
-  protected splitManually(i: InstrumentIdentifiers): void {
-    this.dialog.open(SplitInstrumentDialog, { autoFocus: false, data: { instrumentId: i.instrumentId, ticker: i.ticker } });
-  }
-
-  protected label(scheme: string): string {
-    return SCHEME_LABEL[scheme] ?? scheme;
+  protected open(): void {
+    this.dialog.open(MergedIdentifiersDialog, { autoFocus: false, maxWidth: '95vw' });
   }
 }
