@@ -10,6 +10,7 @@ export * from './lib/isin';
 export * from './lib/instrument-identity';
 export * from './lib/identity-conflicts';
 export * from './lib/merge-checks';
+export * from './lib/instrument-history';
 export * from './lib/futures';
 export * from './lib/futures-engine';
 export * from './lib/operation-order';

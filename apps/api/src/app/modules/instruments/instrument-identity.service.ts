@@ -1,10 +1,14 @@
+import { randomUUID } from 'node:crypto';
 import { BadRequestException, Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { and, eq, sql } from 'drizzle-orm';
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
 import {
   findPossibleDuplicates,
   identityConflicts,
+  MergePayloadV1,
+  parseMergePayload,
   mergeChecks,
+  type MergePayload,
   type MergeCheckInstrument,
   type MergeChecks,
   isValidIsin,
@@ -22,6 +26,7 @@ import { insertIdentifier, loadIdentityIndex } from '../../../db/instrument-iden
 import { recordPrice } from '../../../db/price-history-store';
 import {
   futuresSettlements,
+  instrumentHistory,
   instrumentIdentifiers,
   instruments,
   operations,
@@ -136,7 +141,7 @@ export class InstrumentIdentityService {
   identifiers(instrumentId: string): InstrumentIdentifiersDto {
     const [instrument] = this.db.select().from(instruments).where(eq(instruments.id, instrumentId)).all();
     if (!instrument) throw new NotFoundException(`Инструмент не найден: ${instrumentId}`);
-    return this.toIdentifiersDto(instrument, this.entriesOf(instrumentId));
+    return this.toIdentifiersDto(instrument, this.entriesOf(instrumentId), this.mergesOf(instrumentId));
   }
 
   /**
@@ -155,8 +160,8 @@ export class InstrumentIdentityService {
       .all()
       .flatMap((i) => {
         const entries = byInstrument.get(i.id) ?? [];
-        const dto = this.toIdentifiersDto(i, entries);
-        return entries.some((e) => e.origin === 'merge') || dto.conflicting ? [dto] : [];
+        const dto = this.toIdentifiersDto(i, entries, this.mergesOf(i.id));
+        return entries.some((e) => e.origin === 'merge') || dto.conflicting || dto.merges.length > 0 ? [dto] : [];
       })
       .sort((a, b) => Number(b.conflicting) - Number(a.conflicting) || a.ticker.localeCompare(b.ticker));
   }
@@ -168,6 +173,7 @@ export class InstrumentIdentityService {
   private toIdentifiersDto(
     instrument: { id: string; ticker: string; name: string | null },
     entries: { scheme: string; value: string; origin: string; createdAt: string }[],
+    merges: InstrumentIdentifiersDto['merges'],
   ): InstrumentIdentifiersDto {
     const conflict = identityConflicts(entries);
     return {
@@ -179,7 +185,42 @@ export class InstrumentIdentityService {
         .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.scheme.localeCompare(b.scheme) || a.value.localeCompare(b.value)),
       conflicting: conflict.conflicting,
       tickers: conflict.tickers,
+      merges,
     };
+  }
+
+  /**
+   * Слияния из журнала, давшие этот инструмент: прямые (target = он) и цепочкой (источник
+   * прежнего слияния сам был целью более раннего). Слияния до включения журнала сюда не попадают.
+   */
+  private mergesOf(instrumentId: string): InstrumentIdentifiersDto['merges'] {
+    const rows = this.db.select().from(instrumentHistory).where(eq(instrumentHistory.kind, 'merge')).all();
+    const reach = new Set([instrumentId]);
+    const found = new Map<string, (typeof rows)[number]>();
+    for (let grew = true; grew; ) {
+      grew = false;
+      for (const r of rows) {
+        if (reach.has(r.targetId) && !found.has(r.id)) {
+          found.set(r.id, r);
+          reach.add(r.sourceId);
+          grew = true;
+        }
+      }
+    }
+    // порядок вставки в журнал (rowid), а не `at`: время слияния — с точностью до секунды
+    return rows
+      .filter((r) => found.has(r.id))
+      .map((r) => {
+        const p = parseMergePayload(r.payload);
+        return {
+          id: r.id,
+          at: r.at,
+          sourceId: r.sourceId,
+          sourceTicker: p.source.ticker,
+          sourceName: p.source.name,
+          undone: r.undoneAt !== null,
+        };
+      });
   }
 
   /** Предпросмотр слияния: проверки (блокировки/предупреждения) и последствия — без записи */
@@ -259,6 +300,18 @@ export class InstrumentIdentityService {
     }
 
     return this.db.transaction((tx) => {
+      // снимок состояния ДО изменений — в той же транзакции, что и слияние (откат транзакции
+      // не оставляет записи журнала)
+      const sourceOps = tx.select({ id: operations.id }).from(operations).where(eq(operations.instrumentId, sourceId)).all();
+      const sourcePrices = tx.select().from(priceHistory).where(eq(priceHistory.instrumentId, sourceId)).all();
+      const [sourceQuote] = tx.select().from(quotes).where(eq(quotes.instrumentId, sourceId)).all();
+      const sourceIdentifiers = tx.select().from(instrumentIdentifiers).where(eq(instrumentIdentifiers.instrumentId, sourceId)).all();
+      const settlementsBefore = tx.select().from(futuresSettlements).where(eq(futuresSettlements.instrumentId, sourceId)).all();
+      const pricesTransferred = source.currency === target.currency;
+      const targetPricesOverwritten: MergePayload['targetPricesOverwritten'] = [];
+      const targetPricesInserted: MergePayload['targetPricesInserted'] = [];
+      const addedIdentifiers: MergePayload['addedIdentifiers'] = [];
+
       const { changes: movedOperations } = tx
         .update(operations)
         .set({ instrumentId: targetId })
@@ -267,9 +320,16 @@ export class InstrumentIdentityService {
 
       // история цен переезжает по общей политике источников (рынок цели не затирается);
       // цены в разных валютах на один id смешивать нельзя
-      if (source.currency === target.currency) {
-        for (const row of tx.select().from(priceHistory).where(eq(priceHistory.instrumentId, sourceId)).all()) {
-          recordPrice(tx, targetId, row);
+      if (pricesTransferred) {
+        const rowOf = (date: string) =>
+          tx.select().from(priceHistory).where(and(eq(priceHistory.instrumentId, targetId), eq(priceHistory.date, date))).get();
+        for (const row of sourcePrices) {
+          const before = rowOf(row.date);
+          if (!recordPrice(tx, targetId, row)) continue;
+          const after = rowOf(row.date);
+          if (!after) continue;
+          if (before) targetPricesOverwritten.push({ before, after });
+          else targetPricesInserted.push(after);
         }
       }
       tx.delete(priceHistory).where(eq(priceHistory.instrumentId, sourceId)).run();
@@ -277,6 +337,9 @@ export class InstrumentIdentityService {
 
       // вариационная маржа из отчётов: переносим, где у цели нет записи на ту же дату
       tx.run(sql`UPDATE OR IGNORE ${futuresSettlements} SET instrument_id = ${targetId} WHERE instrument_id = ${sourceId}`);
+      const settlementsLost = tx.select().from(futuresSettlements).where(eq(futuresSettlements.instrumentId, sourceId)).all();
+      const lostKeys = new Set(settlementsLost.map((r) => `${r.portfolioId}|${r.date}`));
+      const settlementsMoved = settlementsBefore.filter((r) => !lostKeys.has(`${r.portfolioId}|${r.date}`));
 
       // идентификаторы: все коды источника теперь указывают на цель
       tx.update(instrumentIdentifiers)
@@ -295,7 +358,7 @@ export class InstrumentIdentityService {
           .from(instrumentIdentifiers)
           .where(and(eq(instrumentIdentifiers.scheme, e.scheme), eq(instrumentIdentifiers.value, e.value)))
           .all();
-        if (!taken) insertIdentifier(tx, e);
+        if (!taken && insertIdentifier(tx, e)) addedIdentifiers.push({ scheme: e.scheme, value: e.value });
       }
 
       // поля цели, которых не хватало, берём у источника
@@ -303,6 +366,25 @@ export class InstrumentIdentityService {
       if (!target.isin && source.isin) fill.isin = source.isin;
       if (!target.name && source.name) fill.name = source.name;
       if (Object.keys(fill).length > 0) tx.update(instruments).set(fill).where(eq(instruments.id, targetId)).run();
+
+      const payload: MergePayload = {
+        version: 1,
+        source: { ...source },
+        targetFilled: fill,
+        sourceQuote: sourceQuote ?? null,
+        movedOperationIds: sourceOps.map((o) => o.id),
+        sourcePrices,
+        pricesTransferred,
+        targetPricesOverwritten,
+        targetPricesInserted,
+        settlementsMoved,
+        settlementsLost,
+        sourceIdentifiers: sourceIdentifiers.map((e) => ({ scheme: e.scheme, value: e.value, origin: e.origin, createdAt: e.createdAt })),
+        addedIdentifiers,
+      };
+      tx.insert(instrumentHistory)
+        .values({ id: randomUUID(), kind: 'merge', sourceId, targetId, payload: JSON.stringify(MergePayloadV1.parse(payload)) })
+        .run();
 
       tx.delete(instruments).where(eq(instruments.id, sourceId)).run();
       return { merged: true as const, movedOperations };

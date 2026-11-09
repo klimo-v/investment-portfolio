@@ -148,6 +148,13 @@
       "when": 1794125971748,
       "tag": "0020_coupon_schedule",
       "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "6",
+      "when": 1794214589221,
+      "tag": "0021_instrument_history",
+      "breakpoints": true
     }
   ]
 }

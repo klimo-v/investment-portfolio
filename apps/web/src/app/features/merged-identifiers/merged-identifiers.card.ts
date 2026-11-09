@@ -28,7 +28,7 @@ const SCHEME_LABEL: Record<string, string> = {
       <mat-card class="merged">
         <h2 class="title">Привязанные коды</h2>
         <p class="hint">
-          Инструменты, к которым при слиянии присоединены другие коды. Дата — когда код добавлен,
+          Инструменты, к которым при слиянии присоединены другие коды. У слияний из журнала указаны источник и дата; дата у кода — когда код добавлен,
           а не когда выполнено слияние.
         </p>
         @for (i of items(); track i.instrumentId) {
@@ -44,6 +44,16 @@ const SCHEME_LABEL: Record<string, string> = {
                 </span>
               }
             </div>
+            @for (m of i.merges; track m.id) {
+              <div class="journal">
+                Слито из <b>{{ m.sourceTicker }}</b
+                >{{ m.sourceName ? ' (' + m.sourceName + ')' : '' }},
+                {{ m.at.replace(' ', 'T') | date: 'dd.MM.yyyy HH:mm' }}{{ m.undone ? ' — отменено' : '' }}
+              </div>
+            }
+            @if (i.merges.length === 0) {
+              <div class="journal muted">Слито до включения журнала: дата и источник неизвестны.</div>
+            }
             @for (e of i.entries; track e.scheme + e.value) {
               <div class="code" [class.merged-code]="e.origin === 'merge'">
                 <span class="scheme">{{ label(e.scheme) }}</span>
@@ -89,6 +99,9 @@ const SCHEME_LABEL: Record<string, string> = {
       .warn {
         color: var(--mat-sys-error, #b3261e);
         font-weight: 500;
+      }
+      .journal {
+        padding-left: 12px;
       }
       .code {
         display: flex;

@@ -263,3 +263,22 @@ export const operationAnnotations = sqliteTable('operation_annotations', {
   importedAt: text('imported_at').notNull(),
 });
 export type OperationAnnotationRow = typeof operationAnnotations.$inferSelect;
+
+/**
+ * Журнал слияний и разделений инструментов. Только дополняется (кроме отметки отката
+ * `undone_*`). `source_id`/`target_id` без FK: запись обязана пережить удаление инструмента —
+ * слияние удаляет источник, а откат потом восстанавливает его по снимку.
+ * `payload` — JSON-снимок, версия и форма описаны Zod-схемой в @core (instrument-history.ts).
+ */
+export const instrumentHistory = sqliteTable('instrument_history', {
+  id: text('id').primaryKey(),
+  kind: text('kind', { enum: ['merge', 'split'] }).notNull(),
+  sourceId: text('source_id').notNull(),
+  targetId: text('target_id').notNull(),
+  at: text('at').notNull().default(sql`(datetime('now'))`),
+  payload: text('payload').notNull(),
+  undoneAt: text('undone_at'),
+  /** id события 'split', выполнившего откат */
+  undoneBy: text('undone_by'),
+});
+export type InstrumentHistoryRow = typeof instrumentHistory.$inferSelect;

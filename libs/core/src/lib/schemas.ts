@@ -109,6 +109,17 @@ export const InstrumentIdentifiersSchema = z.object({
   /** пометка identityConflicts: у инструмента больше одного биржевого тикера */
   conflicting: z.boolean(),
   tickers: z.array(z.string()),
+  /** слияния из журнала (instrument_history); пусто — слияния до включения журнала не записаны */
+  merges: z.array(
+    z.object({
+      id: z.string(),
+      at: z.string(),
+      sourceId: z.string(),
+      sourceTicker: z.string(),
+      sourceName: z.string().nullable(),
+      undone: z.boolean(),
+    }),
+  ),
 });
 export type InstrumentIdentifiersDto = z.infer<typeof InstrumentIdentifiersSchema>;
 
