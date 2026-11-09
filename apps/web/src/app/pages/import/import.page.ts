@@ -581,7 +581,6 @@ export class ImportPage {
         return;
       }
       await this.tryPreview();
-      void this.refreshCurrencyCheck(accountId);
     } catch (e: unknown) {
       this.errorMessage.set(extractErrorMessage(e, 'Не удалось получить операции у брокера.'));
     } finally {
@@ -589,12 +588,14 @@ export class ImportPage {
     }
   }
 
-  /** Сверка валют с брокером — подсказка, а не условие импорта: сбой запроса её просто скрывает */
+  /** Сверка валют с брокером — подсказка, а не условие импорта: сбой запроса её просто скрывает. Запускается только после импорта: до него журнал ещё не содержит новых строк и сверка дала бы ложное расхождение */
   private async refreshCurrencyCheck(accountId: string): Promise<void> {
     try {
-      this.currencyMismatches.set(await this.api.tbankCurrencyCheck(accountId));
+      const mismatches = await this.api.tbankCurrencyCheck(accountId);
+      // ответ по прежнему счёту/источнику не применяем: пользователь уже переключился
+      if (this.accountId() === accountId && this.source() !== 'file') this.currencyMismatches.set(mismatches);
     } catch {
-      this.currencyMismatches.set([]);
+      if (this.accountId() === accountId) this.currencyMismatches.set([]);
     }
   }
 

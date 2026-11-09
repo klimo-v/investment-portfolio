@@ -35,9 +35,9 @@ export interface ForeignCashLookups {
   /** курс ЦБ на дату (₽ за 1 единицу валюты, последний ≤ даты); null — курса нет */
   cbrRate: (currency: string, date: string) => string | null;
   /** продажи этой валютной пары в журнале (БД) за тот же день — чтобы курс не менялся от загрузки к загрузке */
-  journalSales?: (pairTicker: string, date: string) => DaySale[];
+  journalSales?: (pairTicker: string, date: string, accountRef?: string) => DaySale[];
   /** покупки этой валютной пары в журнале за тот же день (для вывода валюты) */
-  journalBuys?: (pairTicker: string, date: string) => DaySale[];
+  journalBuys?: (pairTicker: string, date: string, accountRef?: string) => DaySale[];
 }
 
 const DEPOSIT_TYPES = new Set(['deposit', 'ввод', 'пополнение']);
@@ -69,17 +69,19 @@ export function foreignCashRate(
   rows: readonly RawRow[],
   lookups: ForeignCashLookups,
   direction: ForeignCashDirection = 'deposit',
+  /** счёт строки: сделки другого счёта курс не задают (загрузка и журнал фильтруются по нему, если он известен) */
+  accountRef?: string,
 ): { rate: string; source: ForeignRateSource } | null {
   const pair = CURRENCY_PAIR_TICKER[currency];
   if (pair) {
     const order: { source: ForeignRateSource; trades: DaySale[] }[] = [];
     const sales = (): DaySale[] => [
-      ...rows.filter((r) => r.ticker === pair && r.date === date && isSell(r)).map(dayTrade),
-      ...(lookups.journalSales?.(pair, date) ?? []),
+      ...rows.filter((r) => r.ticker === pair && r.date === date && isSell(r) && sameAccount(r, accountRef)).map(dayTrade),
+      ...(lookups.journalSales?.(pair, date, accountRef) ?? []),
     ];
     const buys = (): DaySale[] => [
-      ...rows.filter((r) => r.ticker === pair && r.date === date && isBuy(r)).map(dayTrade),
-      ...(lookups.journalBuys?.(pair, date) ?? []),
+      ...rows.filter((r) => r.ticker === pair && r.date === date && isBuy(r) && sameAccount(r, accountRef)).map(dayTrade),
+      ...(lookups.journalBuys?.(pair, date, accountRef) ?? []),
     ];
     if (direction === 'withdraw') {
       order.push({ source: 'same-day-buy', trades: buys() }, { source: 'same-day-sale', trades: sales() });
@@ -98,6 +100,7 @@ export function foreignCashRate(
   return cbr ? { rate: cbr, source: 'cbr' } : null;
 }
 
+const sameAccount = (r: RawRow, accountRef?: string): boolean => !accountRef || !r.accountRef || r.accountRef === accountRef;
 const dayTrade = (r: RawRow): DaySale => ({ quantity: normalizeNumber(r.quantity, '0'), price: normalizeNumber(r.price, '0') });
 
 /** У всех продаж пары за день в загрузке есть время (иначе нулевое время конвертации встало бы позже них) */
@@ -123,7 +126,7 @@ export function expandForeignCash(rows: RawRow[], lookups: ForeignCashLookups): 
     const type = (raw.tradeType ?? '').trim().toLowerCase();
     const isDeposit = DEPOSIT_TYPES.has(type);
     const isWithdraw = WITHDRAW_TYPES.has(type);
-    const found = foreignCashRate(currency, raw.date, rows, lookups, isWithdraw ? 'withdraw' : 'deposit');
+    const found = foreignCashRate(currency, raw.date, rows, lookups, isWithdraw ? 'withdraw' : 'deposit', raw.accountRef);
 
     if (!isDeposit && !isWithdraw) {
       if (raw.fxRate) out.push(raw);

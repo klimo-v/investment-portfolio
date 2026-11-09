@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { BadRequestException, Inject, Injectable } from '@nestjs/common';
-import { and, desc, eq, lte } from 'drizzle-orm';
+import { and, desc, eq, isNull, lte, notLike, or } from 'drizzle-orm';
 import ExcelJS from 'exceljs';
 import {
   attachParentFees,
@@ -183,13 +183,28 @@ export class ImportService {
     return journalCurrencyBalances(ops as Operation[], (id) => tickers.get(id));
   }
 
-  /** Сделки валютной пары за день из журнала — курс ввода/вывода валюты не меняется от загрузки к загрузке */
-  private journalDayTrades(pairTicker: string, date: string, side: 'Buy' | 'Sell') {
+  /**
+   * Сделки валютной пары за день из журнала. Синтетические покупки/продажи ввода и вывода валюты
+   * (`transferGroup = fx:…`) не считаются: курс задаёт реальная сделка, а не конвертация, созданная
+   * самим правилом. Если счёт известен — только его портфель (чужой счёт курса не задаёт).
+   */
+  private journalDayTrades(pairTicker: string, date: string, side: 'Buy' | 'Sell', accountRef?: string) {
+    const portfolio = accountRef
+      ? this.db.select({ id: portfolios.id }).from(portfolios).where(eq(portfolios.accountRef, accountRef)).get()
+      : undefined;
     return this.db
       .select({ quantity: operations.quantity, price: operations.price })
       .from(operations)
       .innerJoin(instruments, eq(instruments.id, operations.instrumentId))
-      .where(and(eq(instruments.ticker, pairTicker), eq(operations.date, date), eq(operations.operationType, side)))
+      .where(
+        and(
+          eq(instruments.ticker, pairTicker),
+          eq(operations.date, date),
+          eq(operations.operationType, side),
+          or(isNull(operations.transferGroup), notLike(operations.transferGroup, 'fx:%')),
+          portfolio ? eq(operations.portfolioId, portfolio.id) : undefined,
+        ),
+      )
       .all();
   }
 
@@ -204,8 +219,8 @@ export class ImportService {
           .orderBy(desc(priceHistory.date))
           .limit(1)
           .get()?.price ?? null,
-      journalSales: (pairTicker, date) => this.journalDayTrades(pairTicker, date, 'Sell'),
-      journalBuys: (pairTicker, date) => this.journalDayTrades(pairTicker, date, 'Buy'),
+      journalSales: (pairTicker, date, accountRef) => this.journalDayTrades(pairTicker, date, 'Sell', accountRef),
+      journalBuys: (pairTicker, date, accountRef) => this.journalDayTrades(pairTicker, date, 'Buy', accountRef),
     };
   }
 
