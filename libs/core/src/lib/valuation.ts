@@ -80,6 +80,17 @@ export interface ValuationPoint {
   fixedRub: string;
   unrealizedRub: string;
   totalRub: string;
+  /**
+   * Накопленные отдельные налоги/комиссии группы (положительное число; уже вычтены из `fixedRub`).
+   * Нужны доходности по позициям: такие расходы — расходы счёта, а не результат вложенного капитала,
+   * и в базу TWR не входят. Нет поля — считаем 0 (старые ряды/фикстуры).
+   */
+  standaloneCostsRub?: string;
+  /**
+   * Покупки группы за ЭТОТ день (не накопленные): себестоимость + комиссия покупки, как в `investedRub`.
+   * Валовый приток капитала группы — база TWR (чистый поток дня прячет покупку, закрытую продажей в тот же день).
+   */
+  purchasesRub?: string;
   carried: CarriedPrice[];
 }
 
@@ -98,6 +109,14 @@ export interface ValuationSeries {
    * датам, что и точки групп. Нужен, чтобы отделить рост стоимости от довнесения капитала.
    */
   netContributionsRub: string[];
+  /**
+   * Валовый ввод и валовый вывод денег за КАЖДЫЙ день ряда (не накопленные). Чистый поток дня
+   * (ввод 254 тыс. и вывод 253 тыс. в один день = +1 тыс.) прячет, на какую базу дня работал ввод:
+   * TWR по правилу «ввод — с начала дня, вывод — в конце» считается от валового ввода. Нет поля —
+   * базой считается положительная часть чистого потока (старые ряды/фикстуры).
+   */
+  contributionInflowsRub?: string[];
+  contributionOutflowsRub?: string[];
 }
 
 /** Ключ группы для выплат без инструмента при группировке по инструментам */
@@ -192,6 +211,8 @@ interface Accumulator {
   invested: Decimal;
   value: Decimal;
   fixed: Decimal;
+  costs: Decimal;
+  purchases: Decimal;
   carried: CarriedPrice[];
 }
 
@@ -250,6 +271,9 @@ export function valuationSeries(
   let nextCash = 0;
   let netContributions = ZERO;
   const netContributionsRub: string[] = [];
+  const contributionInflowsRub: string[] = [];
+  const contributionOutflowsRub: string[] = [];
+  const costsByKey = new Map<string, Decimal>(keys.map((k) => [k, ZERO]));
 
   const fixedByKey = new Map<string, Decimal>(keys.map((k) => [k, ZERO]));
   const ledger = new TradeLedger({ futureIds: options.futureIds }, (trade, event) => {
@@ -265,25 +289,43 @@ export function valuationSeries(
   let next = 0;
   let nextIncome = 0;
   for (let day = firstDay; day <= options.till; day = addDays(day, 1)) {
-    while (next < ops.length && ops[next].date <= day) ledger.apply(ops[next++]);
+    const purchasesToday = new Map<string, Decimal>();
+    while (next < ops.length && ops[next].date <= day) {
+      const o = ops[next++];
+      ledger.apply(o);
+      // валовая покупка дня (спот): себестоимость + комиссия — то, что попадает в investedRub
+      if (o.operationType === 'Buy' && !(options.futureIds && o.instrumentId && options.futureIds.has(o.instrumentId))) {
+        const fx = new Decimal(o.fxRate ?? '1');
+        const cost = new Decimal(o.quantity).mul(o.price).plus(new Decimal(o.fee ?? '0')).mul(fx);
+        purchasesToday.set(keyOf(o), (purchasesToday.get(keyOf(o)) ?? ZERO).plus(cost));
+      }
+    }
     while (nextIncome < incomeOps.length && incomeOps[nextIncome].date <= day) {
       const o = incomeOps[nextIncome++];
       const k = incomeKeyOf(o);
-      const delta = isStandaloneCost(o, options.futureIds) ? costAmountRub(o).neg() : incomeAmountRub(o);
+      const standalone = isStandaloneCost(o, options.futureIds);
+      const delta = standalone ? costAmountRub(o).neg() : incomeAmountRub(o);
       fixedByKey.set(k, (fixedByKey.get(k) ?? ZERO).plus(delta));
+      if (standalone) costsByKey.set(k, (costsByKey.get(k) ?? ZERO).plus(costAmountRub(o)));
     }
+    let dayInflow = ZERO;
+    let dayOutflow = ZERO;
     while (nextCash < cashOps.length && cashOps[nextCash].date <= day) {
       const o = cashOps[nextCash++];
       const amount = new Decimal(o.quantity).mul(o.price).mul(o.fxRate ?? '1');
       // Transfer денег (без инструмента) несёт знак в данных: исходящий — отрицательной суммой, входящий — положительной
-      netContributions =
-        o.operationType === 'Withdraw' ? netContributions.minus(amount) : netContributions.plus(amount);
+      const signed = o.operationType === 'Withdraw' ? amount.neg() : amount;
+      netContributions = netContributions.plus(signed);
+      if (signed.gt(0)) dayInflow = dayInflow.plus(signed);
+      else dayOutflow = dayOutflow.minus(signed);
     }
     if (day < outFrom) continue;
     netContributionsRub.push(netContributions.toFixed(2));
+    contributionInflowsRub.push(dayInflow.toFixed(2));
+    contributionOutflowsRub.push(dayOutflow.toFixed(2));
 
     const acc = new Map<string, Accumulator>(
-      keys.map((k) => [k, { invested: ZERO, value: ZERO, fixed: fixedByKey.get(k) ?? ZERO, carried: [] }]),
+      keys.map((k) => [k, { invested: ZERO, value: ZERO, fixed: fixedByKey.get(k) ?? ZERO, costs: costsByKey.get(k) ?? ZERO, purchases: purchasesToday.get(k) ?? ZERO, carried: [] }]),
     );
     for (const trade of ledger.openTrades()) {
       if (trade.quantity.isZero()) continue;
@@ -302,6 +344,8 @@ export function valuationSeries(
         fixedRub: a.fixed.toFixed(2),
         unrealizedRub: unrealized.toFixed(2),
         totalRub: a.fixed.plus(unrealized).toFixed(2),
+        standaloneCostsRub: a.costs.toFixed(2),
+        purchasesRub: a.purchases.toFixed(2),
         carried: a.carried,
       });
     }
@@ -313,6 +357,8 @@ export function valuationSeries(
     groupBy: options.groupBy,
     groups: keys.map((key) => ({ key, points: points.get(key) as ValuationPoint[] })),
     netContributionsRub,
+    contributionInflowsRub,
+    contributionOutflowsRub,
   };
 }
 

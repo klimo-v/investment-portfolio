@@ -62,6 +62,10 @@ export interface ContourDay {
   unrealized: Decimal;
   /** себестоимость открытого остатка спота; у фьючерсов 0 */
   invested: Decimal;
+  /** валовый приток капитала дня (ввод денег / покупки) — база TWR; null — ряд без валовых потоков */
+  inflow: Decimal | null;
+  /** накопленные отдельные налоги/комиссии контура — расходы счёта, а не результат вложенного капитала */
+  costs: Decimal;
 }
 
 export interface PeriodPerformanceOptions {
@@ -125,6 +129,30 @@ export interface PeriodPerformance {
   maxDrawdownPct: number | null;
   /** V_start + Σ w·F, w — доля периода, в течение которой поток работал */
   averageCapitalRub: string;
+  /**
+   * Подсказка: с какой даты капитал контура стал значимым (см. suggestTwrStart). Не null, только если
+   * до неё в периоде был ничтожный капитал: TWR честно считает и его (доходность 2 ₽ на курсе юаня),
+   * но к деньгам счёта это отношения не имеет. Цифры от подсказки не зависят — решает пользователь.
+   */
+  twrSuggestedFrom: string | null;
+}
+
+/** Доля пика капитала, ниже которой капитал считается ничтожным ТОЛЬКО для подсказки начала периода */
+export const MATERIAL_CAPITAL_SHARE = 0.001;
+
+/**
+ * Подсказка начала TWR: первый день последнего непрерывного отрезка, на котором капитал не ниже доли
+ * MATERIAL_CAPITAL_SHARE от пика периода. Не меняет расчёт — только предлагает «Считать с этой даты».
+ * null — весь период значим (подсказывать нечего).
+ */
+export function suggestTwrStart(days: readonly { date: string; value: Decimal }[]): string | null {
+  if (days.length === 0) return null;
+  const peak = days.reduce((m, d) => (d.value.gt(m) ? d.value : m), ZERO);
+  if (!peak.gt(0)) return null;
+  const floor = peak.mul(MATERIAL_CAPITAL_SHARE);
+  let start = days.length;
+  for (let i = days.length - 1; i >= 0 && days[i].value.gte(floor); i--) start = i;
+  return start > 0 && start < days.length ? days[start].date : null;
 }
 
 function addDays(iso: string, n: number): string {
@@ -149,16 +177,22 @@ export function contourDays(
     let fixed = ZERO;
     let unrealized = ZERO;
     let invested = ZERO;
+    let costs = ZERO;
+    let purchases: Decimal | null = ZERO;
     for (const g of groups) {
       const p = g.points[i];
       market = market.plus(p.marketValueRub);
       fixed = fixed.plus(p.fixedRub);
       unrealized = unrealized.plus(p.unrealizedRub);
       invested = invested.plus(p.investedRub);
+      costs = costs.plus(p.standaloneCostsRub ?? 0);
+      purchases = p.purchasesRub === undefined || purchases === null ? null : purchases.plus(p.purchasesRub);
     }
+    const grossIn = series.contributionInflowsRub?.[i];
+    const inflow = contour === 'wealth' ? (grossIn === undefined ? null : new Decimal(grossIn)) : purchases;
     const result = fixed.plus(unrealized);
     const value = contour === 'wealth' ? new Decimal(series.netContributionsRub[i] ?? 0).plus(result) : market;
-    return { date: point.date, value, result, fixed, unrealized, invested };
+    return { date: point.date, value, result, fixed, unrealized, invested, inflow, costs };
   });
 }
 
@@ -207,28 +241,40 @@ export function periodPerformance(series: ValuationSeries, options: PeriodPerfor
     dietzPct: null,
     maxDrawdownPct: null,
     averageCapitalRub: money(ZERO),
+    twrSuggestedFrom: null,
   });
   if (days.length === 0 || idxFrom < 0) return empty('no-data');
 
   const period = days.slice(idxFrom);
   const realBase = idxFrom > 0 ? days[idxFrom - 1] : null;
   const baseDate = realBase?.date ?? addDays(period[0].date, -1);
-  const start = realBase ?? { date: baseDate, value: ZERO, result: ZERO, fixed: ZERO, unrealized: ZERO, invested: ZERO };
+  const start = realBase ?? { date: baseDate, value: ZERO, result: ZERO, fixed: ZERO, unrealized: ZERO, invested: ZERO, inflow: null, costs: ZERO };
   const end = period[period.length - 1];
 
   // внешний поток дня: F_t = (V_t − P_t) − (V_{t−1} − P_{t−1})
   let prevGap = start.value.minus(start.result);
+  let prevCosts = start.costs;
   const inputs = period.map((d) => {
     const gap = d.value.minus(d.result);
     const flow = gap.minus(prevGap);
     prevGap = gap;
-    return { date: d.date, value: d.value, flow };
+    const costsToday = d.costs.minus(prevCosts);
+    prevCosts = d.costs;
+    return { date: d.date, value: d.value, flow, inflow: d.inflow, costsToday };
   });
   const netFlow = inputs.reduce((s, d) => s.plus(d.flow), ZERO);
   const result = end.value.minus(start.value).minus(netFlow);
 
   // TWR: ряд индекса и итог — один массив
-  const twr = twrLevels(inputs, start.value);
+  // для TWR: отдельные налоги/комиссии контура позиций — расход счёта, а не приток вложенного капитала
+  // (иначе комиссия 1 198 ₽ на остатке 2 ₽ «вносила» капитал и тут же теряла его: −99,8%);
+  // у контура богатства они остаются результатом, как и в ₽-итоге
+  const twrInputs = inputs.map((d) => ({
+    value: d.value,
+    flow: options.contour === 'positions' ? d.flow.minus(d.costsToday) : d.flow,
+    inflow: d.inflow ?? undefined,
+  }));
+  const twr = twrLevels(twrInputs, start.value);
   const seriesPoints: TwrPoint[] = [];
   // база 100 — день ДО периода (у периода с первой операции это условный день перед первой точкой):
   // тогда доходность первого дня входит в ряд, а ориентир нормируется на ту же дату
@@ -302,5 +348,6 @@ export function periodPerformance(series: ValuationSeries, options: PeriodPerfor
     dietzPct: dietz,
     maxDrawdownPct: hasCapital && reliable && seriesPoints.length >= 2 ? maxDrawdown(seriesPoints.map((p) => p.index)) * 100 : null,
     averageCapitalRub: money(averageCapital),
+    twrSuggestedFrom: reliable && hasCapital ? suggestTwrStart(period) : null,
   };
 }

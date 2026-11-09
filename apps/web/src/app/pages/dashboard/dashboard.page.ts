@@ -8,9 +8,10 @@ import { valuationResource, type ValuationFilter } from '../../entities/valuatio
 import { performanceResource, type PerformanceFilter } from '../../entities/performance/performance.api';
 import { DataRevision } from '../../shared/data-revision';
 import { DashboardFilters } from '../../widgets/dashboard-filters/dashboard-filters';
-import { dashboardFilter } from '../../widgets/dashboard-filters/dashboard-filter.state';
+import { dashboardFilter, parseIsoDate } from '../../widgets/dashboard-filters/dashboard-filter.state';
 import { SummaryKpis } from '../../widgets/summary-kpis/summary-kpis';
 import { DataQuality } from '../../widgets/data-quality/data-quality';
+import { TwrStartHint } from '../../widgets/twr-start-hint/twr-start-hint';
 import {
   EffectivenessTable,
   type EffGroupBy,
@@ -40,6 +41,7 @@ import { PnlBarChart } from '../../widgets/pnl-bar-chart/pnl-bar-chart';
     StateMessage,
     DashboardFilters,
     DataQuality,
+    TwrStartHint,
     SummaryKpis,
     EffectivenessTable,
     BenchmarkChart,
@@ -76,6 +78,12 @@ import { PnlBarChart } from '../../widgets/pnl-bar-chart/pnl-bar-chart';
       -->
     } @else if (summary.hasValue()) {
       <app-data-quality [warnings]="performance.value()?.warnings ?? []" [carried]="performance.value()?.carried ?? []" />
+
+      <app-twr-start-hint
+        [suggestedFrom]="performance.value()?.total?.twrSuggestedFrom ?? null"
+        [currentFrom]="filter.range().from ?? null"
+        (apply)="applySuggestedStart($event)"
+      />
 
       <app-summary-kpis
         [dataWarnings]="periodWarnings()"
@@ -316,6 +324,12 @@ export class DashboardPage {
   protected readonly portfolioValues = computed(() =>
     (this.performance.value()?.total.twr.series ?? []).map((p) => ({ date: p.date, valueRub: p.index })),
   );
+
+  /** «Считать с этой даты»: период становится произвольным [подсказанная дата; сегодня] */
+  protected applySuggestedStart(from: string): void {
+    const start = parseIsoDate(from);
+    if (start) this.filter.setCustomRange(start, new Date());
+  }
 
   /** Просадка ряда TWR в процентах — считает бэк вместе с рядом (null — меньше двух дней или процентов нет) */
   protected readonly maxDrawdownPct = computed(() => this.performance.value()?.total.maxDrawdownPct ?? null);

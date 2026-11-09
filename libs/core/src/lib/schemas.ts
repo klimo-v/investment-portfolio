@@ -416,6 +416,10 @@ export const ValuationPointSchema = z.object({
   fixedRub: decimalString,
   unrealizedRub: decimalString,
   totalRub: decimalString,
+  /** накопленные отдельные налоги/комиссии группы (уже вычтены из fixedRub); не учитываются в базе TWR */
+  standaloneCostsRub: decimalString.default('0'),
+  /** покупки группы за этот день (не накопленные): валовый приток капитала, база TWR */
+  purchasesRub: decimalString.default('0'),
   carried: z.array(CarriedPriceSchema),
 });
 
@@ -577,6 +581,9 @@ export const ValuationSeriesSchema = z.object({
   ),
   /** накопленный чистый ввод средств (депозиты − выводы) по тем же датам, что и точки групп */
   netContributionsRub: z.array(decimalString),
+  /** валовый ввод/вывод денег за каждый день ряда (не накопленные) — база TWR; пусто у старых рядов */
+  contributionInflowsRub: z.array(decimalString).default([]),
+  contributionOutflowsRub: z.array(decimalString).default([]),
   /**
    * Контур со своим кэшем (весь журнал или один счёт, без фильтра по системе): только тогда
    * `cashRub` осмыслен. У системы/инструмента кэша нет — деньги от продаж и выплат уходят в общий кэш счёта.
@@ -651,6 +658,8 @@ export const PeriodPerformanceSchema = z.object({
   /** максимальная просадка ряда TWR, % (отрицательное число или 0); null — меньше двух точек или нет процентов */
   maxDrawdownPct: z.number().nullable(),
   averageCapitalRub: decimalString,
+  /** подсказка: с этой даты капитал контура значим; до неё TWR считает ничтожный остаток (на цифры не влияет) */
+  twrSuggestedFrom: z.string().nullable().default(null),
 });
 export type PeriodPerformanceDto = z.infer<typeof PeriodPerformanceSchema>;
 

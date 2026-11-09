@@ -62,6 +62,8 @@ export interface DashboardFilter {
   setPeriod(period: Period): void;
   setCustomFrom(date: Date | null): void;
   setCustomTill(date: Date | null): void;
+  /** «Произвольный» период с обеими границами одной навигацией (по отдельности вызовы гасят друг друга) */
+  setCustomRange(from: Date, till: Date): void;
 }
 
 /**
@@ -107,5 +109,6 @@ export function dashboardFilter(): DashboardFilter {
       ),
     setCustomFrom: (date) => params.patch({ from: date ? toIsoDate(date) : null }),
     setCustomTill: (date) => params.patch({ till: date ? toIsoDate(date) : null }),
+    setCustomRange: (from, till) => params.patch({ period: 'custom', from: toIsoDate(from), till: toIsoDate(till) }),
   };
 }
