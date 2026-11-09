@@ -89,6 +89,7 @@ import { PnlBarChart } from '../../widgets/pnl-bar-chart/pnl-bar-chart';
         [dataWarnings]="periodWarnings()"
         [totals]="totals()"
         [cash]="cash()"
+        [systemScoped]="filter.system() !== null"
         [performance]="performance.value()?.total"
         [drawdownPct]="maxDrawdownPct()"
       />
