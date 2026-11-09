@@ -4,8 +4,10 @@ import {
   classifyOperationType,
   normalizeRow,
   makeDedupeKey,
+  mergeBrokerFields,
   type RawRow,
 } from './import';
+import { sourceCodeOf } from './instrument-identity';
 
 /** Резолверы для тестов — сопоставляют имена из данных пользователя в id */
 const resolvers = {
@@ -256,5 +258,34 @@ describe('makeDedupeKey', () => {
       currency: 'RUB',
     };
     expect(makeDedupeKey(op)).toBe(makeDedupeKey({ ...op }));
+  });
+});
+
+describe('sourceCode — происхождение операции', () => {
+  const op = { fee: '0', price: '100', quantity: '1', fxRate: '1', executedAt: null };
+
+  it('самый сильный код строки: tbank_uid → figi → isin → broker_code → ticker', () => {
+    expect(sourceCodeOf({ ticker: 'cnyrub_tom', identifiers: { figi: 'BBG0013HRTL0', tbankUid: 'u-1' } })).toBe('tbank_uid:u-1');
+    expect(sourceCodeOf({ ticker: 'CNYRUB_TOM', identifiers: { figi: 'BBG0013HRTL0' } })).toBe('figi:BBG0013HRTL0');
+    expect(sourceCodeOf({ ticker: 'X', identifiers: { isin: 'RU000A10B4K3', brokerCode: 'TCS00A10B4K3' } })).toBe('isin:RU000A10B4K3');
+    expect(sourceCodeOf({ ticker: 'X', identifiers: { brokerCode: 'TCS00A10B4K3' } })).toBe('broker_code:TCS00A10B4K3');
+    expect(sourceCodeOf({ ticker: 'TMON@' })).toBe('ticker:TMON');
+    expect(sourceCodeOf({})).toBeNull();
+  });
+
+  it('normalizeRow заполняет sourceCode; ручная строка без кодов — нет', () => {
+    const res = normalizeRow(
+      { date: '2024-08-01', system: 'Верников', tradeType: 'Buy', ticker: 'CNYRUB_TOM', quantity: '1', price: '12', identifiers: { figi: 'BBG0013HRTL0' } },
+      resolvers,
+    );
+    expect('operation' in res && res.operation.sourceCode).toBe('figi:BBG0013HRTL0');
+  });
+
+  it('mergeBrokerFields: заполняет только пустое значение, существующее не меняет', () => {
+    expect(mergeBrokerFields({ ...op, sourceCode: null }, { ...op, sourceCode: 'figi:A' })).toEqual([
+      { field: 'sourceCode', from: null, to: 'figi:A' },
+    ]);
+    expect(mergeBrokerFields({ ...op, sourceCode: 'figi:A' }, { ...op, sourceCode: 'figi:B' })).toEqual([]);
+    expect(mergeBrokerFields({ ...op, sourceCode: 'figi:A' }, { ...op })).toEqual([]);
   });
 });

@@ -1,7 +1,7 @@
 import Decimal from 'decimal.js';
 import { z } from 'zod';
 import { OperationType, type Operation } from './schemas';
-import { identityKey, type InstrumentIdentifiers, type InstrumentSuggestion } from './instrument-identity';
+import { identityKey, sourceCodeOf, type InstrumentIdentifiers, type InstrumentSuggestion } from './instrument-identity';
 
 /**
  * Движок импорта: нормализация «сырых» строк отчёта брокера в операции +
@@ -297,6 +297,7 @@ export function normalizeRow(
     brokerRef: raw.brokerRef,
     executedAt: normalizeTime(raw.time),
     transferGroup: raw.transferGroup,
+    sourceCode: sourceCodeOf(raw) ?? undefined,
   };
 
   return { operation, confidence, reason, dedupeKey: makeDedupeKey(operation), systemUncertain };
@@ -345,7 +346,7 @@ export function attachParentFees(rows: RawRow[]): RawRow[] {
 export type FieldSource = 'broker' | 'annotation';
 
 /** Поля операции, за которые отвечает брокер */
-export type BrokerField = 'fee' | 'price' | 'quantity' | 'executedAt' | 'fxRate' | 'operationType' | 'transferGroup';
+export type BrokerField = 'fee' | 'price' | 'quantity' | 'executedAt' | 'fxRate' | 'operationType' | 'transferGroup' | 'sourceCode';
 
 export interface FieldChange {
   field: BrokerField;
@@ -374,9 +375,9 @@ const same = (a: string, b: string): boolean => new Decimal(a).eq(new Decimal(b)
  */
 export function mergeBrokerFields(
   existing: Pick<Operation, 'fee' | 'price' | 'quantity' | 'executedAt' | 'fxRate'> &
-    Partial<Pick<Operation, 'operationType' | 'transferGroup'>>,
+    Partial<Pick<Operation, 'operationType' | 'transferGroup' | 'sourceCode'>>,
   incoming: Pick<Operation, 'fee' | 'price' | 'quantity' | 'executedAt' | 'fxRate'> &
-    Partial<Pick<Operation, 'operationType' | 'transferGroup'>>,
+    Partial<Pick<Operation, 'operationType' | 'transferGroup' | 'sourceCode'>>,
   source: FieldSource = 'broker',
 ): FieldChange[] {
   if (source !== 'broker') return [];
@@ -413,6 +414,10 @@ export function mergeBrokerFields(
   // связь частей одного факта (дивиденд на карту, валютный ввод) проставляется один раз
   if (incoming.transferGroup && !existing.transferGroup) {
     changes.push({ field: 'transferGroup', from: null, to: incoming.transferGroup });
+  }
+  // происхождение (код, с которым операция пришла) — только заполняется, существующее не меняется
+  if (incoming.sourceCode && !existing.sourceCode) {
+    changes.push({ field: 'sourceCode', from: null, to: incoming.sourceCode });
   }
   if (incoming.executedAt && incoming.executedAt !== existing.executedAt) {
     changes.push({ field: 'executedAt', from: existing.executedAt ?? null, to: incoming.executedAt });

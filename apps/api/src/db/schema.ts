@@ -78,6 +78,8 @@ export const operations = sqliteTable('operations', {
   fxRate: text('fx_rate').notNull().default('1'),
   currency: text('currency').notNull(),
   transferGroup: text('transfer_group'),
+  /** код, с которым операция пришла из импорта (`scheme:value`); нужен для разделения/отката слияния */
+  sourceCode: text('source_code'),
   tradeId: text('trade_id'),
   note: text('note'),
   brokerRef: text('broker_ref'),

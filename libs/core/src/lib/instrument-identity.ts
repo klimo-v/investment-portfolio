@@ -82,6 +82,29 @@ export function normalizeCode(code: string | null | undefined): string | undefin
   return out || undefined;
 }
 
+/**
+ * Происхождение операции: САМЫЙ СИЛЬНЫЙ код строки в формате `scheme:value`
+ * (tbank_uid → figi → isin → broker_code → ticker, порядок SCHEME_PRIORITY; название не берём —
+ * оно не идентификатор). Нужен, чтобы после слияния отличить операции, пришедшие под кодом
+ * источника, от операций цели. null — кодов у строки нет (ручная операция).
+ */
+export function sourceCodeOf(raw: Pick<RawRow, 'ticker' | 'identifiers'>): string | null {
+  const ids = raw.identifiers ?? {};
+  const byScheme: Partial<Record<IdentifierScheme, string | undefined>> = {
+    tbank_uid: ids.tbankUid,
+    figi: ids.figi,
+    isin: ids.isin,
+    broker_code: ids.brokerCode,
+    ticker: raw.ticker,
+  };
+  for (const scheme of SCHEME_PRIORITY) {
+    // uid — регистр не значим (в справочнике хранится строчным, см. normalizeRawRows)
+    const value = scheme === 'tbank_uid' ? byScheme[scheme]?.trim().toLowerCase() || undefined : normalizeCode(byScheme[scheme]);
+    if (value) return `${scheme}:${value}`;
+  }
+  return null;
+}
+
 /** Название для сравнения: регистр и повторные пробелы не важны */
 export function normalizeName(name: string | null | undefined): string | undefined {
   const n = (name ?? '').trim().toLowerCase().replace(/\s+/g, ' ');

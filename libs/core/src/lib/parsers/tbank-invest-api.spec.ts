@@ -7,6 +7,7 @@ import {
   type TbankOperationItem,
 } from './tbank-invest-api';
 import { makeDedupeKey, normalizeRow, type RawRow } from '../import';
+import { sourceCodeOf } from '../instrument-identity';
 
 /**
  * Тесты маппера T-Invest API. Фикстуры синтетические (реальные ответы содержат
@@ -471,5 +472,15 @@ describe('дедупликация с файловым импортом', () => 
     });
 
     expect(new Set(keys).size).toBe(2);
+  });
+});
+
+describe('происхождение операции (sourceCode)', () => {
+  it('API: строка получает самый сильный код — tbank_uid инструмента', () => {
+    const rows = mapTbankOperations([buyWithTwoTrades()], 'acc-1', instruments);
+    expect(rows.length).toBeGreaterThan(0);
+    for (const r of rows) expect(sourceCodeOf(r)).toMatch(/^(tbank_uid|figi|isin|ticker):/);
+    const res = normalizeRow(rows[0], { resolveSystem: () => 's', resolvePortfolio: () => 'p', resolveInstrument: (r: RawRow) => ({ instrumentId: r.ticker ?? null }) });
+    expect('operation' in res && res.operation.sourceCode).toBeTruthy();
   });
 });

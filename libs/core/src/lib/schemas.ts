@@ -53,6 +53,8 @@ export const OperationSchema = z.object({
   fxRate: decimalString.default('1'),
   currency: z.string().min(1),
   transferGroup: z.string().nullish(),
+  /** код, с которым операция пришла из импорта (`scheme:value`); null — ручная операция */
+  sourceCode: z.string().nullish(),
   tradeId: z.string().nullish(),
   note: z.string().nullish(),
   brokerRef: z.string().nullish(),

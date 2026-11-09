@@ -510,6 +510,7 @@ export class ImportService {
           brokerRef: row.operation.brokerRef ?? null,
           executedAt: row.operation.executedAt ?? null,
           transferGroup: row.operation.transferGroup ?? null,
+          sourceCode: row.operation.sourceCode ?? null,
           importBatchId: batchId,
         })
         .run();

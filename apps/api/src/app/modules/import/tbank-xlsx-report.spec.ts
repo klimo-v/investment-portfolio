@@ -3,7 +3,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import ExcelJS from 'exceljs';
 import { parseTbankXlsx } from './tbank-xlsx-report';
-import { mapTbankOperations, normalizeRawRows, type RawRow } from '@core';
+import { mapTbankOperations, normalizeRawRows, sourceCodeOf, type RawRow } from '@core';
 
 /**
  * Тест парсера xlsx-отчёта Т-Банка на реальном отчёте пользователя
@@ -26,6 +26,11 @@ describe.skipIf(!hasFixture)('parseTbankXlsx — реальный отчёт Т-
     await workbook.xlsx.load(readFileSync(fixture) as any, { ignoreNodes: ['mergeCells'] });
     rows = parseTbankXlsx(workbook.worksheets[0]);
   }, 10_000);
+
+  it('каждая сделка получает код происхождения (ISIN или тикер)', () => {
+    const trades = rows.filter((r) => r.tradeType === 'Покупка' || r.tradeType === 'Продажа');
+    expect(trades.every((r) => !!sourceCodeOf(r))).toBe(true);
+  });
 
   it('извлекает все сделки раздела 1.1: 788 Покупка + 134 Продажа = 922', () => {
     const trades = rows.filter((r) => r.tradeType === 'Покупка' || r.tradeType === 'Продажа');

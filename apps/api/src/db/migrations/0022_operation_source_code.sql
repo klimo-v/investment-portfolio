@@ -1,0 +1,1 @@
+ALTER TABLE `operations` ADD `source_code` text;
