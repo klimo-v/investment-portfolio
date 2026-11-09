@@ -31,6 +31,15 @@ const PossibleDuplicateSchema = z.object({
   deterministic: z.boolean(),
 });
 export type PossibleDuplicate = z.infer<typeof PossibleDuplicateSchema>;
+const MergeIssueSchema = z.object({ code: z.string(), message: z.string() });
+const MergePreviewSchema = z.object({
+  source: z.object({ id: z.string(), ticker: z.string(), name: z.string().nullable() }),
+  target: z.object({ id: z.string(), ticker: z.string(), name: z.string().nullable() }),
+  blockers: z.array(MergeIssueSchema),
+  warnings: z.array(MergeIssueSchema),
+  consequences: z.object({ operations: z.number(), prices: z.number(), pricesDiscarded: z.number(), codes: z.number() }),
+});
+export type MergePreview = z.infer<typeof MergePreviewSchema>;
 export type { Portfolio, System };
 export type InstrumentIdentifiers = z.infer<typeof InstrumentIdentifiersSchema>;
 
@@ -126,14 +135,22 @@ export class ReferenceApi {
    * под разными кодами, а автоматически распознать дубль нельзя (см. диалог).
    * Затрагивает и позиции/сделки (DataRevision), и сам справочник (reloadTrigger).
    */
+  /** Проверки слияния и последствия — без записи */
+  async mergePreview(sourceId: string, targetId: string): Promise<MergePreview> {
+    return MergePreviewSchema.parse(
+      await firstValueFrom(this.http.get(`/api/instruments/${sourceId}/merge-preview/${targetId}`)),
+    );
+  }
+
   async mergeInstruments(
     sourceId: string,
     targetId: string,
+    confirmWarnings = false,
   ): Promise<{ merged: true; movedOperations: number }> {
     const result = await firstValueFrom(
       this.http.post<{ merged: true; movedOperations: number }>(
         `/api/instruments/${sourceId}/merge-into/${targetId}`,
-        {},
+        { confirmWarnings },
         withToastSuccess('Инструменты объединены'),
       ),
     );

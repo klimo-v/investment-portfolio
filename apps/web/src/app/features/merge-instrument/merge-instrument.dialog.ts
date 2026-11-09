@@ -1,8 +1,9 @@
-import { ChangeDetectionStrategy, Component, computed, inject, signal } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, inject, resource, signal } from '@angular/core';
 import { MatDialogModule, MatDialogRef, MAT_DIALOG_DATA } from '@angular/material/dialog';
 import { MatButtonModule } from '@angular/material/button';
 import { MatFormFieldModule } from '@angular/material/form-field';
 import { MatSelectModule } from '@angular/material/select';
+import { MatCheckboxModule } from '@angular/material/checkbox';
 import type { InstrumentType } from '@core';
 import { ReferenceApi } from '../../entities/reference/reference.api';
 
@@ -16,6 +17,8 @@ export interface MergeInstrumentData {
 
 export interface MergeInstrumentResult {
   targetId: string;
+  /** пользователь явно подтвердил предупреждения проверок слияния */
+  confirmWarnings: boolean;
 }
 
 /**
@@ -31,7 +34,7 @@ export interface MergeInstrumentResult {
 @Component({
   selector: 'app-merge-instrument-dialog',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [MatDialogModule, MatButtonModule, MatFormFieldModule, MatSelectModule],
+  imports: [MatDialogModule, MatButtonModule, MatFormFieldModule, MatSelectModule, MatCheckboxModule],
   template: `
     <h2 mat-dialog-title>Объединить «{{ data.sourceTicker }}» с другим инструментом</h2>
     <mat-dialog-content>
@@ -55,6 +58,27 @@ export interface MergeInstrumentResult {
         </mat-select>
       </mat-form-field>
 
+      @if (preview.value(); as p) {
+        <p class="muted">
+          Перейдёт: операций — {{ p.consequences.operations }}, кодов — {{ p.consequences.codes }}, цен —
+          {{ p.consequences.prices }}{{ p.consequences.pricesDiscarded ? ' (' + p.consequences.pricesDiscarded + ' цен в другой валюте будут отброшены)' : '' }}.
+        </p>
+        @for (b of p.blockers; track b.code) {
+          <p class="blocker">Запрещено: {{ b.message }}</p>
+        }
+        @for (w of p.warnings; track w.code) {
+          <p class="warn-note">{{ w.message }}</p>
+        }
+        @if (p.warnings.length > 0 && p.blockers.length === 0) {
+          <mat-checkbox [checked]="confirmed()" (change)="confirmed.set($event.checked)">
+            Понимаю риск, это один и тот же актив
+          </mat-checkbox>
+        }
+      }
+      @if (preview.error()) {
+        <p class="blocker">Не удалось проверить слияние.</p>
+      }
+
       @if (targets().length === 0) {
         <p class="muted">Нет других инструментов того же типа, с которыми можно объединить.</p>
       }
@@ -62,7 +86,7 @@ export interface MergeInstrumentResult {
 
     <mat-dialog-actions align="end">
       <button mat-button (click)="cancel()">Отмена</button>
-      <button mat-flat-button color="warn" [disabled]="!targetId()" (click)="apply()">
+      <button mat-flat-button color="warn" [disabled]="!canApply()" (click)="apply()">
         Объединить
       </button>
     </mat-dialog-actions>
@@ -78,6 +102,14 @@ export interface MergeInstrumentResult {
       .muted {
         margin: 0 0 8px;
         color: var(--app-text-muted);
+      }
+      .blocker {
+        margin: 0 0 8px;
+        padding: 8px;
+        border-radius: 4px;
+        background: color-mix(in srgb, var(--app-warn) 20%, transparent);
+        color: var(--app-warn);
+        font-weight: 500;
       }
       .warn-note {
         margin: 0 0 8px;
@@ -97,6 +129,24 @@ export class MergeInstrumentDialog {
 
   protected readonly targetId = signal<string | undefined>(this.data.suggestedTargetId);
 
+  protected readonly confirmed = signal(false);
+
+  /** Предпросмотр проверок слияния для выбранной цели; смена цели сбрасывает подтверждение */
+  protected readonly preview = resource({
+    params: () => this.targetId(),
+    loader: async ({ params }) => {
+      this.confirmed.set(false);
+      return params ? this.reference.mergePreview(this.data.sourceId, params) : undefined;
+    },
+  });
+
+  /** Подтвердить можно, когда проверки загружены, блокировок нет, а предупреждения отмечены */
+  protected readonly canApply = computed(() => {
+    const p = this.preview.value();
+    if (!this.targetId() || !p || this.preview.isLoading()) return false;
+    return p.blockers.length === 0 && (p.warnings.length === 0 || this.confirmed());
+  });
+
   protected readonly targets = computed(() =>
     (this.reference.instruments.value() ?? []).filter(
       (i) => i.id !== this.data.sourceId && i.type === this.data.type,
@@ -109,7 +159,7 @@ export class MergeInstrumentDialog {
 
   protected apply(): void {
     const targetId = this.targetId();
-    if (!targetId) return;
-    this.dialogRef.close({ targetId });
+    if (!targetId || !this.canApply()) return;
+    this.dialogRef.close({ targetId, confirmWarnings: this.confirmed() });
   }
 }

@@ -4,6 +4,9 @@ import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
 import {
   findPossibleDuplicates,
   identityConflicts,
+  mergeChecks,
+  type MergeCheckInstrument,
+  type MergeChecks,
   isValidIsin,
   normalizeCode,
   normalizeName,
@@ -26,6 +29,15 @@ import {
   quotes,
 } from '../../../db/schema';
 import { DB } from '../../db/drizzle.module';
+
+/** Предпросмотр слияния: проверки и последствия */
+export interface MergePreviewDto {
+  source: { id: string; ticker: string; name: string | null };
+  target: { id: string; ticker: string; name: string | null };
+  blockers: MergeChecks['blockers'];
+  warnings: MergeChecks['warnings'];
+  consequences: { operations: number; prices: number; pricesDiscarded: number; codes: number };
+}
 
 /** Пара возможных дублей с предложенным направлением слияния (source → target) */
 export interface PossibleDuplicateDto {
@@ -170,13 +182,27 @@ export class InstrumentIdentityService {
     };
   }
 
-  /**
-   * Слить дубль-инструмент в другой в ОДНОЙ транзакции: операции, история цен (только
-   * при одинаковой валюте), вариационная маржа и ВСЕ идентификаторы источника переходят
-   * к цели (origin 'merge'), затем источник удаляется. Поэтому после удаления сделок и
-   * повторного импорта дубль не возвращается: старые коды уже указывают на цель.
-   */
-  merge(sourceId: string, targetId: string): { merged: true; movedOperations: number } {
+  /** Предпросмотр слияния: проверки (блокировки/предупреждения) и последствия — без записи */
+  mergePreview(sourceId: string, targetId: string): MergePreviewDto {
+    const { source, target } = this.loadPair(sourceId, targetId);
+    const checks = this.checksFor(source, target);
+    const count = (table: typeof operations | typeof priceHistory | typeof instrumentIdentifiers, col: unknown) =>
+      this.db.select({ n: sql<number>`count(*)` }).from(table).where(eq(col as never, sourceId)).get()?.n ?? 0;
+    return {
+      source: { id: source.id, ticker: source.ticker, name: source.name ?? null },
+      target: { id: target.id, ticker: target.ticker, name: target.name ?? null },
+      blockers: checks.blockers,
+      warnings: checks.warnings,
+      consequences: {
+        operations: count(operations, operations.instrumentId),
+        prices: source.currency === target.currency ? count(priceHistory, priceHistory.instrumentId) : 0,
+        pricesDiscarded: source.currency === target.currency ? 0 : count(priceHistory, priceHistory.instrumentId),
+        codes: count(instrumentIdentifiers, instrumentIdentifiers.instrumentId),
+      },
+    };
+  }
+
+  private loadPair(sourceId: string, targetId: string) {
     if (sourceId === targetId) throw new BadRequestException('Нельзя слить инструмент сам с собой.');
     const [source] = this.db.select().from(instruments).where(eq(instruments.id, sourceId)).all();
     const [target] = this.db.select().from(instruments).where(eq(instruments.id, targetId)).all();
@@ -184,6 +210,52 @@ export class InstrumentIdentityService {
     if (!target) throw new NotFoundException(`Инструмент не найден: ${targetId}`);
     if (source.type !== target.type) {
       throw new BadRequestException(`Нельзя слить инструменты разных типов: ${source.type} → ${target.type}.`);
+    }
+    return { source, target };
+  }
+
+  private checksFor(source: typeof instruments.$inferSelect, target: typeof instruments.$inferSelect): MergeChecks {
+    const side = (i: typeof instruments.$inferSelect): MergeCheckInstrument => ({
+      id: i.id,
+      ticker: i.ticker,
+      isin: i.isin,
+      entries: this.entriesOf(i.id),
+    });
+    const sourceOps = this.db
+      .select({ date: operations.date, price: operations.price, currency: operations.currency, type: operations.operationType })
+      .from(operations)
+      .where(eq(operations.instrumentId, source.id))
+      .all()
+      .filter((o) => o.type === 'Buy' || o.type === 'Sell');
+    const targetPrices = this.db
+      .select({ date: priceHistory.date, price: priceHistory.price, currency: priceHistory.currency })
+      .from(priceHistory)
+      .where(eq(priceHistory.instrumentId, target.id))
+      .all();
+    return mergeChecks(side(source), side(target), { sourceOps, targetPrices });
+  }
+
+  /**
+   * Слить дубль-инструмент в другой в ОДНОЙ транзакции: операции, история цен (только
+   * при одинаковой валюте), вариационная маржа и ВСЕ идентификаторы источника переходят
+   * к цели (origin 'merge'), затем источник удаляется. Поэтому после удаления сделок и
+   * повторного импорта дубль не возвращается: старые коды уже указывают на цель.
+   */
+  merge(
+    sourceId: string,
+    targetId: string,
+    opts: { confirmWarnings?: boolean } = {},
+  ): { merged: true; movedOperations: number } {
+    const { source, target } = this.loadPair(sourceId, targetId);
+    // проверки повторяются на сервере: клиенту доверять нельзя
+    const checks = this.checksFor(source, target);
+    if (checks.blockers.length > 0) {
+      throw new BadRequestException(`Слияние запрещено: ${checks.blockers.map((b) => b.message).join(' ')}`);
+    }
+    if (checks.warnings.length > 0 && !opts.confirmWarnings) {
+      throw new BadRequestException(
+        `Слияние требует подтверждения (confirmWarnings): ${checks.warnings.map((w) => w.message).join(' ')}`,
+      );
     }
 
     return this.db.transaction((tx) => {

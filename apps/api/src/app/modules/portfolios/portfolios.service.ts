@@ -12,7 +12,7 @@ import {
   type PortfolioRow,
   type InstrumentRow,
 } from '../../../db/schema';
-import { InstrumentIdentityService, type PossibleDuplicateDto } from '../instruments/instrument-identity.service';
+import { InstrumentIdentityService, type MergePreviewDto, type PossibleDuplicateDto } from '../instruments/instrument-identity.service';
 import { DB } from '../../db/drizzle.module';
 
 /**
@@ -133,7 +133,15 @@ export class PortfoliosService {
     return this.identity.mergedIdentifiers();
   }
 
-  mergeInstruments(sourceId: string, targetId: string): { merged: true; movedOperations: number } {
-    return this.identity.merge(sourceId, targetId);
+  mergePreview(sourceId: string, targetId: string): MergePreviewDto {
+    return this.identity.mergePreview(sourceId, targetId);
+  }
+
+  mergeInstruments(
+    sourceId: string,
+    targetId: string,
+    opts: { confirmWarnings?: boolean } = {},
+  ): { merged: true; movedOperations: number } {
+    return this.identity.merge(sourceId, targetId, opts);
   }
 }

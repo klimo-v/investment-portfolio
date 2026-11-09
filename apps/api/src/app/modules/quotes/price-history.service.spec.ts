@@ -156,7 +156,7 @@ describe('слияние инструментов: история цен пер�
     svc.record('OLD', point('2026-10-01', '1', 'manual'));
     svc.record('OLD', point('2026-10-02', '2', 'snapshot'));
 
-    new PortfoliosService(db as never, new InstrumentIdentityService(db as never)).mergeInstruments('OLD', 'SBER');
+    new PortfoliosService(db as never, new InstrumentIdentityService(db as never)).mergeInstruments('OLD', 'SBER', { confirmWarnings: true });
 
     expect(rows().map((r) => [r.instrumentId, r.date, r.price, r.source])).toEqual([
       ['SBER', '2026-10-01', '300', 'moex'],
@@ -189,7 +189,7 @@ describe('слияние инструментов в разных валютах
     const { PortfoliosService } = await import('../portfolios/portfolios.service');
     db.insert(instruments).values({ id: 'USDX', ticker: 'USDX', type: 'Stock', currency: 'USD', marketSource: 'manual' }).run();
     new PriceHistoryService(db, []).record('USDX', point('2026-10-01', '10', 'manual'));
-    new PortfoliosService(db as never, new InstrumentIdentityService(db as never)).mergeInstruments('USDX', 'SBER');
+    new PortfoliosService(db as never, new InstrumentIdentityService(db as never)).mergeInstruments('USDX', 'SBER', { confirmWarnings: true });
     expect(rows()).toEqual([]);
   });
 });

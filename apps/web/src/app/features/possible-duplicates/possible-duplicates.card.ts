@@ -95,6 +95,6 @@ export class PossibleDuplicatesCard {
     });
     const result = await firstValueFrom(ref.afterClosed());
     if (!result) return;
-    await this.reference.mergeInstruments(d.sourceId, result.targetId);
+    await this.reference.mergeInstruments(d.sourceId, result.targetId, result.confirmWarnings);
   }
 }

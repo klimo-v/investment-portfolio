@@ -731,7 +731,7 @@ export class PortfolioPage {
     });
     const result = await firstValueFrom(ref.afterClosed());
     if (!result) return;
-    await this.reference.mergeInstruments(row.instrumentId, result.targetId);
+    await this.reference.mergeInstruments(row.instrumentId, result.targetId, result.confirmWarnings);
   }
 
   /**

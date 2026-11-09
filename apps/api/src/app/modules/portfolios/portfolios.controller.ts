@@ -1,7 +1,7 @@
 import { BadRequestException, Body, Controller, Delete, Get, Param, Post, Query } from '@nestjs/common';
 import { SystemPerformanceQuerySchema, type InstrumentIdentifiersDto, type SystemPerformance } from '@core';
 import type { SystemRow, PortfolioRow, InstrumentRow } from '../../../db/schema';
-import type { PossibleDuplicateDto } from '../instruments/instrument-identity.service';
+import type { MergePreviewDto, PossibleDuplicateDto } from '../instruments/instrument-identity.service';
 import { PortfoliosService } from './portfolios.service';
 import { SystemPerformanceService } from './system-performance.service';
 
@@ -78,11 +78,18 @@ export class PortfoliosController {
     return this.service.instrumentIdentifiers(id);
   }
 
+  /** Проверки слияния и его последствия без записи */
+  @Get('instruments/:sourceId/merge-preview/:targetId')
+  mergePreview(@Param('sourceId') sourceId: string, @Param('targetId') targetId: string): MergePreviewDto {
+    return this.service.mergePreview(sourceId, targetId);
+  }
+
   @Post('instruments/:sourceId/merge-into/:targetId')
   mergeInstruments(
     @Param('sourceId') sourceId: string,
     @Param('targetId') targetId: string,
+    @Body() body?: { confirmWarnings?: boolean },
   ): { merged: true; movedOperations: number } {
-    return this.service.mergeInstruments(sourceId, targetId);
+    return this.service.mergeInstruments(sourceId, targetId, { confirmWarnings: body?.confirmWarnings === true });
   }
 }

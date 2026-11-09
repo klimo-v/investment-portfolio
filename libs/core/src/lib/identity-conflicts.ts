@@ -10,6 +10,8 @@
  *    слияние TCS00…→RU000… законно.
  */
 
+import { normalizeCode } from './instrument-identity';
+
 /** Форма ISIN: 2 буквы + 9 букв/цифр + цифра (контрольную сумму не проверяем — TCS00… её не проходит) */
 const ISIN_SHAPE = /^[A-Z]{2}[A-Z0-9]{9}[0-9]$/;
 
@@ -31,8 +33,8 @@ export function identityConflicts(entries: readonly IdentityConflictEntry[]): Id
     ...new Set(
       entries
         .filter((e) => e.scheme === 'ticker')
-        .map((e) => e.value.trim().toUpperCase())
-        .filter((v) => v && !ISIN_SHAPE.test(v)),
+        .map((e) => normalizeCode(e.value))
+        .filter((v): v is string => !!v && !ISIN_SHAPE.test(v)),
     ),
   ].sort();
   return { conflicting: tickers.length > 1, tickers };
