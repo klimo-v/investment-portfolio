@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { BadRequestException, Inject, Injectable } from '@nestjs/common';
 import { eq, sql } from 'drizzle-orm';
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
-import { PortfolioSchema, SystemSchema } from '@core';
+import { PortfolioSchema, SystemSchema, type InstrumentIdentifiersDto } from '@core';
 import {
   systems,
   portfolios,
@@ -123,6 +123,14 @@ export class PortfoliosService {
   /** «Возможные дубли» справочника (эвристики core) с предложенным направлением слияния */
   possibleDuplicates(): PossibleDuplicateDto[] {
     return this.identity.possibleDuplicates();
+  }
+
+  instrumentIdentifiers(instrumentId: string): InstrumentIdentifiersDto {
+    return this.identity.identifiers(instrumentId);
+  }
+
+  mergedIdentifiers(): InstrumentIdentifiersDto[] {
+    return this.identity.mergedIdentifiers();
   }
 
   mergeInstruments(sourceId: string, targetId: string): { merged: true; movedOperations: number } {

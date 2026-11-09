@@ -3,6 +3,7 @@ import { and, eq, sql } from 'drizzle-orm';
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
 import {
   findPossibleDuplicates,
+  identityConflicts,
   isValidIsin,
   normalizeCode,
   normalizeName,
@@ -10,6 +11,7 @@ import {
   type IdentityChoice,
   type IdentityEntry,
   type IdentityPlan,
+  type InstrumentIdentifiersDto,
   type PossibleDuplicate,
   type RawRow,
 } from '@core';
@@ -116,6 +118,56 @@ export class InstrumentIdentityService {
         deterministic: d.deterministic,
       };
     });
+  }
+
+  /** «Привязанные коды» одного инструмента + пометка identityConflicts (только чтение) */
+  identifiers(instrumentId: string): InstrumentIdentifiersDto {
+    const [instrument] = this.db.select().from(instruments).where(eq(instruments.id, instrumentId)).all();
+    if (!instrument) throw new NotFoundException(`Инструмент не найден: ${instrumentId}`);
+    return this.toIdentifiersDto(instrument, this.entriesOf(instrumentId));
+  }
+
+  /**
+   * Инструменты, у которых есть слитые коды (origin 'merge') или подозрительный набор, — для
+   * виджета «Привязанные коды». Остальные инструменты в нём не нужны: без слияний у них один
+   * набор кодов от импорта.
+   */
+  mergedIdentifiers(): InstrumentIdentifiersDto[] {
+    const byInstrument = new Map<string, (typeof instrumentIdentifiers.$inferSelect)[]>();
+    for (const r of this.db.select().from(instrumentIdentifiers).all()) {
+      byInstrument.set(r.instrumentId, [...(byInstrument.get(r.instrumentId) ?? []), r]);
+    }
+    return this.db
+      .select()
+      .from(instruments)
+      .all()
+      .flatMap((i) => {
+        const entries = byInstrument.get(i.id) ?? [];
+        const dto = this.toIdentifiersDto(i, entries);
+        return entries.some((e) => e.origin === 'merge') || dto.conflicting ? [dto] : [];
+      })
+      .sort((a, b) => Number(b.conflicting) - Number(a.conflicting) || a.ticker.localeCompare(b.ticker));
+  }
+
+  private entriesOf(instrumentId: string) {
+    return this.db.select().from(instrumentIdentifiers).where(eq(instrumentIdentifiers.instrumentId, instrumentId)).all();
+  }
+
+  private toIdentifiersDto(
+    instrument: { id: string; ticker: string; name: string | null },
+    entries: { scheme: string; value: string; origin: string; createdAt: string }[],
+  ): InstrumentIdentifiersDto {
+    const conflict = identityConflicts(entries);
+    return {
+      instrumentId: instrument.id,
+      ticker: instrument.ticker,
+      name: instrument.name ?? null,
+      entries: entries
+        .map((e) => ({ scheme: e.scheme, value: e.value, origin: e.origin, createdAt: e.createdAt }) as InstrumentIdentifiersDto['entries'][number])
+        .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.scheme.localeCompare(b.scheme) || a.value.localeCompare(b.value)),
+      conflicting: conflict.conflicting,
+      tickers: conflict.tickers,
+    };
   }
 
   /**

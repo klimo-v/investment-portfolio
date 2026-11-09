@@ -1,5 +1,5 @@
 import { BadRequestException, Body, Controller, Delete, Get, Param, Post, Query } from '@nestjs/common';
-import { SystemPerformanceQuerySchema, type SystemPerformance } from '@core';
+import { SystemPerformanceQuerySchema, type InstrumentIdentifiersDto, type SystemPerformance } from '@core';
 import type { SystemRow, PortfolioRow, InstrumentRow } from '../../../db/schema';
 import type { PossibleDuplicateDto } from '../instruments/instrument-identity.service';
 import { PortfoliosService } from './portfolios.service';
@@ -64,6 +64,18 @@ export class PortfoliosController {
   @Get('instruments/possible-duplicates')
   possibleDuplicates(): PossibleDuplicateDto[] {
     return this.service.possibleDuplicates();
+  }
+
+  /** Инструменты со слитыми кодами или подозрительным набором кодов (только чтение) */
+  @Get('instruments/merged-identifiers')
+  mergedIdentifiers(): InstrumentIdentifiersDto[] {
+    return this.service.mergedIdentifiers();
+  }
+
+  /** «Привязанные коды» инструмента: схема, значение, origin, дата добавления (только чтение) */
+  @Get('instruments/:id/identifiers')
+  instrumentIdentifiers(@Param('id') id: string): InstrumentIdentifiersDto {
+    return this.service.instrumentIdentifiers(id);
   }
 
   @Post('instruments/:sourceId/merge-into/:targetId')

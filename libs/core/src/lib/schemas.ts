@@ -90,6 +90,29 @@ export const InstrumentSchema = z.object({
 export type Instrument = z.infer<typeof InstrumentSchema>;
 
 /**
+ * Привязанные коды инструмента (instrument_identifiers). Дата — «код добавлен»: это момент
+ * записи кода, а не слияния (слияние не обновляет created_at; дата слияния появится из журнала).
+ */
+export const InstrumentIdentifierSchema = z.object({
+  scheme: z.enum(['ticker', 'isin', 'figi', 'tbank_uid', 'broker_code', 'name']),
+  value: z.string(),
+  origin: z.enum(['import', 'merge', 'manual']),
+  createdAt: z.string(),
+});
+export type InstrumentIdentifierDto = z.infer<typeof InstrumentIdentifierSchema>;
+
+export const InstrumentIdentifiersSchema = z.object({
+  instrumentId: z.string(),
+  ticker: z.string(),
+  name: z.string().nullable(),
+  entries: z.array(InstrumentIdentifierSchema),
+  /** пометка identityConflicts: у инструмента больше одного биржевого тикера */
+  conflicting: z.boolean(),
+  tickers: z.array(z.string()),
+});
+export type InstrumentIdentifiersDto = z.infer<typeof InstrumentIdentifiersSchema>;
+
+/**
  * Тело запроса на ручную установку цены — для инструментов с marketSource='manual'
  * (нет автоматического провайдера котировок, см. QuotesService), цену вводит
  * пользователь сам вместо того, чтобы бумага молча оставалась без «Тек. цены».

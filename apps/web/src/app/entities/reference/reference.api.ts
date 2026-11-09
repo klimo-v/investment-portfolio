@@ -2,7 +2,7 @@ import { Injectable, inject, signal } from '@angular/core';
 import { HttpClient, httpResource } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
 import { z } from 'zod';
-import { InstrumentSchema, PortfolioSchema, SystemSchema, type Portfolio, type System } from '@core';
+import { InstrumentIdentifiersSchema, InstrumentSchema, PortfolioSchema, SystemSchema, type Portfolio, type System } from '@core';
 import { withToastSuccess } from '@web-shared';
 import { DataRevision } from '../../shared/data-revision';
 
@@ -32,6 +32,7 @@ const PossibleDuplicateSchema = z.object({
 });
 export type PossibleDuplicate = z.infer<typeof PossibleDuplicateSchema>;
 export type { Portfolio, System };
+export type InstrumentIdentifiers = z.infer<typeof InstrumentIdentifiersSchema>;
 
 @Injectable({ providedIn: 'root' })
 export class ReferenceApi {
@@ -72,6 +73,16 @@ export class ReferenceApi {
       return '/api/instruments/possible-duplicates';
     },
     { parse: z.array(PossibleDuplicateSchema).parse },
+  );
+
+  /** «Привязанные коды»: инструменты со слитыми кодами или подозрительным набором (только чтение) */
+  readonly mergedIdentifiers = httpResource(
+    () => {
+      this.reloadTrigger();
+      this.revision.value();
+      return '/api/instruments/merged-identifiers';
+    },
+    { parse: z.array(InstrumentIdentifiersSchema).parse },
   );
 
   /** Создать портфель, затем перезагрузить список */

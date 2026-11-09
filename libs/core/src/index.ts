@@ -8,6 +8,7 @@ export * from './lib/import';
 export * from './lib/foreign-cash';
 export * from './lib/isin';
 export * from './lib/instrument-identity';
+export * from './lib/identity-conflicts';
 export * from './lib/futures';
 export * from './lib/futures-engine';
 export * from './lib/operation-order';
