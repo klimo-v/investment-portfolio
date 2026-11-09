@@ -1,12 +1,15 @@
 import { randomUUID } from 'node:crypto';
 import { BadRequestException, Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { and, eq, inArray, sql } from 'drizzle-orm';
+import type { z } from 'zod';
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
 import {
   findPossibleDuplicates,
   identityConflicts,
   MergePayloadV1,
   planMergeUndo,
+  UndoRequestSchema,
+  type UndoRequest,
   type MergeUndoPlan,
   type SnapshotRow,
   type SplitRequest,
@@ -44,6 +47,13 @@ import {
   quotes,
 } from '../../../db/schema';
 import { DB } from '../../db/drizzle.module';
+
+/** Разбор тела запроса: ошибка валидации — 400, а не необработанный ZodError (500) */
+function parseBody<S extends z.ZodType>(schema: S, raw: unknown): z.output<S> {
+  const res = schema.safeParse(raw);
+  if (!res.success) throw new BadRequestException(`Неверное тело запроса: ${JSON.stringify(res.error.flatten())}`);
+  return res.data;
+}
 
 /** Явное распределение «неясных» операций при откате слияния */
 export interface UndoAssignments {
@@ -191,7 +201,7 @@ export class InstrumentIdentityService {
       .flatMap((i) => {
         const entries = byInstrument.get(i.id) ?? [];
         const dto = this.toIdentifiersDto(i, entries, this.mergesOf(i.id));
-        return entries.some((e) => e.origin === 'merge') || dto.conflicting || dto.merges.length > 0 ? [dto] : [];
+        return entries.some((e) => e.origin === 'merge') || dto.conflicting || dto.merges.some((m) => !m.undone) ? [dto] : [];
       })
       .sort((a, b) => Number(b.conflicting) - Number(a.conflicting) || a.ticker.localeCompare(b.ticker));
   }
@@ -246,6 +256,7 @@ export class InstrumentIdentityService {
           id: r.id,
           at: r.at,
           sourceId: r.sourceId,
+          targetId: r.targetId,
           sourceTicker: p.source.ticker,
           sourceName: p.source.name,
           undone: r.undoneAt !== null,
@@ -308,7 +319,7 @@ export class InstrumentIdentityService {
 
   /** Предпросмотр разделения: ошибки, предупреждения и состояние обеих сторон до/после — без записи */
   splitPreview(instrumentId: string, raw: unknown): SplitPlan {
-    return this.buildSplitPlan(instrumentId, SplitRequestSchema.parse(raw)).plan;
+    return this.buildSplitPlan(instrumentId, parseBody(SplitRequestSchema, raw)).plan;
   }
 
   /**
@@ -318,7 +329,7 @@ export class InstrumentIdentityService {
    * заполнен по журналу.
    */
   split(instrumentId: string, raw: unknown): { splitId: string; newInstrumentId: string; movedOperations: number } {
-    const request = SplitRequestSchema.parse(raw);
+    const request = parseBody(SplitRequestSchema, raw);
     const { plan, instrument } = this.buildSplitPlan(instrumentId, request);
     if (plan.errors.length > 0) throw new BadRequestException(`Разделение невозможно: ${plan.errors.join(' ')}`);
     if (plan.orphanSellsAppear && !request.confirmOrphanSells) {
@@ -410,7 +421,8 @@ export class InstrumentIdentityService {
   // ───────────────────────── откат слияния ─────────────────────────
 
   /** План отката слияния из журнала (только чтение): распределение операций и кодов, ошибки, неясные операции */
-  undoPlan(mergeId: string, assignments?: UndoAssignments): MergeUndoViewDto {
+  undoPlan(mergeId: string, body: unknown = {}): MergeUndoViewDto {
+    const assignments = parseBody(UndoRequestSchema, body ?? {}).assignments;
     const { row, payload } = this.loadMerge(mergeId);
     const plan = this.buildUndoPlan(row, payload, assignments);
     const target = this.db.select().from(instruments).where(eq(instruments.id, row.targetId)).get();
@@ -430,7 +442,8 @@ export class InstrumentIdentityService {
    * снимка — строка источника, котировка, цены и вариационная маржа. Всё в одной транзакции.
    * Перезаписанные слиянием строки цели и поля цели возвращаются, только если с тех пор не менялись.
    */
-  undoMerge(mergeId: string, raw: { assignments?: UndoAssignments; confirmOrphanSells?: boolean } = {}): { splitId: string; sourceId: string; movedOperations: number } {
+  undoMerge(mergeId: string, body: unknown = {}): { splitId: string; sourceId: string; movedOperations: number } {
+    const raw: UndoRequest = parseBody(UndoRequestSchema, body ?? {});
     const { row, payload } = this.loadMerge(mergeId);
     const undo = this.buildUndoPlan(row, payload, raw.assignments);
     if (undo.errors.length > 0) throw new BadRequestException(`Откат невозможен: ${undo.errors.join(' ')}`);
@@ -499,10 +512,15 @@ export class InstrumentIdentityService {
     const history = this.db.select().from(instrumentHistory).all(); // порядок вставки (rowid)
     const index = history.findIndex((h) => h.id === row.id);
     const touching = new Set([row.sourceId, row.targetId]);
+    const tickers = new Map(this.db.select({ id: instruments.id, ticker: instruments.ticker }).from(instruments).all().map((i) => [i.id, i.ticker]));
     const laterMerges = history
       .slice(index + 1)
       .filter((h) => h.kind === 'merge' && h.undoneAt === null && (touching.has(h.sourceId) || touching.has(h.targetId)))
-      .map((h) => ({ id: h.id, sourceTicker: parseMergePayload(h.payload).source.ticker, targetTicker: h.targetId }));
+      .map((h) => ({
+        id: h.id,
+        sourceTicker: parseMergePayload(h.payload).source.ticker,
+        targetTicker: tickers.get(h.targetId) ?? h.targetId,
+      }));
     return planMergeUndo({
       event: { id: row.id, at: row.at, sourceId: row.sourceId, targetId: row.targetId, undone: row.undoneAt !== null, payload },
       laterMerges,

@@ -1,7 +1,7 @@
 import { BadRequestException, Body, Controller, Delete, Get, Param, Post, Query } from '@nestjs/common';
 import { SystemPerformanceQuerySchema, type InstrumentIdentifiersDto, type SplitPlan, type SystemPerformance } from '@core';
 import type { SystemRow, PortfolioRow, InstrumentRow } from '../../../db/schema';
-import type { MergePreviewDto, MergeUndoViewDto, PossibleDuplicateDto, UndoAssignments } from '../instruments/instrument-identity.service';
+import type { MergePreviewDto, MergeUndoViewDto, PossibleDuplicateDto } from '../instruments/instrument-identity.service';
 import { PortfoliosService } from './portfolios.service';
 import { SystemPerformanceService } from './system-performance.service';
 
@@ -79,17 +79,16 @@ export class PortfoliosController {
   }
 
   /**
-   * План отката слияния из журнала (только чтение). Неясные операции распределяются явно:
-   * `?toSource=id1,id2&toTarget=id3`.
+   * План отката слияния из журнала (только расчёт, ничего не пишет). POST, а не GET: явное распределение
+   * неясных операций — список id в теле (в строке запроса сотни UUID упираются в лимит заголовка).
    */
-  @Get('instruments/merges/:id/undo-plan')
-  undoPlan(@Param('id') id: string, @Query('toSource') toSource?: string, @Query('toTarget') toTarget?: string): MergeUndoViewDto {
-    const list = (v?: string) => (v ? v.split(',').filter(Boolean) : undefined);
-    return this.service.undoPlan(id, { toSource: list(toSource), toTarget: list(toTarget) });
+  @Post('instruments/merges/:id/undo-plan')
+  undoPlan(@Param('id') id: string, @Body() body?: unknown): MergeUndoViewDto {
+    return this.service.undoPlan(id, body ?? {});
   }
 
   @Post('instruments/merges/:id/undo')
-  undoMerge(@Param('id') id: string, @Body() body?: { assignments?: UndoAssignments; confirmOrphanSells?: boolean }) {
+  undoMerge(@Param('id') id: string, @Body() body?: unknown) {
     return this.service.undoMerge(id, body ?? {});
   }
 

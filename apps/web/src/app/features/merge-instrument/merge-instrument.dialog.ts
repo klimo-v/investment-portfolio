@@ -58,7 +58,7 @@ export interface MergeInstrumentResult {
         </mat-select>
       </mat-form-field>
 
-      @if (preview.value(); as p) {
+      @if (previewValue(); as p) {
         <p class="muted">
           Перейдёт: операций — {{ p.consequences.operations }}, кодов — {{ p.consequences.codes }}, цен —
           {{ p.consequences.prices }}{{ p.consequences.pricesDiscarded ? ' (' + p.consequences.pricesDiscarded + ' цен в другой валюте будут отброшены)' : '' }}.
@@ -140,9 +140,12 @@ export class MergeInstrumentDialog {
     },
   });
 
+  /** value() ресурса в состоянии error бросает исключение — читаем только при наличии значения */
+  protected readonly previewValue = computed(() => (this.preview.hasValue() ? this.preview.value() : undefined));
+
   /** Подтвердить можно, когда проверки загружены, блокировок нет, а предупреждения отмечены */
   protected readonly canApply = computed(() => {
-    const p = this.preview.value();
+    const p = this.previewValue();
     if (!this.targetId() || !p || this.preview.isLoading()) return false;
     return p.blockers.length === 0 && (p.warnings.length === 0 || this.confirmed());
   });

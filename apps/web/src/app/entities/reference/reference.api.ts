@@ -45,7 +45,7 @@ const MergePreviewSchema = z.object({
 });
 export type MergePreview = z.infer<typeof MergePreviewSchema>;
 export type { Portfolio, System };
-/** План отката слияния + предпросмотр разделения (ответ GET /instruments/merges/:id/undo-plan) */
+/** План отката слияния + предпросмотр разделения (ответ POST /instruments/merges/:id/undo-plan) */
 export interface MergeUndoView {
   merge: { id: string; at: string; sourceId: string; sourceTicker: string; targetId: string; undone: boolean };
   plan: MergeUndoPlan;
@@ -170,13 +170,9 @@ export class ReferenceApi {
     return res;
   }
 
-  /** План отката слияния; `assignments` — явное распределение неясных операций */
+  /** План отката слияния; `assignments` — явное распределение неясных операций (список id — в теле POST) */
   undoPlan(mergeId: string, assignments: { toSource: string[]; toTarget: string[] }): Promise<MergeUndoView> {
-    const params = new URLSearchParams();
-    if (assignments.toSource.length > 0) params.set('toSource', assignments.toSource.join(','));
-    if (assignments.toTarget.length > 0) params.set('toTarget', assignments.toTarget.join(','));
-    const query = params.toString();
-    return firstValueFrom(this.http.get<MergeUndoView>(`/api/instruments/merges/${mergeId}/undo-plan${query ? `?${query}` : ''}`));
+    return firstValueFrom(this.http.post<MergeUndoView>(`/api/instruments/merges/${mergeId}/undo-plan`, { assignments }));
   }
 
   async undoMerge(

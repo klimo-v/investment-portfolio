@@ -12,7 +12,7 @@ import {
   type PortfolioRow,
   type InstrumentRow,
 } from '../../../db/schema';
-import { InstrumentIdentityService, type MergePreviewDto, type MergeUndoViewDto, type UndoAssignments, type PossibleDuplicateDto } from '../instruments/instrument-identity.service';
+import { InstrumentIdentityService, type MergePreviewDto, type MergeUndoViewDto, type PossibleDuplicateDto } from '../instruments/instrument-identity.service';
 import { DB } from '../../db/drizzle.module';
 
 /**
@@ -141,11 +141,11 @@ export class PortfoliosService {
     return this.identity.split(instrumentId, body);
   }
 
-  undoPlan(mergeId: string, assignments?: UndoAssignments): MergeUndoViewDto {
-    return this.identity.undoPlan(mergeId, assignments);
+  undoPlan(mergeId: string, body: unknown): MergeUndoViewDto {
+    return this.identity.undoPlan(mergeId, body);
   }
 
-  undoMerge(mergeId: string, body: { assignments?: UndoAssignments; confirmOrphanSells?: boolean }) {
+  undoMerge(mergeId: string, body: unknown) {
     return this.identity.undoMerge(mergeId, body);
   }
 

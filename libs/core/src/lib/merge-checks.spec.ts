@@ -64,4 +64,12 @@ describe('mergeChecks', () => {
     expect(medianPriceRatio(ctx)).toBeCloseTo(1, 1);
     expect(mergeChecks(inst('s', 'A'), inst('t', 'A'), ctx).warnings).toEqual([]);
   });
+
+  it('операции раньше истории цен цели пропускаются (цена другой эпохи — не повод для предупреждения)', () => {
+    const ctx: MergeCheckContext = {
+      sourceOps: [{ date: '2020-01-10', price: '10', currency: 'RUB' }],
+      targetPrices: [{ date: '2025-01-09', price: '100', currency: 'RUB' }],
+    };
+    expect(medianPriceRatio(ctx)).toBeNull();
+  });
 });

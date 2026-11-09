@@ -59,10 +59,11 @@ export function medianPriceRatio(ctx: MergeCheckContext): number | null {
   for (const op of ctx.sourceOps) {
     const opPrice = new Decimal(op.price);
     if (!opPrice.gt(0)) continue;
-    // последняя цена цели не позже даты операции; нет такой — берём первую (ранняя операция)
-    let ref = prices[0];
+    // последняя цена цели не позже даты операции; операция раньше истории цен цели несопоставима
+    // (цена другой эпохи дала бы ложное расхождение у активов с большим дрейфом) — пропускаем
+    let ref: (typeof prices)[number] | undefined;
     for (const p of prices) if (p.date <= op.date) ref = p;
-    if (!ref || ref.currency !== op.currency) continue; // валюты операции и цены разные — несопоставимо
+    if (!ref || ref.currency !== op.currency) continue; // нет цены на дату или валюты разные — несопоставимо
     const refPrice = new Decimal(ref.price);
     if (!refPrice.gt(0)) continue;
     ratios.push(opPrice.div(refPrice));

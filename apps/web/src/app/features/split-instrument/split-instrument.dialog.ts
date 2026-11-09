@@ -70,14 +70,14 @@ const INSTRUMENT_TYPES: InstrumentType[] = ['Stock', 'Bond', 'ETF', 'Currency', 
           @if (u.plan.identifiersMissing.length > 0) {
             <p class="muted">Коды из снимка, которых у цели уже нет, будут пропущены: {{ missingCodes() }}.</p>
           }
-          @if (u.plan.unclear.length > 0) {
+          @if (unclearOps().length > 0) {
             <h3 class="sub">Неясные операции — решите, чья каждая</h3>
             <p class="muted">У этих операций нет кода или он новый, определить автоматически нельзя.</p>
             <div class="bulk">
               <button mat-stroked-button (click)="assignAll('target')">Все — цели</button>
               <button mat-stroked-button (click)="assignAll('source')">Все — источнику</button>
             </div>
-            @for (o of u.plan.unclear; track o.id) {
+            @for (o of unclearOps(); track o.id) {
               <div class="op">
                 <span class="op-text">{{ o.date }} {{ o.operationType }} {{ o.quantity }} × {{ o.price }}</span>
                 <mat-button-toggle-group [value]="assignments()[o.id] ?? null" (change)="assign(o.id, $event.value)">
@@ -101,15 +101,15 @@ const INSTRUMENT_TYPES: InstrumentType[] = ['Stock', 'Bond', 'ETF', 'Currency', 
           </mat-form-field>
           <mat-form-field appearance="outline">
             <mat-label>Идентификатор</mat-label>
-            <input matInput [value]="newId()" (input)="newId.set($any($event.target).value)" />
+            <input matInput [value]="newId()" (input)="newId.set($any($event.target).value); resetPreview()" />
           </mat-form-field>
           <mat-form-field appearance="outline">
             <mat-label>Название</mat-label>
-            <input matInput [value]="newName()" (input)="newName.set($any($event.target).value)" />
+            <input matInput [value]="newName()" (input)="newName.set($any($event.target).value); resetPreview()" />
           </mat-form-field>
           <mat-form-field appearance="outline">
             <mat-label>Тип</mat-label>
-            <mat-select [value]="newType()" (valueChange)="newType.set($event)">
+            <mat-select [value]="newType()" (valueChange)="newType.set($event); resetPreview()">
               @for (t of types; track t) {
                 <mat-option [value]="t">{{ t }}</mat-option>
               }
@@ -117,7 +117,7 @@ const INSTRUMENT_TYPES: InstrumentType[] = ['Stock', 'Bond', 'ETF', 'Currency', 
           </mat-form-field>
           <mat-form-field appearance="outline">
             <mat-label>Источник цен</mat-label>
-            <mat-select [value]="marketSource()" (valueChange)="marketSource.set($event)">
+            <mat-select [value]="marketSource()" (valueChange)="marketSource.set($event); resetPreview()">
               @for (m of sources; track m) {
                 <mat-option [value]="m">{{ m }}</mat-option>
               }
@@ -125,7 +125,7 @@ const INSTRUMENT_TYPES: InstrumentType[] = ['Stock', 'Bond', 'ETF', 'Currency', 
           </mat-form-field>
           <mat-form-field appearance="outline">
             <mat-label>Новое название у «{{ data.ticker }}» (необязательно)</mat-label>
-            <input matInput [value]="remainingName()" (input)="remainingName.set($any($event.target).value)" />
+            <input matInput [value]="remainingName()" (input)="remainingName.set($any($event.target).value); resetPreview()" />
           </mat-form-field>
         </div>
 
@@ -283,6 +283,10 @@ export class SplitInstrumentDialog {
   // ── откат слияния ──
   protected readonly undo = signal<MergeUndoView | null>(null);
   protected readonly assignments = signal<Partial<Record<string, Side>>>({});
+  /** Все неясные операции из первого ответа: назначенные не пропадают из списка, назначение можно поправить */
+  protected readonly unclearOps = signal<MergeUndoView['plan']['unclear']>([]);
+  /** Номер последнего запроса плана: устаревший ответ не перезаписывает свежий */
+  private undoRequestSeq = 0;
 
   protected readonly previewData = computed(() => (this.isUndo ? this.undo()?.preview ?? null : this.manualPreview()?.preview ?? null));
   protected readonly warnings = computed(() => this.manualPreview()?.warnings ?? []);
@@ -325,6 +329,11 @@ export class SplitInstrumentDialog {
     if (this.newId() === this.newTicker()) this.newId.set(v);
     this.newTicker.set(v);
     this.manualPreview.set(null);
+  }
+
+  protected resetPreview(): void {
+    this.manualPreview.set(null);
+    this.confirmOrphan.set(false);
   }
 
   protected toggleOp(id: string, checked: boolean): void {
@@ -382,9 +391,7 @@ export class SplitInstrumentDialog {
   }
 
   protected assignAll(side: Side): void {
-    const u = this.undo();
-    if (!u) return;
-    this.assignments.update((a) => ({ ...a, ...Object.fromEntries(u.plan.unclear.map((o) => [o.id, side])) }));
+    this.assignments.update((a) => ({ ...a, ...Object.fromEntries(this.unclearOps().map((o) => [o.id, side])) }));
     void this.reloadUndo();
   }
 
@@ -397,13 +404,21 @@ export class SplitInstrumentDialog {
   }
 
   private async reloadUndo(): Promise<void> {
+    const seq = ++this.undoRequestSeq;
     this.busy.set(true);
+    this.failure.set(null);
     try {
-      this.undo.set(await this.reference.undoPlan(this.data.mergeId!, this.assignmentLists()));
+      const view = await this.reference.undoPlan(this.data.mergeId!, this.assignmentLists());
+      if (seq !== this.undoRequestSeq) return; // пришёл ответ на более новый запрос — этот устарел
+      this.undo.set(view);
+      this.unclearOps.update((known) => {
+        const ids = new Set(known.map((o) => o.id));
+        return [...known, ...view.plan.unclear.filter((o) => !ids.has(o.id))];
+      });
     } catch (e) {
-      this.failure.set(describe(e));
+      if (seq === this.undoRequestSeq) this.failure.set(describe(e));
     } finally {
-      this.busy.set(false);
+      if (seq === this.undoRequestSeq) this.busy.set(false);
     }
   }
 

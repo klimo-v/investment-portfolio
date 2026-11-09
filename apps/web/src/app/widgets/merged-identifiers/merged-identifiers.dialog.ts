@@ -3,7 +3,7 @@ import { MatButtonModule } from '@angular/material/button';
 import { MatDialog, MatDialogModule } from '@angular/material/dialog';
 import { DatePipe } from '@angular/common';
 import { ReferenceApi, type InstrumentIdentifiers } from '../../entities/reference/reference.api';
-import { SplitInstrumentDialog } from '../split-instrument/split-instrument.dialog';
+import { SplitInstrumentDialog } from '../../features/split-instrument/split-instrument.dialog';
 
 const SCHEME_LABEL: Record<string, string> = {
   ticker: 'тикер',
@@ -47,9 +47,11 @@ const SCHEME_LABEL: Record<string, string> = {
             <div class="journal">
               Слито из <b>{{ m.sourceTicker }}</b
               >{{ m.sourceName ? ' (' + m.sourceName + ')' : '' }},
-              {{ m.at.replace(' ', 'T') | date: 'dd.MM.yyyy HH:mm' }}{{ m.undone ? ' — отменено' : '' }}
-              @if (!m.undone) {
+              {{ utc(m.at) | date: 'dd.MM.yyyy HH:mm' }}{{ m.undone ? ' — отменено' : '' }}
+              @if (!m.undone && m.targetId === i.instrumentId) {
                 <button mat-stroked-button (click)="undoMerge(i, m.id)">Отменить слияние…</button>
+              } @else if (!m.undone) {
+                <span class="muted">(слияние в промежуточный инструмент — отменяется в обратном порядке)</span>
               }
             </div>
           }
@@ -65,7 +67,7 @@ const SCHEME_LABEL: Record<string, string> = {
               <span class="value">{{ e.value }}</span>
               <span class="muted">
                 {{ e.origin === 'merge' ? 'слит' : e.origin === 'manual' ? 'вручную' : 'импорт' }},
-                код добавлен {{ e.createdAt.replace(' ', 'T') | date: 'dd.MM.yyyy HH:mm' }}
+                код добавлен {{ utc(e.createdAt) | date: 'dd.MM.yyyy HH:mm' }}
               </span>
             </div>
           }
@@ -139,6 +141,11 @@ export class MergedIdentifiersDialog {
   /** Слияние без записи в журнале: операции и коды выбирает пользователь */
   protected splitManually(i: InstrumentIdentifiers): void {
     this.dialog.open(SplitInstrumentDialog, { autoFocus: false, data: { instrumentId: i.instrumentId, ticker: i.ticker } });
+  }
+
+  /** Время из БД — UTC без зоны (`datetime('now')`): помечаем зону, иначе браузер прочтёт его как локальное */
+  protected utc(dbTime: string): string {
+    return dbTime.replace(' ', 'T') + 'Z';
   }
 
   protected label(scheme: string): string {

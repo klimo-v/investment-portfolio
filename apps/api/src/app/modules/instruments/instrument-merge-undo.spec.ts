@@ -2,6 +2,7 @@ import Database from 'better-sqlite3';
 import { drizzle, type BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
 import { migrate } from 'drizzle-orm/better-sqlite3/migrator';
 import { and, eq } from 'drizzle-orm';
+import { BadRequestException } from '@nestjs/common';
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
   futuresSettlements,
@@ -124,7 +125,7 @@ describe('откат слияния', () => {
   it('удалённые после слияния операции пропускаются и называются в плане', () => {
     const id = merge();
     db.delete(operations).where(eq(operations.id, 'o1')).run();
-    const plan = identity.undoPlan(id, { toSource: ['o2'] }).plan;
+    const plan = identity.undoPlan(id, { assignments: { toSource: ['o2'] } }).plan;
     expect(plan.skippedOperations).toEqual(['o1']);
     expect(identity.undoMerge(id, { assignments: { toSource: ['o2'] } }).movedOperations).toBe(1);
   });
@@ -153,5 +154,24 @@ describe('откат слияния', () => {
     sqlite.exec(`CREATE TRIGGER stop_split BEFORE INSERT ON instrument_history WHEN NEW.kind = 'split' BEGIN SELECT RAISE(ABORT, 'нельзя'); END;`);
     expect(() => identity.undoMerge(id, { assignments: { toSource: ['o2'] } })).toThrow();
     expect(state()).toEqual(afterMerge);
+  });
+
+  it('некорректное тело отката и плана — BadRequest (400)', () => {
+    const id = merge();
+    expect(() => identity.undoMerge(id, { assignments: { toSource: 5 } })).toThrow(BadRequestException);
+    expect(() => identity.undoPlan(id, { assignments: 'x' })).toThrow(BadRequestException);
+  });
+
+  it('цепочка A → B → C: у C видно слияние A → B с его целью; после отката всех слияний инструмент уходит из списка', () => {
+    addInstrument('C', 'RU000A10B4K9');
+    const first = merge('OLD', 'NEW');
+    const second = merge('NEW', 'C');
+    const merges = identity.identifiers('C').merges;
+    expect(merges.map((m) => [m.sourceTicker, m.targetId])).toEqual([['TCS00X', 'NEW'], ['RU000A10B4K3', 'C']]);
+    // сообщение об очерёдности называет тикер цели, а не id
+    expect(() => identity.undoMerge(first)).toThrow(/RU000A10B4K9/);
+    identity.undoMerge(second);
+    identity.undoMerge(first, { assignments: { toSource: ['o2'] } });
+    expect(identity.mergedIdentifiers().map((i) => i.instrumentId)).not.toContain('NEW');
   });
 });

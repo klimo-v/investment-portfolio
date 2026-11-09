@@ -1,3 +1,4 @@
+import { z } from 'zod';
 import type { MergePayload } from './instrument-history';
 
 /**
@@ -107,3 +108,10 @@ export function planMergeUndo(input: MergeUndoInput): MergeUndoPlan {
     identifiersAfterMerge: input.targetIdentifiers.filter((e) => !sourceCodes.has(key(e)) && e.createdAt > event.at),
   };
 }
+
+/** Тело запроса плана и самого отката: явное распределение неясных операций + подтверждение продаж без позиции */
+export const UndoRequestSchema = z.object({
+  assignments: z.object({ toSource: z.array(z.string()).optional(), toTarget: z.array(z.string()).optional() }).optional(),
+  confirmOrphanSells: z.boolean().optional(),
+});
+export type UndoRequest = z.infer<typeof UndoRequestSchema>;

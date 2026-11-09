@@ -117,6 +117,8 @@ export const InstrumentIdentifiersSchema = z.object({
       id: z.string(),
       at: z.string(),
       sourceId: z.string(),
+      /** цель этого слияния: при цепочке A → B → C у C есть слияние A → B с другой целью */
+      targetId: z.string(),
       sourceTicker: z.string(),
       sourceName: z.string().nullable(),
       undone: z.boolean(),

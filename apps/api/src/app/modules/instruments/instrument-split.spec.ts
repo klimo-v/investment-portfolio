@@ -2,6 +2,7 @@ import Database from 'better-sqlite3';
 import { drizzle, type BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
 import { migrate } from 'drizzle-orm/better-sqlite3/migrator';
 import { eq } from 'drizzle-orm';
+import { BadRequestException } from '@nestjs/common';
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { RawRow } from '@core';
 import { backfillInstrumentIdentifiers } from '../../../db/instrument-identifiers-store';
@@ -105,5 +106,10 @@ describe('разделение инструмента', () => {
     const imported = db.select().from(operations).where(eq(operations.brokerRef, 'n1')).get();
     expect(imported?.instrumentId).toBe('CNYRUB_TOM');
     expect(db.select().from(instruments).all().map((i) => i.id).sort()).toEqual(['CNYRUB_TOM', 'GLDRUB_TOM']);
+  });
+
+  it('некорректное тело — BadRequest (400), а не ZodError', () => {
+    expect(() => identity.split('GLDRUB_TOM', {})).toThrow(BadRequestException);
+    expect(() => identity.splitPreview('GLDRUB_TOM', null)).toThrow(BadRequestException);
   });
 });
