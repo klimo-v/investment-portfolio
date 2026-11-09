@@ -141,18 +141,17 @@ export interface PeriodPerformance {
 export const MATERIAL_CAPITAL_SHARE = 0.001;
 
 /**
- * Подсказка начала TWR: первый день последнего непрерывного отрезка, на котором капитал не ниже доли
- * MATERIAL_CAPITAL_SHARE от пика периода. Не меняет расчёт — только предлагает «Считать с этой даты».
- * null — весь период значим (подсказывать нечего).
+ * Подсказка начала TWR: если период НАЧИНАЕТСЯ с ничтожного капитала (ниже доли MATERIAL_CAPITAL_SHARE от пика
+ * периода), подсказываем первый значимый день. Если значим уже первый день, вся история настоящая (в том числе
+ * пауза с выводом всего и повторный ввод) — подсказки нет. Последующие паузы значения не имеют: подсказка
+ * отсекает только пыль в начале. Не меняет расчёт — только предлагает «Считать с этой даты».
  */
 export function suggestTwrStart(days: readonly { date: string; value: Decimal }[]): string | null {
   if (days.length === 0) return null;
   const peak = days.reduce((m, d) => (d.value.gt(m) ? d.value : m), ZERO);
   if (!peak.gt(0)) return null;
-  const floor = peak.mul(MATERIAL_CAPITAL_SHARE);
-  let start = days.length;
-  for (let i = days.length - 1; i >= 0 && days[i].value.gte(floor); i--) start = i;
-  return start > 0 && start < days.length ? days[start].date : null;
+  const first = days.findIndex((d) => d.value.gte(peak.mul(MATERIAL_CAPITAL_SHARE)));
+  return first > 0 ? days[first].date : null; // 0 — значим с первого дня; -1 быть не может (пик ≥ порога)
 }
 
 function addDays(iso: string, n: number): string {

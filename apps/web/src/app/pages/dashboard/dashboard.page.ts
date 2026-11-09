@@ -325,10 +325,12 @@ export class DashboardPage {
     (this.performance.value()?.total.twr.series ?? []).map((p) => ({ date: p.date, valueRub: p.index })),
   );
 
-  /** «Считать с этой даты»: период становится произвольным [подсказанная дата; сегодня] */
+  /** «Считать с этой даты»: период становится произвольным [подсказанная дата; выбранный конец или сегодня] */
   protected applySuggestedStart(from: string): void {
     const start = parseIsoDate(from);
-    if (start) this.filter.setCustomRange(start, new Date());
+    if (!start) return;
+    const chosenTill = parseIsoDate(this.filter.range().till ?? null);
+    this.filter.setCustomRange(start, chosenTill ?? new Date());
   }
 
   /** Просадка ряда TWR в процентах — считает бэк вместе с рядом (null — меньше двух дней или процентов нет) */
