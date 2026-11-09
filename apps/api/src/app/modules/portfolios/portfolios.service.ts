@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { BadRequestException, Inject, Injectable } from '@nestjs/common';
 import { eq, sql } from 'drizzle-orm';
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
-import { PortfolioSchema, SystemSchema, type InstrumentIdentifiersDto } from '@core';
+import { PortfolioSchema, SystemSchema, type InstrumentIdentifiersDto, type SplitPlan } from '@core';
 import {
   systems,
   portfolios,
@@ -131,6 +131,14 @@ export class PortfoliosService {
 
   mergedIdentifiers(): InstrumentIdentifiersDto[] {
     return this.identity.mergedIdentifiers();
+  }
+
+  splitPreview(instrumentId: string, body: unknown): SplitPlan {
+    return this.identity.splitPreview(instrumentId, body);
+  }
+
+  splitInstrument(instrumentId: string, body: unknown): { splitId: string; newInstrumentId: string; movedOperations: number } {
+    return this.identity.split(instrumentId, body);
   }
 
   mergePreview(sourceId: string, targetId: string): MergePreviewDto {

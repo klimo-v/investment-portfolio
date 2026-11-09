@@ -1,5 +1,5 @@
 import { BadRequestException, Body, Controller, Delete, Get, Param, Post, Query } from '@nestjs/common';
-import { SystemPerformanceQuerySchema, type InstrumentIdentifiersDto, type SystemPerformance } from '@core';
+import { SystemPerformanceQuerySchema, type InstrumentIdentifiersDto, type SplitPlan, type SystemPerformance } from '@core';
 import type { SystemRow, PortfolioRow, InstrumentRow } from '../../../db/schema';
 import type { MergePreviewDto, PossibleDuplicateDto } from '../instruments/instrument-identity.service';
 import { PortfoliosService } from './portfolios.service';
@@ -76,6 +76,17 @@ export class PortfoliosController {
   @Get('instruments/:id/identifiers')
   instrumentIdentifiers(@Param('id') id: string): InstrumentIdentifiersDto {
     return this.service.instrumentIdentifiers(id);
+  }
+
+  /** Предпросмотр разделения инструмента (только расчёт) */
+  @Post('instruments/:id/split/preview')
+  splitPreview(@Param('id') id: string, @Body() body: unknown): SplitPlan {
+    return this.service.splitPreview(id, body);
+  }
+
+  @Post('instruments/:id/split')
+  splitInstrument(@Param('id') id: string, @Body() body: unknown) {
+    return this.service.splitInstrument(id, body);
   }
 
   /** Проверки слияния и его последствия без записи */

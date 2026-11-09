@@ -1,11 +1,17 @@
 import { randomUUID } from 'node:crypto';
 import { BadRequestException, Inject, Injectable, NotFoundException } from '@nestjs/common';
-import { and, eq, sql } from 'drizzle-orm';
+import { and, eq, inArray, sql } from 'drizzle-orm';
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
 import {
   findPossibleDuplicates,
   identityConflicts,
   MergePayloadV1,
+  SplitPayloadV1,
+  SplitRequestSchema,
+  planInstrumentSplit,
+  type Operation,
+  type SplitPayload,
+  type SplitPlan,
   parseMergePayload,
   mergeChecks,
   type MergePayload,
@@ -274,6 +280,94 @@ export class InstrumentIdentityService {
       .where(eq(priceHistory.instrumentId, target.id))
       .all();
     return mergeChecks(side(source), side(target), { sourceOps, targetPrices });
+  }
+
+  /** Предпросмотр разделения: ошибки, предупреждения и состояние обеих сторон до/после — без записи */
+  splitPreview(instrumentId: string, raw: unknown): SplitPlan {
+    return this.buildSplitPlan(instrumentId, SplitRequestSchema.parse(raw)).plan;
+  }
+
+  /**
+   * Разделение в ОДНОЙ транзакции: новый инструмент, перенос выбранных операций и кодов, поправки полей
+   * остающегося, событие `kind = 'split'` в журнале. Цены остаются у исходного инструмента — историю
+   * нового догрузит `PriceHistoryService.ensure`. Откат слияния — то же разделение, план которого
+   * заполнен по журналу.
+   */
+  split(instrumentId: string, raw: unknown): { splitId: string; newInstrumentId: string; movedOperations: number } {
+    const request = SplitRequestSchema.parse(raw);
+    const { plan, instrument } = this.buildSplitPlan(instrumentId, request);
+    if (plan.errors.length > 0) throw new BadRequestException(`Разделение невозможно: ${plan.errors.join(' ')}`);
+    if (plan.orphanSellsAppear && !request.confirmOrphanSells) {
+      throw new BadRequestException(`Разделение требует подтверждения (confirmOrphanSells): ${plan.warnings.join(' ')}`);
+    }
+    const ni = request.newInstrument;
+
+    return this.db.transaction((tx) => {
+      tx.insert(instruments)
+        .values({ id: ni.id, ticker: ni.ticker, type: ni.type, currency: ni.currency, isin: ni.isin ?? null, name: ni.name ?? null, marketSource: ni.marketSource })
+        .run();
+
+      // SQLite ограничивает число переменных запроса — переносим пачками
+      for (let i = 0; i < plan.movedOperationIds.length; i += 500) {
+        tx.update(operations)
+          .set({ instrumentId: ni.id })
+          .where(inArray(operations.id, plan.movedOperationIds.slice(i, i + 500)))
+          .run();
+      }
+      for (const e of plan.movedIdentifiers) {
+        tx.update(instrumentIdentifiers)
+          .set({ instrumentId: ni.id, origin: 'manual' })
+          .where(and(eq(instrumentIdentifiers.scheme, e.scheme as never), eq(instrumentIdentifiers.value, e.value)))
+          .run();
+      }
+      for (const e of plan.addedIdentifiers) insertIdentifier(tx, { scheme: e.scheme, value: e.value, instrumentId: ni.id, origin: 'manual' });
+
+      const before: Record<string, string | null> = {};
+      const after: Record<string, string | null> = {};
+      const patch = request.fieldPatches;
+      if (patch) {
+        const set: { name?: string | null; isin?: string | null } = {};
+        for (const key of ['name', 'isin'] as const) {
+          if (patch[key] === undefined) continue;
+          before[key] = instrument[key] ?? null;
+          after[key] = patch[key] ?? null;
+          set[key] = patch[key] ?? null;
+        }
+        if (Object.keys(set).length > 0) tx.update(instruments).set(set).where(eq(instruments.id, instrumentId)).run();
+      }
+
+      const payload: SplitPayload = {
+        version: 1,
+        instrumentId,
+        newInstrument: { id: ni.id, ticker: ni.ticker, type: ni.type, currency: ni.currency, isin: ni.isin ?? null, name: ni.name ?? null, marketSource: ni.marketSource },
+        movedOperationIds: plan.movedOperationIds,
+        movedIdentifiers: plan.movedIdentifiers,
+        addedIdentifiers: plan.addedIdentifiers,
+        fieldPatches: { before, after },
+        undoesMergeId: request.undoesMergeId ?? null,
+      };
+      const splitId = randomUUID();
+      tx.insert(instrumentHistory)
+        .values({ id: splitId, kind: 'split', sourceId: instrumentId, targetId: ni.id, payload: JSON.stringify(SplitPayloadV1.parse(payload)) })
+        .run();
+      return { splitId, newInstrumentId: ni.id, movedOperations: plan.movedOperationIds.length };
+    });
+  }
+
+  private buildSplitPlan(instrumentId: string, request: ReturnType<typeof SplitRequestSchema.parse>) {
+    const [instrument] = this.db.select().from(instruments).where(eq(instruments.id, instrumentId)).all();
+    if (!instrument) throw new NotFoundException(`Инструмент не найден: ${instrumentId}`);
+    const all = this.db.select({ id: instruments.id, type: instruments.type }).from(instruments).all();
+    const plan = planInstrumentSplit({
+      instrumentId,
+      operations: this.db.select().from(operations).where(eq(operations.instrumentId, instrumentId)).all() as Operation[],
+      identifiers: this.entriesOf(instrumentId).map((e) => ({ scheme: e.scheme, value: e.value, origin: e.origin, createdAt: e.createdAt })),
+      takenInstrumentIds: new Set(all.map((i) => i.id)),
+      takenIdentifierKeys: new Set(this.db.select().from(instrumentIdentifiers).all().map((e) => `${e.scheme}:${e.value}`)),
+      request,
+      futureIds: new Set(all.filter((i) => i.type === 'Future').map((i) => i.id)),
+    });
+    return { plan, instrument };
   }
 
   /**

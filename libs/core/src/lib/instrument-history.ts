@@ -60,3 +60,20 @@ export type MergePayload = z.infer<typeof MergePayloadV1>;
 export function parseMergePayload(json: string): MergePayload {
   return MergePayloadV1.parse(JSON.parse(json));
 }
+
+/** Снимок события разделения */
+export const SplitPayloadV1 = z.object({
+  version: z.literal(1),
+  /** исходный инструмент (остаётся) */
+  instrumentId: z.string(),
+  /** новый инструмент */
+  newInstrument: InstrumentRowSnapshot,
+  movedOperationIds: z.array(z.string()),
+  movedIdentifiers: z.array(IdentifierSnapshot),
+  addedIdentifiers: z.array(z.object({ scheme: z.string(), value: z.string() })),
+  /** поправки полей остающегося инструмента: значения до и после */
+  fieldPatches: z.object({ before: z.record(z.string(), z.string().nullable()), after: z.record(z.string(), z.string().nullable()) }),
+  /** слияние, которое откатывает это разделение */
+  undoesMergeId: z.string().nullable(),
+});
+export type SplitPayload = z.infer<typeof SplitPayloadV1>;
