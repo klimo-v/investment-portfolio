@@ -29,8 +29,7 @@ export interface AllocationSlice {
         <app-state-message
           kind="empty"
           icon="donut_large"
-          title="Нет текущих цен"
-          hint="Нажмите «Обновить цены», чтобы увидеть распределение по типам."
+          [title]="emptyTitle()"
         />
       }
     </mat-card>
@@ -49,6 +48,7 @@ export interface AllocationSlice {
 })
 export class AllocationChart {
   readonly title = input('Распределение');
+  readonly emptyTitle = input('Нет активов для распределения');
   readonly slices = input<readonly AllocationSlice[]>([]);
 
   private readonly theme = inject(ThemeService);

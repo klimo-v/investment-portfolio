@@ -10,6 +10,9 @@ export interface SetManualPriceData {
   currency: string;
   /** Средняя цена покупки — стартовое значение, чтобы не вводить с нуля */
   avgBuyPrice: string;
+  avgPriceCurrency: string;
+  priceCurrency?: string | null;
+  currentPrice?: string | null;
   /** Фьючерс: цена вводится в ₽ за контракт (с учётом множителя серии), а не за «штуку» */
   perContract?: boolean;
 }
@@ -29,14 +32,18 @@ export interface SetManualPriceResult {
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [MatDialogModule, MatButtonModule, MatFormFieldModule, MatInputModule, FormField],
   template: `
-    <h2 mat-dialog-title>Указать цену «{{ data.ticker }}» вручную</h2>
+    <h2 mat-dialog-title>
+      {{ data.currentPrice == null ? 'Указать цену' : 'Изменить цену' }} «{{ data.ticker }}» вручную
+    </h2>
     <mat-dialog-content>
       <p class="muted">
-        Для «{{ data.ticker }}» нет автоматического источника котировок — «Обновить
-        цены» её не тронет, обновлять придётся самостоятельно.
+        Для «{{ data.ticker }}» нет автоматического источника котировок — «Обновить цены» её не
+        тронет, обновлять придётся самостоятельно.
       </p>
       <mat-form-field appearance="outline">
-        <mat-label>{{ data.perContract ? 'Цена, ₽ за контракт' : 'Цена, ' + data.currency }}</mat-label>
+        <mat-label>{{
+          data.perContract ? 'Цена, ₽ за контракт' : 'Цена, ' + data.currency
+        }}</mat-label>
         <input matInput type="number" [formField]="priceForm.price" />
       </mat-form-field>
     </mat-dialog-content>
@@ -53,7 +60,7 @@ export interface SetManualPriceResult {
         display: flex;
         flex-direction: column;
         gap: 8px;
-        min-width: 320px;
+        min-width: 0;
       }
       .muted {
         margin: 0 0 8px;
@@ -66,7 +73,11 @@ export class SetManualPriceDialog {
   private readonly dialogRef = inject(MatDialogRef<SetManualPriceDialog, SetManualPriceResult>);
   protected readonly data = inject<SetManualPriceData>(MAT_DIALOG_DATA);
 
-  private readonly model = signal({ price: this.data.avgBuyPrice });
+  private readonly model = signal({ price:
+    this.data.currentPrice != null && this.data.priceCurrency === this.data.currency
+      ? this.data.currentPrice
+      : this.data.avgPriceCurrency === this.data.currency ? this.data.avgBuyPrice : '',
+  });
   protected readonly priceForm = form(this.model);
 
   protected readonly isValid = computed(() => {

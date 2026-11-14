@@ -2,7 +2,12 @@ import { Injectable, inject } from '@angular/core';
 import { HttpClient, httpResource } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
 import { z } from 'zod';
-import { OperationSchema, type Operation } from '@core';
+import {
+  QuoteRefreshResultSchema,
+  OperationSchema,
+  type QuoteRefreshResult,
+  type Operation,
+} from '@core';
 import { ToastService, withToastSuccess } from '@web-shared';
 import { DataRevision } from '../../shared/data-revision';
 
@@ -44,7 +49,11 @@ export class OperationApi {
   /** Добавить операцию (мутация через HttpClient), затем перезагрузить ресурсы */
   async add(operation: Operation): Promise<Operation> {
     const created = await firstValueFrom(
-      this.http.post<Operation>('/api/operations', operation, withToastSuccess('Операция добавлена')),
+      this.http.post<Operation>(
+        '/api/operations',
+        operation,
+        withToastSuccess('Операция добавлена'),
+      ),
     );
     this.revision.bump();
     return created;
@@ -70,7 +79,9 @@ export class OperationApi {
    */
   async reassign(ids: string[], patch: { systemId?: string; portfolioId?: string }): Promise<void> {
     await Promise.all(
-      ids.map((id) => firstValueFrom(this.http.patch<{ updated: true }>(`/api/operations/${id}`, patch))),
+      ids.map((id) =>
+        firstValueFrom(this.http.patch<{ updated: true }>(`/api/operations/${id}`, patch)),
+      ),
     );
     this.revision.bump();
     this.toast.success('Система/портфель переназначены');
@@ -82,13 +93,9 @@ export class OperationApi {
    * Заодно цена дня и курсы валют пишутся в историю цен (price_history), из которой
    * дашборд считает графики динамики, — отдельной кнопки «Сделать снимок» больше нет.
    */
-  async refreshQuotes(): Promise<{ updated: number; total: number }> {
-    const result = await firstValueFrom(
-      this.http.post<{ updated: number; total: number }>(
-        '/api/quotes/refresh',
-        {},
-        withToastSuccess('Котировки обновлены'),
-      ),
+  async refreshQuotes(): Promise<QuoteRefreshResult> {
+    const result = QuoteRefreshResultSchema.parse(
+      await firstValueFrom(this.http.post<unknown>('/api/quotes/refresh', {})),
     );
     this.revision.bump();
     return result;

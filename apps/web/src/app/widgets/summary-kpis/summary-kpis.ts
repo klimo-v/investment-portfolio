@@ -4,6 +4,7 @@ import type { Cash, Effectiveness, PeriodPerformanceDto } from '@core';
 import {
   formatPercentOrDash,
   formatRub,
+  formatValuation,
   Hint,
   KpiCard,
   pnlColorClass,
@@ -26,13 +27,13 @@ import {
       @if (!systemScoped()) {
         <app-kpi-card
           label="Всего в портфеле"
-          [value]="money(cash().totalValueRub)"
+          [value]="valuation(cash().totalValueRub, totals().unvaluedPositionCount)"
           hint="Сколько сейчас в портфеле всего: рыночная стоимость открытых позиций плюс свободные деньги. Не зависит от выбранного периода — это величина на сегодня, а не за окно."
         />
       }
       <app-kpi-card
         label="Позиции"
-        [value]="money(totals().currentValueRub)"
+        [value]="valuation(totals().currentValueRub, totals().unvaluedPositionCount)"
         hint="Рыночная стоимость открытых позиций по последним известным ценам. Деньги на счёте сюда не входят — они в соседней карточке."
       />
       @if (!systemScoped()) {
@@ -57,7 +58,7 @@ import {
       -->
       <mat-card class="kpi-manual">
         <mat-card-subtitle>Результат за период <app-hint [text]="resultHint" label="Результат за период" /></mat-card-subtitle>
-        <mat-card-title [class]="cls(resultRub())">{{ money(resultRub()) }}</mat-card-title>
+        <mat-card-title [class]="cls(resultRub() ?? 0)">{{ money(resultRub()) }}</mat-card-title>
         <div class="sub">
           @if (dataWarnings() > 0) {
             <div class="warn">⚠ период задет предупреждениями о данных ({{ dataWarnings() }})</div>
@@ -73,7 +74,7 @@ import {
               <span [class]="cls(num(p.breakdown.fixedRub))">{{ money(num(p.breakdown.fixedRub)) }}</span>
             }
             · переоценка
-            <span [class]="cls(num(p.breakdown.revaluationRub))">{{ money(num(p.breakdown.revaluationRub)) }}</span>
+            <span [class]="cls(totals().unvaluedPositionCount > 0 ? 0 : num(p.breakdown.revaluationRub))">{{ money(totals().unvaluedPositionCount > 0 ? null : num(p.breakdown.revaluationRub)) }}</span>
           }
         </div>
       </mat-card>
@@ -156,7 +157,10 @@ export class SummaryKpis {
     'Реализ. — продажи внутри периода, выплаты — дивиденды и купоны, переоценка — изменение стоимости ' +
     'остатка именно за период (прибыль, заработанная до его начала, сюда не входит).';
 
-  protected readonly resultRub = computed(() => Number(this.performance()?.resultRub ?? 0));
+  protected readonly resultRub = computed(() => {
+    const result = this.performance()?.resultRub;
+    return this.totals().unvaluedPositionCount > 0 || result == null ? null : Number(result);
+  });
 
   /** Годовые для периода от года, иначе доходность за период — правило задаёт core (mwr.kind) */
   protected readonly moneyReturnLabel = computed(() =>
@@ -195,6 +199,7 @@ export class SummaryKpis {
   }
 
   protected readonly money = formatRub;
+  protected readonly valuation = formatValuation;
   protected readonly pct = formatPercentOrDash;
   protected readonly cls = pnlColorClass;
   protected readonly tone = toneOf;

@@ -266,6 +266,7 @@ export class DashboardPage {
   private static readonly EMPTY: Effectiveness = {
     investedRub: 0,
     currentValueRub: 0,
+    unvaluedPositionCount: 0,
     realizedPnlRub: 0,
     unrealizedPnlRub: 0,
     dividendsRub: 0,
@@ -275,10 +276,10 @@ export class DashboardPage {
   private static readonly EMPTY_CASH: Cash = { cashRub: 0, totalValueRub: 0 };
 
   protected readonly totals = computed<Effectiveness>(
-    () => this.summary.value()?.totals ?? DashboardPage.EMPTY,
+    () => (this.summary.hasValue() ? this.summary.value() : undefined)?.totals ?? DashboardPage.EMPTY,
   );
   protected readonly cash = computed<Cash>(
-    () => this.summary.value()?.cash ?? DashboardPage.EMPTY_CASH,
+    () => (this.summary.hasValue() ? this.summary.value() : undefined)?.cash ?? DashboardPage.EMPTY_CASH,
   );
 
   /**
@@ -286,7 +287,7 @@ export class DashboardPage {
    * период из единого расчёта (по id). Строка без расчёта не показывается.
    */
   protected readonly effRows = computed<EffRow[]>(() => {
-    const s = this.summary.value();
+    const s = (this.summary.hasValue() ? this.summary.value() : undefined);
     const p = this.performance.value();
     if (!s || !p) return [];
     const bySystem = this.groupBy() === 'system';
@@ -300,6 +301,7 @@ export class DashboardPage {
         name: row.name,
         investedRub: e.investedRub,
         currentValueRub: e.currentValueRub,
+        unvaluedPositionCount: e.unvaluedPositionCount,
         dividendsRub: e.dividendsRub,
         dividendYieldPct: e.dividendYieldPct,
         performance: row.performance,
@@ -315,7 +317,7 @@ export class DashboardPage {
   );
 
   protected readonly instrumentBars = computed(() =>
-    (this.summary.value()?.breakdown ?? []).map((r) => ({ label: r.ticker, pnlRub: r.pnlRub })),
+    ((this.summary.hasValue() ? this.summary.value() : undefined)?.breakdown ?? []).map((r) => ({ label: r.ticker, pnlRub: r.pnlRub })),
   );
 
   /**

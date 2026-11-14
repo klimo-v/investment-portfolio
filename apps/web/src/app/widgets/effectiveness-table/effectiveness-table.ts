@@ -8,6 +8,7 @@ import type { PeriodPerformanceDto } from '@core';
 import {
   formatPercentOrDash,
   formatRub,
+  formatValuation,
   Hint,
   pnlColorClass,
   sortRows,
@@ -23,7 +24,8 @@ export interface EffRow {
   id: string;
   name: string;
   investedRub: number;
-  currentValueRub: number;
+  currentValueRub: number | null;
+  unvaluedPositionCount: number;
   dividendsRub: number;
   dividendYieldPct: number | null;
   performance: PeriodPerformanceDto;
@@ -90,7 +92,7 @@ export type EffGroupBy = 'system' | 'portfolio';
           </ng-container>
           <ng-container matColumnDef="value">
             <th mat-header-cell *matHeaderCellDef mat-sort-header>Стоимость</th>
-            <td mat-cell *matCellDef="let r">{{ money(r.currentValueRub) }}</td>
+            <td mat-cell *matCellDef="let r">{{ valuation(r.currentValueRub, r.unvaluedPositionCount) }}</td>
           </ng-container>
           <ng-container matColumnDef="realized">
             <th mat-header-cell *matHeaderCellDef mat-sort-header
@@ -100,14 +102,14 @@ export type EffGroupBy = 'system' | 'portfolio';
             <td mat-cell *matCellDef="let r">
               <span [class]="cls(num(r.performance.breakdown.fixedRub))">{{ money(num(r.performance.breakdown.fixedRub)) }}</span>
               /
-              <span [class]="cls(num(r.performance.breakdown.revaluationRub))">{{ money(num(r.performance.breakdown.revaluationRub)) }}</span>
+              <span [class]="cls(r.unvaluedPositionCount > 0 ? 0 : num(r.performance.breakdown.revaluationRub))">{{ money(r.unvaluedPositionCount > 0 ? null : num(r.performance.breakdown.revaluationRub)) }}</span>
             </td>
           </ng-container>
           <ng-container matColumnDef="pnl">
             <th mat-header-cell *matHeaderCellDef mat-sort-header
               >Результат <app-hint [text]="pnlHint()" label="Результат" /></th
             >
-            <td mat-cell *matCellDef="let r" [class]="cls(num(r.performance.resultRub))">{{ money(num(r.performance.resultRub)) }}</td>
+            <td mat-cell *matCellDef="let r" [class]="cls(r.unvaluedPositionCount > 0 ? 0 : num(r.performance.resultRub))">{{ money(r.unvaluedPositionCount > 0 ? null : num(r.performance.resultRub)) }}</td>
           </ng-container>
           <ng-container matColumnDef="twr">
             <th mat-header-cell *matHeaderCellDef mat-sort-header
@@ -213,7 +215,7 @@ export class EffectivenessTable {
       case 'realized':
         return Number(row.performance.breakdown.fixedRub);
       case 'pnl':
-        return Number(row.performance.resultRub);
+        return row.unvaluedPositionCount > 0 ? null : Number(row.performance.resultRub);
       case 'twr':
         return row.performance.twr.pct;
       case 'mwr':
@@ -236,6 +238,7 @@ export class EffectivenessTable {
   }
 
   protected readonly money = formatRub;
+  protected readonly valuation = formatValuation;
   protected readonly pct = formatPercentOrDash;
   protected readonly cls = pnlColorClass;
 }

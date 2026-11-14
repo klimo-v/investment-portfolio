@@ -8,8 +8,9 @@ import { MatSelectModule } from '@angular/material/select';
 import { MatTooltipModule } from '@angular/material/tooltip';
 import { MatDialog } from '@angular/material/dialog';
 import { RouterLink } from '@angular/router';
-import type { InstrumentType, Position, SettlementCheckDto } from '@core';
+import type { InstrumentType, Position, SettlementCheckDto, QuoteRefreshResult } from '@core';
 import { firstValueFrom } from 'rxjs';
+import Decimal from 'decimal.js';
 import { OperationApi } from '../../entities/operation/operation.api';
 import { PositionApi } from '../../entities/position/position.api';
 import { summaryResource, type SummaryFilter } from '../../entities/summary/summary.api';
@@ -30,7 +31,9 @@ import {
   buildCsv,
   downloadCsv,
   formatMoney,
+  formatPrice,
   formatRub,
+  formatValuation,
   KpiCard,
   pnlColorClass,
   slugForFilename,
@@ -59,10 +62,20 @@ interface Row {
   avg: string;
   /** Средняя цена покупки без форматирования — стартовое значение для ручной цены */
   avgRaw: string;
+  avgPriceCurrency: string;
+  priceCurrency: string | null;
+  realized: string;
+  unrealized: string;
+  payouts: string;
   current: string;
+  currentRaw: string | null;
+  manual: boolean;
+  context: string;
+  freshness: string | null;
   /** Накопленный купонный доход по всему остатку, «—» для не-облигаций */
   accrued: string;
   value: string;
+  valuationIssue: string | null;
   pnl: string;
   pnlClass: string;
   /**
@@ -107,7 +120,8 @@ interface Group {
   type: InstrumentType;
   label: string;
   rows: Row[];
-  valueRub: number;
+  valueRub: number | null;
+  unvaluedPositionCount: number;
   /** Колонки таблицы группы: НКД показываем только там, где он вообще есть (облигации) */
   columns: string[];
 }
@@ -190,19 +204,48 @@ interface Group {
       }
     </div>
 
+    @if (refreshError()) {
+      <p role="alert">Не удалось обновить котировки. Повторите попытку.</p>
+    }
+    @if (refreshResult(); as result) {
+      <div class="refresh-result" role="status">
+        <p>{{ refreshMessage() }} · Пропущено ручных: {{ result.skippedManual }}</p>
+        @if (result.failures.length) {
+          <details>
+            <summary>Не удалось обновить: {{ result.failures.length }}</summary>
+            <ul>
+              @for (failure of result.failures; track $index) {
+                <li>{{ failure.ticker }} · {{ failure.source }} — {{ failure.reason }}</li>
+              }
+            </ul>
+          </details>
+        }
+      </div>
+    }
     <app-possible-duplicates />
     <app-merged-identifiers />
 
-    <div class="kpi-grid">
-      <app-kpi-card label="Вложено (₽)" [value]="investedTotal()" />
-      <app-kpi-card label="Текущая стоимость (₽)" [value]="valueTotal()" />
-      <app-kpi-card
-        label="Получено дивидендов/купонов (₽)"
-        [value]="dividendsTotal()"
-        [hint]="dividendsHint"
+    @if (summary.error()) {
+      <app-state-message
+        kind="error"
+        title="Не удалось загрузить сводку"
+        retryLabel="Повторить"
+        (retry)="summary.reload()"
       />
-      <app-kpi-card label="P&L (₽)" [value]="pnlTotal()" [tone]="pnlTone()" [hint]="pnlHint" />
-    </div>
+    } @else if (summary.hasValue()) {
+      <div class="kpi-grid">
+        <app-kpi-card label="Вложено (₽)" [value]="investedTotal()" />
+        <app-kpi-card label="Текущая стоимость (₽)" [value]="valueTotal()" />
+        <app-kpi-card
+          label="Получено дивидендов/купонов (₽)"
+          [value]="dividendsTotal()"
+          [hint]="dividendsHint"
+        />
+        <app-kpi-card label="P&L (₽)" [value]="pnlTotal()" [tone]="pnlTone()" [hint]="pnlHint" />
+      </div>
+    } @else {
+      <p role="status">Загрузка сводки…</p>
+    }
 
     @if (positionApi.positions.error()) {
       <app-state-message
@@ -210,13 +253,13 @@ interface Group {
         title="Не удалось загрузить позиции"
         hint="Проверьте, что сервер запущен, и попробуйте ещё раз."
         retryLabel="Повторить"
-        (retry)="api.reload()"
+        (retry)="positionApi.positions.reload()"
       />
       <!-- hasValue(), а не !isLoading(): «Обновить цены» перезапрашивает позиции, и
            на !isLoading() таблицы с диаграммой пропадали на время запроса -->
     } @else if (positionApi.positions.hasValue() && groups().length === 0) {
       <mat-card>
-        @if (positions().length === 0) {
+        @if (allPositions().length === 0) {
           <app-state-message
             kind="empty"
             title="Позиций пока нет"
@@ -227,8 +270,9 @@ interface Group {
             kind="empty"
             icon="filter_alt_off"
             title="Нет позиций под выбранные фильтры"
-            hint="Сбросьте фильтр системы или портфеля, чтобы увидеть остальные позиции."
+            hint="Сбросьте фильтры, чтобы увидеть остальные позиции."
           />
+          <button mat-stroked-button (click)="resetFilters()">Сбросить фильтры</button>
         }
       </mat-card>
     } @else if (positionApi.positions.hasValue()) {
@@ -238,100 +282,136 @@ interface Group {
             <mat-card class="group">
               <div class="group-head">
                 <h3>{{ g.label }}</h3>
-                <span class="group-total">{{ money(g.valueRub) }}</span>
+                <span class="group-total">{{
+                  valuation(g.valueRub, g.unvaluedPositionCount)
+                }}</span>
               </div>
               @if (g.type === 'Future') {
                 <p class="group-note">
                   Цены — в ₽ за контракт. Количество со знаком: минус — короткая позиция (шорт).
                   «Стоимость» — нереализованный результат по расчётной цене: вложений у фьючерса
-                  нет. Процентов на «вложено» у фьючерсов нет: их результат входит в рублёвый результат портфеля.
+                  нет. Процентов на «вложено» у фьючерсов нет: их результат входит в рублёвый
+                  результат портфеля.
                 </p>
               }
-              <table mat-table [dataSource]="g.rows">
-                <ng-container matColumnDef="ticker">
-                  <th mat-header-cell *matHeaderCellDef>Тикер</th>
-                  <td mat-cell *matCellDef="let r">
-                    {{ r.ticker }}
-                    @if (r.settlementCheck; as sc) {
-                      <mat-icon
-                        class="settlement settlement--{{ sc.status }}"
-                        [matTooltip]="settlementTooltip(sc)"
-                        [attr.aria-label]="settlementTooltip(sc)"
-                        >{{ sc.status === 'ok' ? 'verified' : sc.status === 'mismatch' ? 'warning' : 'help_outline' }}</mat-icon
-                      >
-                    }
-                  </td>
-                </ng-container>
-                <ng-container matColumnDef="qty">
-                  <th mat-header-cell *matHeaderCellDef>Кол-во</th>
-                  <td mat-cell *matCellDef="let r">{{ r.qty }}</td>
-                </ng-container>
-                <ng-container matColumnDef="avg">
-                  <th mat-header-cell *matHeaderCellDef>Средняя</th>
-                  <td mat-cell *matCellDef="let r">{{ r.avg }}</td>
-                </ng-container>
-                <ng-container matColumnDef="current">
-                  <th mat-header-cell *matHeaderCellDef>Тек. цена</th>
-                  <td mat-cell *matCellDef="let r">{{ r.current }}</td>
-                </ng-container>
-                <ng-container matColumnDef="accrued">
-                  <th
-                    mat-header-cell
-                    *matHeaderCellDef
-                    matTooltip="Накопленный купонный доход по всему остатку. Биржа котирует облигации без него, а при продаже его платит покупатель — поэтому он входит в «Стоимость», как и у брокера."
-                  >
-                    НКД (₽)
-                  </th>
-                  <td mat-cell *matCellDef="let r">{{ r.accrued }}</td>
-                </ng-container>
-                <ng-container matColumnDef="value">
-                  <th mat-header-cell *matHeaderCellDef>Стоимость (₽)</th>
-                  <td mat-cell *matCellDef="let r">{{ r.value }}</td>
-                </ng-container>
-                <ng-container matColumnDef="pnl">
-                  <th mat-header-cell *matHeaderCellDef>P&L (₽)</th>
-                  <td mat-cell *matCellDef="let r" [class]="r.pnlClass">{{ r.pnl }}</td>
-                </ng-container>
-                <ng-container matColumnDef="actions">
-                  <th mat-header-cell *matHeaderCellDef></th>
-                  <td mat-cell *matCellDef="let r">
-                    @if (r.suspicious) {
-                      @if (r.type !== 'Future') {
+              <div
+                class="table-scroll"
+                role="region"
+                [attr.aria-label]="g.label + ': позиции'"
+                tabindex="0"
+              >
+                <table mat-table [dataSource]="g.rows">
+                  <ng-container matColumnDef="ticker">
+                    <th mat-header-cell *matHeaderCellDef>Тикер</th>
+                    <td mat-cell *matCellDef="let r">
+                      {{ r.ticker }}
+                      <small class="position-context">{{ r.context }}</small>
+                      @if (r.settlementCheck; as sc) {
+                        <mat-icon
+                          class="settlement settlement--{{ sc.status }}"
+                          [matTooltip]="settlementTooltip(sc)"
+                          [attr.aria-label]="settlementTooltip(sc)"
+                          >{{
+                            sc.status === 'ok'
+                              ? 'verified'
+                              : sc.status === 'mismatch'
+                                ? 'warning'
+                                : 'help_outline'
+                          }}</mat-icon
+                        >
+                      }
+                    </td>
+                  </ng-container>
+                  <ng-container matColumnDef="qty">
+                    <th mat-header-cell *matHeaderCellDef>Кол-во</th>
+                    <td mat-cell *matCellDef="let r">{{ r.qty }}</td>
+                  </ng-container>
+                  <ng-container matColumnDef="avg">
+                    <th mat-header-cell *matHeaderCellDef>Средняя</th>
+                    <td mat-cell *matCellDef="let r">{{ r.avg }}</td>
+                  </ng-container>
+                  <ng-container matColumnDef="current">
+                    <th mat-header-cell *matHeaderCellDef>Тек. цена</th>
+                    <td mat-cell *matCellDef="let r">
+                      {{ r.current }}
+                      @if (r.freshness) {
+                        <small class="freshness">{{ r.freshness }}</small>
+                      }
+                    </td>
+                  </ng-container>
+                  <ng-container matColumnDef="accrued">
+                    <th
+                      mat-header-cell
+                      *matHeaderCellDef
+                      matTooltip="Накопленный купонный доход по всему остатку. Биржа котирует облигации без него, а при продаже его платит покупатель — поэтому он входит в «Стоимость», как и у брокера."
+                    >
+                      НКД (₽)
+                    </th>
+                    <td mat-cell *matCellDef="let r">{{ r.accrued }}</td>
+                  </ng-container>
+                  <ng-container matColumnDef="value">
+                    <th mat-header-cell *matHeaderCellDef>Стоимость (₽)</th>
+                    <td mat-cell *matCellDef="let r">
+                      {{ r.value }}
+                      @if (r.valuationIssue) {
+                        <small>{{ r.valuationIssue }}</small>
+                      }
+                    </td>
+                  </ng-container>
+                  <ng-container matColumnDef="pnl">
+                    <th mat-header-cell *matHeaderCellDef>P&L (₽)</th>
+                    <td mat-cell *matCellDef="let r" [class]="r.pnlClass">
+                      <details class="pnl-details">
+                        <summary [attr.aria-label]="'Состав P&L: ' + r.ticker + ', ' + r.context">{{ r.pnl }}</summary>
+                        <dl>
+                          <dt>Реализованный результат</dt><dd>{{ r.realized }}</dd>
+                          <dt>Нереализованный результат</dt><dd>{{ r.unrealized }}</dd>
+                          <dt>Дивиденды и купоны</dt><dd>{{ r.payouts }}</dd>
+                        </dl>
+                      </details>
+                    </td>
+                  </ng-container>
+                  <ng-container matColumnDef="actions">
+                    <th mat-header-cell *matHeaderCellDef></th>
+                    <td mat-cell *matCellDef="let r">
+                      @if (r.suspicious) {
+                        @if (r.type !== 'Future') {
+                          <button
+                            mat-icon-button
+                            (click)="resolvePrice(r)"
+                            aria-label="Найти цену на бирже"
+                            matTooltip="Проверить, не торгуется ли этот инструмент на MOEX/Binance под тем же тикером — импорт из отчёта заводит новые бумаги без автоисточника цены, даже когда биржа их знает."
+                          >
+                            <mat-icon>travel_explore</mat-icon>
+                          </button>
+                        }
                         <button
                           mat-icon-button
-                          (click)="resolvePrice(r)"
-                          aria-label="Найти цену на бирже"
-                          matTooltip="Проверить, не торгуется ли этот инструмент на MOEX/Binance под тем же тикером — импорт из отчёта заводит новые бумаги без автоисточника цены, даже когда биржа их знает."
+                          (click)="mergeInstrument(r)"
+                          aria-label="Объединить с другим инструментом"
+                          matTooltip="Если это дубль другого инструмента из вашего портфеля (брокерский импорт иногда заводит одну бумагу дважды под разными кодами) — объедините их."
                         >
-                          <mat-icon>travel_explore</mat-icon>
+                          <mat-icon>call_merge</mat-icon>
                         </button>
                       }
-                      <button
-                        mat-icon-button
-                        (click)="setManualPrice(r)"
-                        aria-label="Указать цену вручную"
-                        [matTooltip]="
-                          r.type === 'Future'
-                            ? 'Расчётную цену фьючерса (₽ за контракт) подставляет импорт отчёта брокера; если её нет — введите сами.'
-                            : 'Если на бирже её не найти (внебиржевой актив) — введите цену сами.'
-                        "
-                      >
-                        <mat-icon>edit</mat-icon>
-                      </button>
-                      <button
-                        mat-icon-button
-                        (click)="mergeInstrument(r)"
-                        aria-label="Объединить с другим инструментом"
-                        matTooltip="Если это дубль другого инструмента из вашего портфеля (брокерский импорт иногда заводит одну бумагу дважды под разными кодами) — объедините их."
-                      >
-                        <mat-icon>call_merge</mat-icon>
-                      </button>
-                    }
-                  </td>
-                </ng-container>
-                <tr mat-header-row *matHeaderRowDef="g.columns"></tr>
-                <tr mat-row *matRowDef="let row; columns: g.columns"></tr>
-              </table>
+                      @if (r.manual) {
+                        <button
+                          mat-icon-button
+                          (click)="setManualPrice(r)"
+                          [attr.aria-label]="
+                            r.currentRaw === null ? 'Указать цену' : 'Изменить цену'
+                          "
+                          [matTooltip]="r.currentRaw === null ? 'Указать цену' : 'Изменить цену'"
+                        >
+                          <mat-icon>edit</mat-icon>
+                        </button>
+                      }
+                    </td>
+                  </ng-container>
+                  <tr mat-header-row *matHeaderRowDef="g.columns"></tr>
+                  <tr mat-row *matRowDef="let row; columns: g.columns"></tr>
+                </table>
+              </div>
             </mat-card>
           }
         </div>
@@ -339,11 +419,13 @@ interface Group {
         <!-- @defer: диаграмма живёт в правой колонке и на узком экране уезжает под
              таблицы — грузить chart.js до того, как до неё долистают, незачем -->
         @defer (on viewport) {
-          <app-allocation-chart title="Распределение по типам" [slices]="allocation()" />
+          <app-allocation-chart title="Распределение по типам" [slices]="allocation()" [emptyTitle]="allocationEmptyTitle()" />
         } @placeholder {
           <div class="chart-box"></div>
         }
       </div>
+    } @else {
+      <p role="status">Загрузка позиций…</p>
     }
   `,
   styles: [
@@ -371,21 +453,38 @@ interface Group {
         flex-direction: column;
         flex: 1;
         min-height: 0;
+        min-width: 0;
+        max-width: 100%;
       }
       .header {
         flex: 0 0 auto;
         display: flex;
         justify-content: space-between;
         align-items: center;
+        flex-wrap: wrap;
+        gap: 8px;
       }
       .actions {
         display: flex;
+        flex-wrap: wrap;
         gap: 8px;
       }
       /* .filters — глобальный (styles.scss) */
       .filters {
         flex: 0 0 auto;
         margin: 8px 0 0;
+        flex-wrap: wrap;
+        min-width: 0;
+      }
+      .filters mat-form-field {
+        min-width: 0;
+        max-width: 100%;
+      }
+      .refresh-result {
+        overflow-wrap: anywhere;
+      }
+      .refresh-result p {
+        margin: 8px 0;
       }
       /* .kpi-grid — глобальный (styles.scss); здесь только «не растягиваться» */
       .kpi-grid {
@@ -398,30 +497,34 @@ interface Group {
        */
       .content {
         display: grid;
-        grid-template-columns: 1fr;
+        grid-template-columns: minmax(0, 1fr);
         gap: 16px;
         align-items: start;
-        flex: 1;
-        min-height: 0;
-        overflow: auto;
+        flex: 0 0 auto;
+        min-width: 0;
       }
       @media (min-width: 960px) {
         .content {
-          grid-template-columns: 2fr 1fr;
+          grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
         }
       }
       .tables {
+        min-width: 0;
         display: flex;
         flex-direction: column;
         gap: 16px;
       }
       .group {
+        min-width: 0;
         padding: 8px 8px 0;
       }
       .group-head {
         display: flex;
         justify-content: space-between;
         align-items: baseline;
+        flex-wrap: wrap;
+        gap: 8px;
+        overflow-wrap: anywhere;
         padding: 8px 8px 0;
       }
       .group-head h3 {
@@ -436,8 +539,40 @@ interface Group {
         font-size: 12px;
         color: var(--app-text-muted);
       }
+      .pnl-details summary { cursor: pointer; }
+      .pnl-details dl { font-size: 12px; color: var(--app-text-muted); }
+      .pnl-details dd { margin: 0 0 6px; }
+      .table-scroll {
+        max-width: 100%;
+        overflow-x: auto;
+      }
       table {
         width: 100%;
+        min-width: 840px;
+      }
+      th,
+      td {
+        white-space: nowrap;
+      }
+      .position-context,
+      .freshness {
+        display: block;
+        white-space: normal;
+        overflow-wrap: anywhere;
+        color: var(--app-text-muted);
+        font-size: 12px;
+        line-height: 1.4;
+      }
+      .position-context {
+        width: 180px;
+      }
+      .freshness {
+        width: 145px;
+      }
+      td small {
+        display: block;
+        white-space: normal;
+        max-width: 200px;
       }
       /* .chart-box и .error — глобальные (styles.scss) */
     `,
@@ -451,13 +586,28 @@ export class PortfolioPage {
   private readonly toast = inject(ToastService);
 
   protected readonly refreshing = signal(false);
+  protected readonly refreshError = signal(false);
+  protected readonly refreshResult = signal<QuoteRefreshResult | null>(null);
+  protected readonly refreshMessage = computed(() => {
+    const result = this.refreshResult();
+    if (!result) return '';
+    if (result.total === 0) return 'Нет инструментов для автообновления';
+    if (result.updated === 0) return `Не получено ни одной цены из ${result.total}`;
+    if (result.updated === result.total)
+      return `Котировки обновлены: ${result.updated} из ${result.total}`;
+    return `Обновлено ${result.updated} из ${result.total}`;
+  });
+
+  protected resetFilters(): void {
+    this.systemFilter.set(null);
+    this.portfolioFilter.set(null);
+  }
 
   /**
    * «Тек. цена» раньше показывала значение с последнего клика «Обновить цены» —
    * могло быть старым, если давно не нажимали. При каждом открытии страницы тихо
-   * освежаем котировки сами; если провайдер недоступен для инструмента (см.
-   * QuotesService.refreshAll — молча пропускает null), в quotes остаётся прежняя
-   * цена — тот самый безопасный fallback «нет свежей — берём ту, что уже есть».
+   * освежаем котировки сами. Результат попытки показываем отдельно; при отказе
+   * провайдера остаются прежние цена и дата получения.
    */
   constructor() {
     void this.refresh();
@@ -502,10 +652,12 @@ export class PortfolioPage {
     portfolioId: this.portfolioFilter() ?? undefined,
   }));
 
-  private readonly summary = summaryResource(this.summaryFilter);
+  protected readonly summary = summaryResource(this.summaryFilter);
 
   /** Все позиции из API */
-  private readonly allPositions = computed(() => this.positionApi.positions.value() ?? []);
+  protected readonly allPositions = computed(() =>
+    this.positionApi.positions.hasValue() ? this.positionApi.positions.value() : [],
+  );
 
   /** Позиции после применения фильтров по системе/портфелю */
   protected readonly positions = computed(() => {
@@ -521,11 +673,23 @@ export class PortfolioPage {
    * (в файле система с портфелем читаются человеком, id там бесполезен).
    */
   private readonly systemNames = computed(
-    () => new Map((this.reference.systems.value() ?? []).map((s) => [s.id, s.name])),
+    () =>
+      new Map(
+        (this.reference.systems.hasValue() ? this.reference.systems.value() : []).map((s) => [
+          s.id,
+          s.name,
+        ]),
+      ),
   );
 
   private readonly portfolioNames = computed(
-    () => new Map((this.reference.portfolios.value() ?? []).map((p) => [p.id, p.name])),
+    () =>
+      new Map(
+        (this.reference.portfolios.hasValue() ? this.reference.portfolios.value() : []).map((p) => [
+          p.id,
+          p.name,
+        ]),
+      ),
   );
 
   /** Опции фильтров — только системы/портфели, которые реально встречаются в позициях */
@@ -554,6 +718,8 @@ export class PortfolioPage {
   protected readonly groups = computed<Group[]>(() => {
     const byType = new Map<InstrumentType, Row[]>();
     const valueByType = new Map<InstrumentType, number>();
+    const missingByType = new Map<InstrumentType, number>();
+    const valuedByType = new Map<InstrumentType, number>();
 
     for (const p of this.positions()) {
       const rows = byType.get(p.type) ?? [];
@@ -567,17 +733,40 @@ export class PortfolioPage {
         // средняя — в валюте СДЕЛОК, текущая цена — в валюте КОТИРОВКИ: у замещающих
         // облигаций это разные валюты (покупка за рубли, номинал в долларах), и
         // подписывать обе валютой инструмента значило показывать рубли со знаком $
-        avg: formatMoney(p.avgBuyPrice, p.avgPriceCurrency),
+        avg: formatPrice(p.avgBuyPrice, p.avgPriceCurrency),
         avgRaw: p.avgBuyPrice,
-        current: p.currentPrice ? formatMoney(p.currentPrice, p.priceCurrency ?? p.currency) : '—',
+        avgPriceCurrency: p.avgPriceCurrency,
+        priceCurrency: p.priceCurrency,
+        realized: formatMoney(p.realizedPnlRub),
+        unrealized: formatMoney(p.unrealizedPnlRub),
+        payouts: formatMoney(new Decimal(p.dividendsRub).plus(p.couponsRub).toFixed(2)),
+        manual: p.marketSource === 'manual',
+        currentRaw: p.currentPrice,
+        context: `${this.systemNames().get(p.systemId) ?? p.systemId} · ${this.portfolioNames().get(p.portfolioId) ?? p.portfolioId}`,
+        freshness: p.priceSource === 'broker-report' && p.quoteDate
+          ? `Цена по отчёту за ${p.quoteDate}`
+          : p.priceAsOf
+          ? `${p.priceSource === 'manual' ? 'Введено' : 'Получено'} ${new Date(p.priceAsOf).toLocaleString('ru-RU')}`
+          : p.quoteDate
+            ? `Котировка за ${p.quoteDate}`
+            : null,
+        current: p.currentPrice ? formatPrice(p.currentPrice, p.priceCurrency ?? p.currency) : '—',
         accrued: p.accruedInterestRub ? formatMoney(p.accruedInterestRub, 'RUB') : '—',
-        value: p.currentValueRub ? formatMoney(p.currentValueRub, 'RUB') : '—',
+        value: formatMoney(p.currentValueRub, 'RUB'),
+        valuationIssue: p.valuationIssue,
         pnl: p.pnlRub ? formatMoney(p.pnlRub, 'RUB') : '—',
         pnlClass: p.pnlRub ? pnlColorClass(p.pnlRub) : 'pnl-zero',
         suspicious: p.currentPrice === null && Number(p.quantity) !== 0,
       });
       byType.set(p.type, rows);
-      valueByType.set(p.type, (valueByType.get(p.type) ?? 0) + Number(p.currentValueRub ?? 0));
+      if (Number(p.quantity) !== 0) {
+        if (p.currentValueRub === null) {
+          missingByType.set(p.type, (missingByType.get(p.type) ?? 0) + 1);
+        } else {
+          valuedByType.set(p.type, (valuedByType.get(p.type) ?? 0) + 1);
+          valueByType.set(p.type, (valueByType.get(p.type) ?? 0) + Number(p.currentValueRub));
+        }
+      }
     }
 
     return TYPE_ORDER.filter((t) => byType.has(t)).map((t) => {
@@ -586,7 +775,11 @@ export class PortfolioPage {
         type: t,
         label: TYPE_LABEL[t],
         rows,
-        valueRub: valueByType.get(t) ?? 0,
+        valueRub:
+          (missingByType.get(t) ?? 0) > 0 && !valuedByType.has(t)
+            ? null
+            : (valueByType.get(t) ?? 0),
+        unvaluedPositionCount: missingByType.get(t) ?? 0,
         // колонку НКД показываем, только если он реально есть хоть у одной бумаги
         // группы, — по факту данных, а не по типу инструмента
         columns: rows.some((r) => r.accrued !== '—') ? COLUMNS_WITH_ACCRUED : COLUMNS,
@@ -599,10 +792,17 @@ export class PortfolioPage {
    * Фьючерсы в диаграмму не входят: их «стоимость» — нереализованный результат (может
    * быть отрицательной), а не доля капитала, и сектор круга для неё не имеет смысла.
    */
+  protected readonly allocationEmptyTitle = computed(() => {
+    const eligible = this.positions().filter((p) => p.type !== 'Future' && Number(p.quantity) !== 0);
+    if (eligible.length === 0) return 'Нет активов для распределения';
+    if (eligible.some((p) => p.currentValueRub === null)) return 'Оценка активов недоступна';
+    return 'Нет положительной стоимости для распределения';
+  });
+
   protected readonly allocation = computed(() =>
     this.groups()
-      .filter((g) => g.type !== 'Future')
-      .map((g) => ({ label: g.label, valueRub: g.valueRub, color: TYPE_COLOR[g.type] })),
+      .filter((g) => g.type !== 'Future' && g.valueRub !== null)
+      .map((g) => ({ label: g.label, valueRub: g.valueRub as number, color: TYPE_COLOR[g.type] })),
   );
 
   /**
@@ -613,13 +813,17 @@ export class PortfolioPage {
    * Раньше это расходилось с дашбордом ровно на величину реализованного P&L
    * (напр. −84 248,81 ₽ здесь против −45 915,13 ₽ на дашборде для тех же данных).
    */
-  private readonly totals = computed(() => this.summary.value()?.totals);
+  private readonly totals = computed(() =>
+    this.summary.hasValue() ? this.summary.value().totals : undefined,
+  );
 
   protected readonly investedTotal = computed(() => formatRub(this.totals()?.investedRub));
 
-  protected readonly valueTotal = computed(() => formatRub(this.totals()?.currentValueRub));
+  protected readonly valueTotal = computed(() =>
+    formatValuation(this.totals()?.currentValueRub, this.totals()?.unvaluedPositionCount ?? 0),
+  );
 
-  protected readonly pnlTotalRaw = computed(() => this.totals()?.pnlRub ?? 0);
+  protected readonly pnlTotalRaw = computed(() => this.totals()?.pnlRub ?? null);
 
   protected readonly pnlTotal = computed(() => formatRub(this.pnlTotalRaw()));
 
@@ -628,6 +832,7 @@ export class PortfolioPage {
   protected readonly dividendsTotal = computed(() => formatRub(this.totals()?.dividendsRub));
 
   protected readonly money = formatRub;
+  protected readonly valuation = formatValuation;
 
   /**
    * Позиции для выгрузки в том же порядке, в каком они на экране: сортировка по
@@ -731,7 +936,11 @@ export class PortfolioPage {
     });
     const result = await firstValueFrom(ref.afterClosed());
     if (!result) return;
-    await this.reference.mergeInstruments(row.instrumentId, result.targetId, result.confirmWarnings);
+    await this.reference.mergeInstruments(
+      row.instrumentId,
+      result.targetId,
+      result.confirmWarnings,
+    );
   }
 
   /**
@@ -744,8 +953,11 @@ export class PortfolioPage {
       autoFocus: false,
       data: {
         ticker: row.ticker,
-        currency: row.currency,
+        currency: row.type === 'Future' ? 'RUB' : row.currency,
+        avgPriceCurrency: row.avgPriceCurrency,
+        priceCurrency: row.priceCurrency,
         avgBuyPrice: row.avgRaw,
+        currentPrice: row.currentRaw,
         perContract: row.type === 'Future',
       },
     });
@@ -755,9 +967,14 @@ export class PortfolioPage {
   }
 
   protected async refresh(): Promise<void> {
+    if (this.refreshing()) return;
     this.refreshing.set(true);
+    this.refreshError.set(false);
     try {
-      await this.api.refreshQuotes();
+      this.refreshResult.set(await this.api.refreshQuotes());
+    } catch {
+      this.refreshResult.set(null);
+      this.refreshError.set(true);
     } finally {
       this.refreshing.set(false);
     }
