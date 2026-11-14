@@ -2,7 +2,7 @@ import { defineConfig } from 'vitest/config';
 
 /**
  * Юнит-тесты бэкенда (CLAUDE.md §10). Нужны для кода, который не может жить в
- * `libs/core` из-за Node-зависимостей: парсер xlsx-отчёта (exceljs) и
+ * `libs/core` из-за Node-зависимостей: работа с базой данных и
  * оркестрация синхронизации с T-Invest API.
  *
  * `@core` резолвим вручную — vitest не читает пути из tsconfig.base.json.

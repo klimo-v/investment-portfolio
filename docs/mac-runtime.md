@@ -30,7 +30,7 @@ launcher и npm-пакеты с лицензиями. Около 243 МБ. Пе�
 
 Nx явно оставляет npm-зависимости внешними (`externalDependencies: 'all'`).
 Скрипт извлекает фактические external require из собранного webpack-файла,
-включая `@fastify/static`, `exceljs`, `tslib` и `better-sqlite3`, и копирует
+включая `@fastify/static`, `tslib` и `better-sqlite3`, и копирует
 транзитивные dependencies, установленные optional dependencies и peers.
 Опциональные Nest-адаптеры, которые не используются, не устанавливаются.
 Дерево сохраняет раздельные версии пакетов pnpm, ссылки ведут только внутрь

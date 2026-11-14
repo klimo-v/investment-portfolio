@@ -11,8 +11,8 @@ import { registerDataHttp } from './data-management/data-http';
 import { DataGateInterceptor } from './data-management/data-gate';
 
 /**
- * Импорт брокерских отчётов приходит одним JSON-телом, xlsx — внутри него в
- * base64 (import.service.ts), поэтому дефолтного лимита Fastify в 1 МиБ не
+ * Импорт текстовых брокерских отчётов приходит одним JSON-телом,
+ * поэтому дефолтного лимита Fastify в 1 МиБ не
  * хватает: отчёт за год его перебирает.
  */
 const BODY_LIMIT = 25 * 1024 * 1024;

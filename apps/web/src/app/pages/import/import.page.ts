@@ -26,7 +26,7 @@ export type ImportSource = 'file' | 'tbank';
 /**
  * Период синхронизации по умолчанию. Начало — СЛЕДУЮЩИЙ день после последней
  * операции в журнале: у выплат (дивиденды, купоны) номер операции в API и в
- * xlsx-отчёте разный, поэтому пересечение периодов дедупликация по `brokerRef`
+ * ранее загруженном отчёте разный, поэтому пересечение периодов дедупликация по `brokerRef`
  * не поймает — его проще не создавать. Пустой журнал → последние 90 дней.
  *
  * Чистая функция: «сегодня» приходит аргументом, а не берётся из new Date()
@@ -52,11 +52,10 @@ export function defaultSyncRange(
 
 /**
  * Страница «Импорт» (docs/03-ux-plan.md, шаг 5).
- * CSV, HTML- или xlsx-отчёт брокера либо прямая выгрузка из T-Invest API →
+ * CSV, HTML-отчёт брокера либо прямая выгрузка из T-Invest API →
  * предпросмотр с подсветкой → импорт → откат. Оба источника дают одни и те же
  * строки на бэке, поэтому вся разметка и весь предпросмотр ниже — общие.
  * Портфель и система задаются на весь батч (в данных брокера их нет).
- * xlsx — бинарный формат, читается как base64 (в отличие от CSV/HTML — текст).
  */
 @Component({
   selector: 'app-import-page',
@@ -91,10 +90,10 @@ export function defaultSyncRange(
 
       @if (source() === 'file') {
         <p>
-          Загрузите <b>CSV</b>, <b>HTML-отчёт брокера</b> или <b>xlsx-отчёт Т-Банка</b>.
+          Загрузите <b>CSV</b> или <b>HTML-отчёт брокера</b>.
           Для CSV колонки: Дата, Система, Тикер, Валюта, Брокер, Тип сделки, Между
           портфелями, Количество, Цена, Комиссия, Курс к RUB, Примечание. Формат
-          HTML/xlsx-отчёта распознаётся автоматически.
+          HTML-отчёта распознаётся автоматически.
         </p>
         <!--
           Голый <input type="file"> не имел ни подписи, ни aria-label: скринридер
@@ -107,7 +106,7 @@ export function defaultSyncRange(
           id="import-file"
           class="file-input"
           type="file"
-          accept=".csv,.html,.htm,.xlsx,text/csv,text/html,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+          accept=".csv,.html,.htm,text/csv,text/html"
           (change)="onFile($event)"
         />
         <label class="file-picker" for="import-file">
@@ -124,7 +123,7 @@ export function defaultSyncRange(
         <p>
           Операции берутся напрямую из T-Invest API по токену <b>только для чтения</b>:
           приложение читает историю счёта и не может выставлять заявки. Сделки, уже
-          загруженные из xlsx-отчёта, распознаются как дубли по номеру сделки.
+          загруженные из отчёта, распознаются как дубли по номеру сделки.
         </p>
 
         <div class="batch">
@@ -538,7 +537,7 @@ export class ImportPage {
   /**
    * Id файла, уже распарсенного бэком (из ответа preview()). Пока он есть,
    * правки батч-разметки/тикер-выбора шлют его вместо содержимого файла —
-   * иначе для большого xlsx-отчёта каждый чих пересылал бы весь файл заново
+   * иначе каждая правка пересылала бы весь файл заново
    * и заново гонял бы его через парсер (docs/04-roadmap.md §3.1).
    */
   private uploadId: string | undefined;
@@ -617,30 +616,21 @@ export class ImportPage {
     const file = input.files?.[0];
     if (!file) return;
 
+    if (!/\.(csv|html?)$/i.test(file.name)) {
+      this.errorMessage.set('Неподдерживаемый формат отчёта. Используйте CSV или HTML.');
+      input.value = '';
+      return;
+    }
     this.fileName.set(file.name);
-    const format: ImportFormat = /\.xlsx$/i.test(file.name)
-      ? 'xlsx'
-      : /\.html?$/i.test(file.name)
-        ? 'html'
-        : 'csv';
+    const format: ImportFormat = /\.html?$/i.test(file.name) ? 'html' : 'csv';
     this.format.set(format);
 
     const reader = new FileReader();
-    if (format === 'xlsx') {
-      // xlsx — бинарный формат, передаём на бэк как base64 (data URL без префикса)
-      reader.onload = () => {
-        const dataUrl = String(reader.result ?? '');
-        this.fileContent = dataUrl.slice(dataUrl.indexOf(',') + 1);
-        this.tryPreview();
-      };
-      reader.readAsDataURL(file);
-    } else {
-      reader.onload = () => {
-        this.fileContent = String(reader.result ?? '');
-        this.tryPreview();
-      };
-      reader.readAsText(file, 'utf-8');
-    }
+    reader.onload = () => {
+      this.fileContent = String(reader.result ?? '');
+      this.tryPreview();
+    };
+    reader.readAsText(file, 'utf-8');
   }
 
   protected setPortfolio(id: string): void {

@@ -81,7 +81,7 @@ export interface AnnotationPreview {
   summary: { total: number; matched: number; error: number };
 }
 
-export type ImportFormat = 'csv' | 'html' | 'xlsx';
+export type ImportFormat = 'csv' | 'html';
 
 /**
  * Разметка на весь батч: формат файла + портфель/система (для отчётов брокеров).
@@ -104,7 +104,7 @@ export interface ImportOptions {
  * Что переслать на бэк: либо `content` (первый вызов на файл), либо `uploadId`
  * из ответа предыдущего preview() — тогда бэк переиспользует уже распарсенные
  * строки вместо повторной пересылки/разбора всего файла (важно для больших
- * xlsx-отчётов: правка портфеля/системы/тикер-выбора иначе гоняла бы файл целиком
+ * отчётов: правка портфеля/системы/тикер-выбора иначе гоняла бы файл целиком
  * на каждый чих).
  */
 export type ImportRequest = { content?: string; uploadId?: string } & ImportOptions;

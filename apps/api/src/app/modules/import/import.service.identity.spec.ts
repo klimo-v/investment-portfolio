@@ -15,7 +15,7 @@ import {
   systems,
 } from '../../../db/schema';
 import { InstrumentIdentityService } from '../instruments/instrument-identity.service';
-import { ImportService } from './import.service';
+import { ImportService, type ImportFormat } from './import.service';
 
 /**
  * Идентичность инструментов при импорте: один актив из разных источников не заводит
@@ -172,5 +172,13 @@ describe('слияние инструментов', () => {
     const dups = identity.possibleDuplicates();
     expect(dups).toHaveLength(1);
     expect(dups[0]).toMatchObject({ sourceId: 'TMON@', targetId: 'TMON', deterministic: true });
+  });
+});
+
+describe('форматы файлового импорта', () => {
+  it.each(['xlsx', 'pdf', 'xml'])('отклоняет неподдерживаемый формат %s без записи операций', async (format) => {
+    await expect(service.preview({ content: 'unsupported', format: format as ImportFormat }))
+      .rejects.toThrow('Неподдерживаемый формат отчёта');
+    expect(db.select().from(operations).all()).toHaveLength(0);
   });
 });

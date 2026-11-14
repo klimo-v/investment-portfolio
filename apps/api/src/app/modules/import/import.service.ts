@@ -2,7 +2,6 @@ import { dataGate } from '../../../data-management/data-gate';
 import { randomUUID } from 'node:crypto';
 import { BadRequestException, Inject, Injectable } from '@nestjs/common';
 import { and, desc, eq, isNull, lte, notLike, or } from 'drizzle-orm';
-import ExcelJS from 'exceljs';
 import {
   attachParentFees,
   expandForeignCash,
@@ -41,7 +40,6 @@ import { DB } from '../../db/drizzle.module';
 import { InstrumentIdentityService } from '../instruments/instrument-identity.service';
 import { recordPrice } from '../../../db/price-history-store';
 import { parseCsv } from './csv-parser';
-import { parseTbankXlsx } from './tbank-xlsx-report';
 
 /** Результат разбора файла, лежащий в кэше загрузок */
 interface ParsedUpload {
@@ -96,7 +94,7 @@ export interface PreviewResult {
 }
 
 /** Формат исходного файла (Factory: новый брокер = новый парсер, OCP) */
-export type ImportFormat = 'csv' | 'html' | 'xlsx';
+export type ImportFormat = 'csv' | 'html';
 
 /**
  * Параметры импорта. systemId/portfolioId — разметка на весь батч: в отчётах
@@ -125,11 +123,10 @@ export interface ImportOptions {
 
 /**
  * Вход preview()/commit(). Первый вызов для файла обязан передать `content`
- * (весь файл — CSV/HTML текстом, xlsx base64). Каждая правка батч-разметки или
+ * (весь файл — CSV/HTML текстом). Каждая правка батч-разметки или
  * точечного выбора системы по тикеру (docs/04-roadmap.md §3.1) заново вызывает
- * preview(), но НЕ должна пересылать и заново парсить весь файл — при большом
- * xlsx-отчёте (Т-Банк, тысячи строк) это и лишний трафик, и лишний CPU на
- * повторный разбор rich-text ячеек. Вместо этого передаётся `uploadId` из
+ * preview(), но НЕ должна пересылать и заново парсить весь файл.
+ * Вместо этого передаётся `uploadId` из
  * ответа первого preview() — сырые строки уже лежат в кэше `uploads`.
  */
 export interface ImportInput extends ImportOptions {
@@ -361,28 +358,11 @@ export class ImportService {
     this.db.update(portfolios).set({ accountRef }).where(eq(portfolios.id, portfolioId)).run();
   }
 
-  /**
-   * Разбор исходного файла нужным парсером (Factory: формат → парсер). xlsx —
-   * бинарный формат, `content` для него — base64 (CSV/HTML передаются текстом).
-   */
+  /** Разбор текстового отчёта поддерживаемого формата. */
   private async parseFile(content: string, format: ImportFormat = 'csv'): Promise<ParsedUpload> {
-    if (format === 'xlsx') {
-      const workbook = new ExcelJS.Workbook();
-      // exceljs резолвит собственную (более старую) версию @types/node с иначе
-      // параметризованным Buffer — структурно несовместимо на уровне типов,
-      // хотя рантайм-объект тот же самый Buffer.
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const buf = Buffer.from(content, 'base64') as any;
-      // ignoreNodes: реальный отчёт Т-Банка (1200+ строк) разбирался ~30 секунд —
-      // весь разбор уходил на парсинг диапазонов mergeCells; сами значения ячеек
-      // хранятся отдельно от merge-разметки, поэтому её пропуск не меняет
-      // результат (проверено побайтовым сравнением), а разбор занимает ~200мс.
-      await workbook.xlsx.load(buf, { ignoreNodes: ['mergeCells'] });
-      const ws = workbook.worksheets[0];
-      return { rows: ws ? parseTbankXlsx(ws) : [], marks: [], settlements: [] };
-    }
     if (format === 'html') return parseBrokerHtmlReportWithMarks(content);
-    return { rows: parseCsv(content), marks: [], settlements: [] };
+    if (format === 'csv') return { rows: parseCsv(content), marks: [], settlements: [] };
+    throw new BadRequestException('Неподдерживаемый формат отчёта. Используйте CSV или HTML.');
   }
 
   /** Существующие операции по ключу дедупликации (чтобы не задвоить и находить кандидатов на обновление) */
