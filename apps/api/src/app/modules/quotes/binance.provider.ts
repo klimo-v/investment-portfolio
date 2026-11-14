@@ -24,16 +24,18 @@ export class BinanceProvider implements PriceProvider {
       return { ticker, price: '1', currency: 'USD', source: 'binance', asOf };
     }
 
-    try {
-      const res = await fetchWithTimeout(
-        `https://api.binance.com/api/v3/ticker/price?symbol=${encodeURIComponent(base + 'USDT')}`,
-      );
-      if (!res.ok) return null;
-      const json = (await res.json()) as { price?: string };
-      if (!json.price) return null;
-      return { ticker, price: json.price, currency: 'USD', source: 'binance', asOf };
-    } catch {
-      return null;
-    }
+    const res = await fetchWithTimeout(
+      `https://api.binance.com/api/v3/ticker/price?symbol=${encodeURIComponent(base + 'USDT')}`,
+    );
+    if (!res.ok) throw new Error(`Binance: HTTP ${res.status}`);
+    const json = (await res.json()) as { price?: string };
+    if (!json.price) return null;
+    return {
+      ticker,
+      price: json.price,
+      currency: 'USD',
+      source: 'binance',
+      asOf: new Date().toISOString(),
+    };
   }
 }

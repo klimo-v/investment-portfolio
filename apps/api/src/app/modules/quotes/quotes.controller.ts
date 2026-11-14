@@ -1,3 +1,4 @@
+import type { QuoteRefreshResult } from '@core';
 import { Body, Controller, Get, Param, Post } from '@nestjs/common';
 import type { QuoteRow } from '../../../db/schema';
 import { QuotesService } from './quotes.service';
@@ -14,7 +15,7 @@ export class QuotesController {
 
   /** Обновить цены по всем инструментам (кнопка «Обновить цены» на фронте) */
   @Post('refresh')
-  refresh(): Promise<{ updated: number; total: number }> {
+  refresh(): Promise<QuoteRefreshResult> {
     return this.service.refreshAll();
   }
 
@@ -26,7 +27,9 @@ export class QuotesController {
 
   /** Найти цену через провайдеры (MOEX/Binance) для инструмента без источника */
   @Post(':instrumentId/resolve')
-  resolveViaApi(@Param('instrumentId') instrumentId: string): Promise<{ price: string; source: string }> {
+  resolveViaApi(
+    @Param('instrumentId') instrumentId: string,
+  ): Promise<{ price: string; source: string }> {
     return this.service.resolveViaApi(instrumentId);
   }
 }

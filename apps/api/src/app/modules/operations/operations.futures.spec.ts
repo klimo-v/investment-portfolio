@@ -84,7 +84,7 @@ describe('OperationsService — фьючерсы', () => {
 
   it('positions(): шорт −128, средняя 12 420,50, «вложено» 0, стоимость = нереализованный (+4 288)', async () => {
     const [p] = await service.positions();
-    expect(p).toMatchObject({ ticker: 'CNY-12.26', type: 'Future', quantity: '-128', avgBuyPrice: '12420.50', investedRub: '0.00' });
+    expect(p).toMatchObject({ ticker: 'CNY-12.26', type: 'Future', quantity: '-128', avgBuyPrice: '12420.5', investedRub: '0.00' });
     expect(Number(p.currentValueRub)).toBeCloseTo(4288, 0);
     expect(p.currentPrice).toBe('12387');
     expect(p.priceCurrency).toBe('RUB');

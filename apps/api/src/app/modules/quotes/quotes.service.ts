@@ -9,7 +9,7 @@ import { CbrProvider } from './cbr.provider';
 import { BinanceProvider } from './binance.provider';
 import type { PriceProvider } from './price-provider';
 import { PriceHistoryService } from './price-history.service';
-import { fxInstrumentId, type PriceSource } from '@core';
+import { fxInstrumentId, type PriceSource, type QuoteRefreshResult } from '@core';
 
 /**
  * Сервис котировок (CLAUDE.md §7: Facade над провайдерами).
@@ -39,11 +39,6 @@ export class QuotesService {
     return this.db.select().from(quotes).all();
   }
 
-  /** Курс валюты к RUB (для пересчёта стоимости валютных позиций) */
-  async getFxRate(currency: string): Promise<number> {
-    return this.cbr.getRate(currency);
-  }
-
   /** Курс валюты или null, если ЦЕНТРОБАНК недоступен/валюты нет (без подмены единицей) */
   async getFxRateOrNull(currency: string): Promise<number | null> {
     return this.cbr.getRateOrNull(currency);
@@ -53,14 +48,17 @@ export class QuotesService {
    * Цена дня в историю цен — «снимок», но ФАКТА (цена и НКД), а не посчитанного итога:
    * из истории любые ряды пересчитываются, и правка журнала задним числом ничего не портит.
    */
-  private recordHistory(instrumentId: string, row: {
-    price: string;
-    currency: string;
-    accruedInterest: string | null;
-    accruedCurrency: string | null;
-    source: PriceSource;
-    asOf: string;
-  }): void {
+  private recordHistory(
+    instrumentId: string,
+    row: {
+      price: string;
+      currency: string;
+      accruedInterest: string | null;
+      accruedCurrency: string | null;
+      source: PriceSource;
+      asOf: string;
+    },
+  ): void {
     this.history.record(instrumentId, {
       date: row.asOf.slice(0, 10),
       price: row.price,
@@ -96,16 +94,34 @@ export class QuotesService {
    * Обновить цены по всем инструментам из справочника.
    * Возвращает количество успешно обновлённых.
    */
-  async refreshAll(): Promise<{ updated: number; total: number }> {
+  async refreshAll(): Promise<QuoteRefreshResult> {
     const instrumentRows = this.db.select().from(instruments).all();
     let updated = 0;
+    let total = 0;
+    let skippedManual = 0;
+    const failures: QuoteRefreshResult['failures'] = [];
     const currencies = new Set<string>();
 
     for (const inst of instrumentRows) {
+      if (inst.marketSource === 'manual') {
+        skippedManual++;
+        continue;
+      }
+      total++;
       const provider = this.providers.find((p) => p.supports(inst.marketSource));
-      if (!provider) continue; // manual — цену задаём вручную
-      const quote = await provider.getQuote(inst.ticker);
-      if (!quote) continue;
+      let quote;
+      try {
+        if (!provider) throw new Error('Источник не поддерживает обновление цены');
+        quote = await provider.getQuote(inst.ticker);
+        if (!quote) throw new Error('Источник не вернул цену');
+      } catch (error) {
+        failures.push({
+          ticker: inst.ticker,
+          source: inst.marketSource,
+          reason: error instanceof Error ? error.message : 'Не удалось получить цену',
+        });
+        continue;
+      }
 
       /*
        * Валюта — та, в которой цену отдал источник, и только при её отсутствии
@@ -119,7 +135,8 @@ export class QuotesService {
       const currency = quote.currency || inst.currency;
       const accruedInterest = quote.accruedInterest ?? null;
       // валюта НКД своя (см. quotes.accruedCurrency); нет НКД — нет и валюты
-      const accruedCurrency = accruedInterest === null ? null : quote.accruedInterestCurrency ?? currency;
+      const accruedCurrency =
+        accruedInterest === null ? null : (quote.accruedInterestCurrency ?? currency);
 
       this.db
         .insert(quotes)
@@ -136,7 +153,14 @@ export class QuotesService {
           target: quotes.instrumentId,
           // accruedInterest перезаписываем всегда, в том числе в null: после выплаты
           // купона НКД обнуляется, и «прилипший» прошлый завышал бы стоимость
-          set: { price: quote.price, currency, accruedInterest, accruedCurrency, asOf: quote.asOf },
+          set: {
+            price: quote.price,
+            currency,
+            accruedInterest,
+            accruedCurrency,
+            source: quote.source,
+            asOf: quote.asOf,
+          },
         })
         .run();
       this.recordHistory(inst.id, {
@@ -153,7 +177,7 @@ export class QuotesService {
     }
     await this.recordFxToday(currencies);
 
-    return { updated, total: instrumentRows.length };
+    return { updated, total, skippedManual, failures };
   }
 
   /**
@@ -177,14 +201,15 @@ export class QuotesService {
     }
 
     const asOf = new Date().toISOString();
-    // ручная цена — всегда в валюте инструмента (пользователь вводит её, глядя на
-    // среднюю); НКД для неё неоткуда взять, поэтому явно сбрасываем в null
+    const currency = inst.type === 'Future' ? 'RUB' : inst.currency;
+    // Ручная цена — в валюте инструмента, у фьючерса в ₽ за контракт.
+    // НКД для неё неоткуда взять, поэтому явно сбрасываем в null.
     this.db
       .insert(quotes)
       .values({
         instrumentId,
         price,
-        currency: inst.currency,
+        currency,
         accruedInterest: null,
         accruedCurrency: null,
         source: 'manual',
@@ -194,7 +219,7 @@ export class QuotesService {
         target: quotes.instrumentId,
         set: {
           price,
-          currency: inst.currency,
+          currency,
           accruedInterest: null,
           accruedCurrency: null,
           source: 'manual',
@@ -205,7 +230,7 @@ export class QuotesService {
 
     this.recordHistory(instrumentId, {
       price,
-      currency: inst.currency,
+      currency,
       accruedInterest: null,
       accruedCurrency: null,
       source: 'manual',
@@ -236,15 +261,21 @@ export class QuotesService {
     }
 
     for (const provider of this.providers) {
-      const quote = await provider.getQuote(inst.ticker);
+      // Неудача одной площадки не мешает поиску на следующей.
+      const quote = await provider.getQuote(inst.ticker).catch(() => null);
       if (!quote) continue;
 
       // валюта и НКД — от источника, как и в refreshAll()
       const currency = quote.currency || inst.currency;
       const accruedInterest = quote.accruedInterest ?? null;
-      const accruedCurrency = accruedInterest === null ? null : quote.accruedInterestCurrency ?? currency;
+      const accruedCurrency =
+        accruedInterest === null ? null : (quote.accruedInterestCurrency ?? currency);
 
-      this.db.update(instruments).set({ marketSource: quote.source }).where(eq(instruments.id, instrumentId)).run();
+      this.db
+        .update(instruments)
+        .set({ marketSource: quote.source })
+        .where(eq(instruments.id, instrumentId))
+        .run();
       this.db
         .insert(quotes)
         .values({

@@ -174,6 +174,15 @@ export const SettlementCheckSchema = z.object({
 });
 export type SettlementCheckDto = z.infer<typeof SettlementCheckSchema>;
 
+/** Результат обновления: total — только автоматические инструменты. */
+export const QuoteRefreshResultSchema = z.object({
+  total: z.number().int().nonnegative(),
+  updated: z.number().int().nonnegative(),
+  skippedManual: z.number().int().nonnegative(),
+  failures: z.array(z.object({ ticker: z.string(), source: z.string(), reason: z.string() })),
+});
+export type QuoteRefreshResult = z.infer<typeof QuoteRefreshResultSchema>;
+
 /** Позиция (вычисляется движком, не вводится руками) */
 export const PositionSchema = z.object({
   instrumentId: z.string(),
@@ -195,6 +204,12 @@ export const PositionSchema = z.object({
    * а покупка прошла в рублях.
    */
   avgPriceCurrency: z.string(),
+  marketSource: z.enum(['moex', 'cbr', 'binance', 'manual']).default('manual'),
+  /** Время получения сохранённой цены, не последней попытки обновления. */
+  priceAsOf: z.string().nullable().default(null),
+  priceSource: z.string().nullable().default(null),
+  /** Дата цены из дневной истории; не время получения. */
+  quoteDate: z.string().nullable().default(null),
   /** «Чистая» цена с биржи — без НКД, как её котирует рынок */
   currentPrice: decimalString.nullable(),
   /**
@@ -203,10 +218,13 @@ export const PositionSchema = z.object({
    * пересчёта в рубли — брать курс валюты инструмента было ошибкой.
    */
   priceCurrency: z.string().nullable(),
-  /** Накопленный купонный доход по всему остатку, в рублях; null — не облигация */
+  /** НКД всего остатка в рублях; null — НКД отсутствует или неизвестен его курс */
   accruedInterestRub: decimalString.nullable(),
   /** Рыночная стоимость остатка: (цена + НКД) × количество × курс */
   currentValueRub: decimalString.nullable(),
+  /** Почему текущая рублёвая оценка недоступна. Исходная цена при этом может быть известна. */
+  valuationIssue: z.string().nullable().default(null),
+  unrealizedPnlRub: decimalString.nullable().default(null),
   pnlRub: decimalString.nullable(), // реализованный + нереализованный + дивиденды/купоны
   /** сверка с ВМ брокера — только у фьючерсов, по которым импортирован отчёт */
   settlementCheck: SettlementCheckSchema.nullable().default(null),
@@ -221,11 +239,14 @@ export type Position = z.infer<typeof PositionSchema>;
  */
 export const EffectivenessSchema = z.object({
   investedRub: z.number(), // вложено = себестоимость держимого остатка (сходится со сделками)
-  currentValueRub: z.number(), // рыночная стоимость остатка на сегодня
+  /** Сумма известных оценок; null — открытые позиции есть, но ни одна не оценена. */
+  currentValueRub: z.number().nullable(),
+  /** Только открытые позиции без полной рублёвой оценки (включая НКД). */
+  unvaluedPositionCount: z.number().int().nonnegative(),
   realizedPnlRub: z.number(), // зафиксированный результат по проданным частям
-  unrealizedPnlRub: z.number(), // бумажная переоценка удерживаемого остатка
+  unrealizedPnlRub: z.number().nullable(), // бумажная переоценка удерживаемого остатка
   dividendsRub: z.number(), // полученные дивиденды + купоны
-  pnlRub: z.number(), // realized + unrealized + dividends
+  pnlRub: z.number().nullable(), // realized + unrealized + dividends
   dividendYieldPct: z.number().nullable(), // dividends / invested, %
 });
 export type Effectiveness = z.infer<typeof EffectivenessSchema>;
@@ -240,7 +261,7 @@ export type Effectiveness = z.infer<typeof EffectivenessSchema>;
  */
 export const CashSchema = z.object({
   cashRub: z.number(), // свободные деньги; отрицательные = журнал неполон (см. cash.ts)
-  totalValueRub: z.number(), // всего в портфеле = стоимость позиций + свободные деньги
+  totalValueRub: z.number(), // известная стоимость позиций + деньги; полнота — totals.unvaluedPositionCount
 });
 export type Cash = z.infer<typeof CashSchema>;
 
@@ -340,6 +361,8 @@ export const TradeSchema = z.object({
   priceCurrency: z.string().nullable(),
   /** рыночная стоимость остатка с учётом НКД */
   currentValueRub: decimalString.nullable(),
+  /** Почему текущая рублёвая оценка недоступна. Исходная цена при этом может быть известна. */
+  valuationIssue: z.string().nullable().default(null),
   pnlRub: decimalString.nullable(), // реализованный + нереализованный + выплаты
   /** направление: у не-фьючерсов всегда Long, у фьючерса — по знаку позиции при открытии */
   direction: z.enum(['Long', 'Short']),

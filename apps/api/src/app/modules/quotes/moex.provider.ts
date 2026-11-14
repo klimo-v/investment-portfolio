@@ -58,20 +58,26 @@ export class MoexProvider implements PriceProvider {
   }
 
   async getQuote(ticker: string): Promise<Quote | null> {
+    let failure: unknown;
     for (const market of MARKETS) {
-      const quote = await this.fetchQuote(market, ticker);
-      if (quote) {
-        return {
-          ticker,
-          price: quote.price,
-          currency: quote.currency,
-          accruedInterest: quote.accruedInterest,
-          accruedInterestCurrency: quote.accruedCurrency,
-          source: 'moex',
-          asOf: new Date().toISOString(),
-        };
+      try {
+        const quote = await this.fetchQuote(market, ticker);
+        if (quote) {
+          return {
+            ticker,
+            price: quote.price,
+            currency: quote.currency,
+            accruedInterest: quote.accruedInterest,
+            accruedInterestCurrency: quote.accruedCurrency,
+            source: 'moex',
+            asOf: new Date().toISOString(),
+          };
+        }
+      } catch (error) {
+        failure = error;
       }
     }
+    if (failure) throw failure;
     return null;
   }
 
@@ -84,13 +90,12 @@ export class MoexProvider implements PriceProvider {
         `&marketdata.columns=${priceColumns}`
       : `iss.only=marketdata&marketdata.columns=${priceColumns}`;
     const url = `https://iss.moex.com/iss/${market}/securities/${encodeURIComponent(ticker)}.json?iss.meta=off&${only}`;
-    try {
-      const res = await fetchWithTimeout(url);
-      if (!res.ok) return null;
-      return parseIssQuote((await res.json()) as IssResponse, isBonds);
-    } catch {
-      return null;
+    const res = await fetchWithTimeout(url);
+    if (!res.ok) {
+      if (res.status === 404) return null;
+      throw new Error(`MOEX: HTTP ${res.status}`);
     }
+    return parseIssQuote((await res.json()) as IssResponse, isBonds);
   }
 }
 
@@ -112,7 +117,11 @@ export interface IssQuote {
 }
 
 /** Значение ячейки ISS, которое можно считать заполненным */
-function cell(section: IssSection | undefined, row: number, column: string): string | number | null {
+function cell(
+  section: IssSection | undefined,
+  row: number,
+  column: string,
+): string | number | null {
   const idx = section?.columns.indexOf(column) ?? -1;
   if (idx < 0) return null;
   const value = section?.data[row]?.[idx];

@@ -59,6 +59,7 @@ export interface ValuedTrade {
   priceCurrency: string | null;
   /** рыночная стоимость остатка; у фьючерса — нереализованный результат */
   currentValueRub: string | null;
+  valuationIssue: string | null;
 }
 
 /**
@@ -194,8 +195,24 @@ export class OperationsService {
    * бы с дневным рядом, у которого последний день — по свежей истории. При равной дате
    * выигрывает котировка (она не старше).
    */
-  private currentQuotes(): Map<string, QuoteRow> {
-    const result = new Map<string, QuoteRow>(this.db.select().from(quotes).all().map((q) => [q.instrumentId, q]));
+  private currentQuotes(): Map<string, QuoteRow & { quoteDate?: string }> {
+    const result = new Map<string, QuoteRow & { quoteDate?: string }>(this.db.select().from(quotes).all().map((q) => [q.instrumentId, q]));
+    // Старые импорты хранили manual и полночь UTC. История подтверждает
+    // происхождение; настоящее время ручного ввода не подменяем датой отчёта.
+    const legacyReports = this.db.all<{ instrument_id: string }>(sql`
+      SELECT q.instrument_id FROM quotes q JOIN price_history h
+        ON h.instrument_id = q.instrument_id AND h.date = substr(q.as_of, 1, 10)
+      WHERE q.source = 'manual' AND h.source = 'broker-report'
+        AND q.as_of = h.date || 'T00:00:00.000Z'
+        AND q.price = h.price AND q.currency = h.currency
+    `);
+    for (const h of legacyReports) {
+      const q = result.get(h.instrument_id);
+      if (q) result.set(h.instrument_id, { ...q, source: 'broker-report' });
+    }
+    for (const [id, q] of result) {
+      if (q.source === 'broker-report') result.set(id, { ...q, quoteDate: q.asOf.slice(0, 10) });
+    }
     const latest = this.db.all<{
       instrument_id: string;
       date: string;
@@ -203,8 +220,9 @@ export class OperationsService {
       currency: string;
       accrued_interest: string | null;
       accrued_currency: string | null;
+      source: string;
     }>(sql`
-      SELECT p.instrument_id, p.date, p.price, p.currency, p.accrued_interest, p.accrued_currency
+      SELECT p.instrument_id, p.date, p.price, p.currency, p.accrued_interest, p.accrued_currency, p.source
       FROM price_history p
       JOIN (SELECT instrument_id, MAX(date) AS d FROM price_history WHERE instrument_id NOT LIKE 'fx:%' GROUP BY instrument_id) m
         ON m.instrument_id = p.instrument_id AND m.d = p.date
@@ -218,11 +236,39 @@ export class OperationsService {
         currency: h.currency,
         accruedInterest: h.accrued_interest,
         accruedCurrency: h.accrued_currency,
-        source: q?.source ?? 'manual',
+        source: h.source === 'broker-report' ? 'broker-report' : 'manual',
         asOf: `${h.date}T00:00:00.000Z`,
+        quoteDate: h.date,
       });
     }
     return result;
+  }
+
+  /** Общая рублёвая оценка котировки и НКД для позиций и сделок. */
+  private async valueQuote(quantity: Decimal, quote: QuoteRow, currency: string) {
+    const priceCurrency = quote.currency || currency;
+    const accruedCurrency = quote.accruedCurrency || priceCurrency;
+    const hasAccrued = quote.accruedInterest !== null && !new Decimal(quote.accruedInterest).isZero();
+    const rate = async (ccy: string) => {
+      if (ccy === 'RUB') return 1;
+      const value = await this.quotesService.getFxRateOrNull(ccy);
+      return value !== null && Number.isFinite(value) && value > 0 ? value : null;
+    };
+    const fx = await rate(priceCurrency);
+    const accruedFx = hasAccrued ? (accruedCurrency === priceCurrency ? fx : await rate(accruedCurrency)) : 1;
+    const valuationIssue = fx === null ? `Нет курса ${priceCurrency}`
+      : accruedFx === null ? `Нет курса ${accruedCurrency} для НКД` : null;
+    return {
+      currentPrice: quote.price,
+      priceCurrency,
+      valuationIssue,
+      currentValueRub: fx === null || accruedFx === null ? null : marketValueRub({
+        quantity, price: quote.price, fxRate: fx,
+        accruedInterest: quote.accruedInterest, accruedFxRate: accruedFx,
+      }).toFixed(2),
+      accruedInterestRub: quote.accruedInterest === null || accruedFx === null ? null
+        : quantity.mul(quote.accruedInterest).mul(accruedFx).toFixed(2),
+    };
   }
 
   /**
@@ -250,55 +296,34 @@ export class OperationsService {
       let accruedInterestRub: string | null = null;
       let currentValueRub: string | null = null;
       let pnlRub: string | null = null;
+      let unrealizedPnlRub: string | null = null;
+      let valuationIssue: string | null = p.quantity.isZero() ? null : 'Нет котировки';
 
       if (quote && isFuture) {
         // фьючерс: «стоимость» = нереализованный результат (расчётная − средняя) × кол-во
         // со знаком; quantity × price для шорта было бы бессмыслицей. Цена в ₽ за контракт.
         currentPrice = quote.price;
         priceCurrency = 'RUB';
+        valuationIssue = null;
         currentValueRub = futureUnrealizedPnl(p, quote.price).toFixed(2);
       } else if (quote) {
         currentPrice = quote.price;
-        // курс берём по валюте КОТИРОВКИ, а не инструмента: у замещающих облигаций
-        // цена приходит в валюте номинала, и они расходятся (см. quotes.currency)
-        priceCurrency = quote.currency || currency;
-        const fx = await this.quotesService.getFxRate(priceCurrency);
-        // у НКД своя валюта: биржа отдаёт его в валюте расчётов режима торгов,
-        // а цену — в валюте номинала (см. quotes.accruedCurrency)
-        const accruedFx =
-          quote.accruedInterest === null
-            ? fx
-            : await this.quotesService.getFxRate(quote.accruedCurrency || priceCurrency);
-
-        currentValueRub = marketValueRub({
-          quantity: p.quantity,
-          price: quote.price,
-          fxRate: fx,
-          accruedInterest: quote.accruedInterest,
-          accruedFxRate: accruedFx,
-        }).toFixed(2);
-        // НКД отдаём отдельно: в «Стоимости» он уже учтён, но без своей колонки
-        // строка выглядела бы как ошибка — стоимость не сходится с ценой × количество
-        if (quote.accruedInterest !== null) {
-          accruedInterestRub = new Decimal(p.quantity)
-            .mul(quote.accruedInterest)
-            .mul(accruedFx)
-            .toFixed(2);
-        }
+        ({ currentPrice, priceCurrency, accruedInterestRub, currentValueRub, valuationIssue } =
+          await this.valueQuote(p.quantity, quote, currency));
       }
-      // P&L считаем, если знаем рыночную стоимость остатка (котировка есть), либо
+      // P&L считаем, если знаем рублёвую стоимость остатка (известны цена и курсы), либо
       // остатка нет вовсе (позиция закрыта, qty=0) — тогда нереализованная часть
-      // тривиально нулевая и цена для неё не нужна. Если позиция ОТКРЫТА и котировки
+      // тривиально нулевая и цена для неё не нужна. Если позиция ОТКРЫТА и оценки
       // нет — итог посчитать нельзя (не с чем сравнить вложенное), оставляем «—»,
       // а не молча показываем ноль вместо «неизвестно».
-      if (quote || p.quantity.isZero()) {
+      if (currentValueRub !== null || p.quantity.isZero()) {
         // реализ. (по проданным частям) + нереализ. (по остатку) + дивиденды/купоны —
         // тот же состав, что и в trades() ниже; раньше здесь не было реализованного
         // P&L, из-за чего закрытая позиция с прибылью только от продажи показывала 0
-        const unrealizedRub = currentValueRub ? Number(currentValueRub) - Number(p.investedRub) : 0;
-        const pnl =
-          Number(p.realizedPnlRub) + unrealizedRub + Number(p.dividendsRub) + Number(p.couponsRub);
-        pnlRub = pnl.toFixed(2);
+        const unrealizedRub = p.quantity.isZero() ? new Decimal(0)
+          : new Decimal(currentValueRub as string).minus(p.investedRub);
+        unrealizedPnlRub = unrealizedRub.toFixed(2);
+        pnlRub = p.realizedPnlRub.plus(unrealizedRub).plus(p.dividendsRub).plus(p.couponsRub).toFixed(2);
       }
 
       result.push({
@@ -309,18 +334,24 @@ export class OperationsService {
         type: instrument?.type ?? 'Stock',
         currency,
         quantity: p.quantity.toString(),
-        avgBuyPrice: p.avgBuyPrice.toFixed(2),
+        avgBuyPrice: p.avgBuyPrice.toFixed(),
         investedCcy: p.investedCcy.toFixed(2),
         investedRub: p.investedRub.toFixed(2),
         realizedPnlRub: p.realizedPnlRub.toFixed(2),
         dividendsRub: p.dividendsRub.toFixed(2),
         couponsRub: p.couponsRub.toFixed(2),
         avgPriceCurrency: p.tradeCurrency || currency,
+        marketSource: instrument?.marketSource ?? 'manual',
+        priceAsOf: quote?.quoteDate ? null : quote?.asOf ?? null,
+        quoteDate: quote?.quoteDate ?? null,
+        priceSource: quote?.source ?? null,
         currentPrice,
         priceCurrency,
         accruedInterestRub,
+        valuationIssue,
         currentValueRub,
         pnlRub,
+        unrealizedPnlRub,
         settlementCheck: this.checkFor(checks, p.portfolioId, p.instrumentId),
       });
     }
@@ -346,17 +377,14 @@ export class OperationsService {
    */
   async trades(): Promise<Trade[]> {
     const instrumentById = new Map(this.db.select().from(instruments).all().map((i) => [i.id, i]));
-    return (await this.valuedTrades()).map(({ trade: t, currentPrice, priceCurrency, currentValueRub }) => {
+    return (await this.valuedTrades()).map(({ trade: t, currentPrice, priceCurrency, currentValueRub, valuationIssue }) => {
       const instrument = instrumentById.get(t.instrumentId);
       const currency = instrument?.currency ?? 'RUB';
       // P&L = реализованный (по проданной части) + нереализованный (по остатку) + выплаты
-      const unrealizedRub = currentValueRub ? Number(currentValueRub) - Number(t.investedRub) : 0;
-      const pnlRub = (
-        Number(t.realizedPnlRub) +
-        unrealizedRub +
-        Number(t.dividendsRub) +
-        Number(t.couponsRub)
-      ).toFixed(2);
+      const unrealizedRub = t.quantity.isZero() ? new Decimal(0)
+        : currentValueRub === null ? null : new Decimal(currentValueRub).minus(t.investedRub);
+      const pnlRub = unrealizedRub === null ? null
+        : t.realizedPnlRub.plus(unrealizedRub).plus(t.dividendsRub).plus(t.couponsRub).toFixed(2);
 
       return {
         id: t.operationIds[0],
@@ -383,6 +411,7 @@ export class OperationsService {
         currentPrice,
         priceCurrency,
         currentValueRub,
+        valuationIssue,
         pnlRub,
         direction: t.direction,
         openedAt: t.openedAt,
@@ -426,12 +455,14 @@ export class OperationsService {
       let currentPrice: string | null = null;
       let priceCurrency: string | null = null;
       let currentValueRub: string | null = null;
+      let valuationIssue: string | null = t.quantity.isZero() ? null : 'Нет котировки';
 
       if (quote && futureIds.has(t.instrumentId)) {
         // открытая фьючерсная сделка (кол-во со знаком): оценка = нереализованный результат
         if (!t.quantity.isZero()) {
           currentPrice = quote.price;
           priceCurrency = 'RUB';
+          valuationIssue = null;
           currentValueRub = futureUnrealizedPnl(
             { quantity: t.quantity, avgBuyPrice: t.avgBuyPrice },
             quote.price,
@@ -439,24 +470,10 @@ export class OperationsService {
         }
       } else if (quote && t.quantity.gt(0)) {
         currentPrice = quote.price;
-        // та же оценка, что и в positions(): курс по валюте котировки, НКД в стоимости.
-        // Расхождение формул между страницами уже было источником «пропавших денег»
-        priceCurrency = quote.currency || currency;
-        const fx = await this.quotesService.getFxRate(priceCurrency);
-        const accruedFx =
-          quote.accruedInterest === null
-            ? fx
-            : await this.quotesService.getFxRate(quote.accruedCurrency || priceCurrency);
-
-        currentValueRub = marketValueRub({
-          quantity: t.quantity,
-          price: quote.price,
-          fxRate: fx,
-          accruedInterest: quote.accruedInterest,
-          accruedFxRate: accruedFx,
-        }).toFixed(2);
+        ({ currentPrice, priceCurrency, currentValueRub, valuationIssue } =
+          await this.valueQuote(t.quantity, quote, currency));
       }
-      result.push({ trade: t, currentPrice, priceCurrency, currentValueRub });
+      result.push({ trade: t, currentPrice, priceCurrency, currentValueRub, valuationIssue });
     }
     return result;
   }
@@ -531,7 +548,7 @@ export class OperationsService {
           futureIds,
         ),
       }))
-      .sort((a, b) => b.pnlRub - a.pnlRub);
+      .sort((a, b) => (b.pnlRub ?? -Infinity) - (a.pnlRub ?? -Infinity));
 
     // эффективность по портфелям/счетам
     const portfolioIds = [...new Set(positions.map((p) => p.portfolioId))];
@@ -546,13 +563,13 @@ export class OperationsService {
           futureIds,
         ),
       }))
-      .sort((a, b) => b.pnlRub - a.pnlRub);
+      .sort((a, b) => (b.pnlRub ?? -Infinity) - (a.pnlRub ?? -Infinity));
 
     // breakdown прибыль/убыток по инструментам (сортировка по величине P&L)
     const breakdown = positions
       .filter((p) => p.pnlRub !== null)
       .map((p) => ({ ticker: p.ticker, pnlRub: Number(p.pnlRub) }))
-      .sort((a, b) => b.pnlRub - a.pnlRub);
+      .sort((a, b) => (b.pnlRub ?? -Infinity) - (a.pnlRub ?? -Infinity));
 
     const totals = this.effectiveness(opsUpTo, positions, filter.from, futureIds);
 
@@ -561,7 +578,11 @@ export class OperationsService {
     // (см. cash.ts). Фильтр по системе/портфелю при этом действует — он уже применён
     // к opsUpTo, и срез по портфелю даёт остаток именно этого счёта.
     const cashRub = cashBalanceRub(opsUpTo, futureIds).toNumber();
-    const cash = { cashRub, totalValueRub: totals.currentValueRub + cashRub };
+    // В totalValueRub — только известная часть вместе с деньгами.
+    // Неполнота этой суммы обозначается totals.unvaluedPositionCount в API и UI.
+    const knownPositionsRub = positions.filter((p) => !new Decimal(p.quantity).isZero() && p.currentValueRub !== null)
+      .reduce((sum, p) => sum + Number(p.currentValueRub), 0);
+    const cash = { cashRub, totalValueRub: knownPositionsRub + cashRub };
 
     return { timeline, bySystem, byPortfolio, breakdown, totals, cash };
   }
@@ -594,7 +615,11 @@ export class OperationsService {
   private effectiveness(ops: Operation[], positions: Position[], periodFrom: string | undefined, futureIds: ReadonlySet<string>): Effectiveness {
     const periodOps = periodFrom ? ops.filter((o) => o.date >= periodFrom) : ops;
 
-    const currentValueRub = positions.reduce((s, p) => s + Number(p.currentValueRub ?? 0), 0);
+    const open = positions.filter((p) => !new Decimal(p.quantity).isZero());
+    const unvaluedPositionCount = open.filter((p) => p.currentValueRub === null).length;
+    const valued = open.filter((p) => p.currentValueRub !== null);
+    const currentValueRub = open.length > 0 && valued.length === 0 ? null
+      : valued.reduce((sum, p) => sum + Number(p.currentValueRub), 0);
     const investedRub = positions.reduce((s, p) => s + Number(p.investedRub), 0);
     const dividendsRub = periodOps.reduce((s, op) => {
       if (op.operationType !== 'Dividend' && op.operationType !== 'Coupon') return s;
@@ -602,15 +627,16 @@ export class OperationsService {
     }, 0);
     const realized = realizedPnlInRange(ops, periodFrom, undefined, { futureIds });
     const realizedPnlRub = realized.reduce((s, r) => s + r.realizedPnlRub.toNumber(), 0);
-    const unrealizedPnlRub = positions.reduce(
+    const unrealizedPnlRub = unvaluedPositionCount > 0 ? null : open.reduce(
       (s, p) =>
         p.currentValueRub === null ? s : s + (Number(p.currentValueRub) - Number(p.investedRub)),
       0,
     );
-    const pnlRub = realizedPnlRub + unrealizedPnlRub + dividendsRub;
+    const pnlRub = unrealizedPnlRub === null ? null : realizedPnlRub + unrealizedPnlRub + dividendsRub;
 
     return {
       investedRub,
+      unvaluedPositionCount,
       currentValueRub,
       realizedPnlRub,
       unrealizedPnlRub,

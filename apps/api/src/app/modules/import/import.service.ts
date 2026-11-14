@@ -594,7 +594,7 @@ export class ImportService {
 
   /**
    * Расчётные цены фьючерсов из отчёта → цена инструмента на дату отчёта (источник
-   * `manual`, валюта RUB). Только для существующих инструментов с marketSource='manual'
+   * `broker-report`, валюта RUB). Только для существующих инструментов с marketSource='manual'
    * (у остальных есть свой провайдер котировок). Более свежую цену не затираем:
    * даты сравниваем по первым 10 символам ISO-строки `asOf`. Откат импорта цену не
    * возвращает — это ожидаемо (цена — факт рынка на дату, а не часть операций).
@@ -624,7 +624,7 @@ export class ImportService {
         currency: 'RUB',
         accruedInterest: null,
         accruedCurrency: null,
-        source: 'manual' as const,
+        source: 'broker-report' as const,
         asOf: `${mark.date}T00:00:00.000Z`,
       };
       this.db

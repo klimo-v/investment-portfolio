@@ -116,7 +116,7 @@ export const quotes = sqliteTable('quotes', {
    * в десятки раз.
    */
   accruedCurrency: text('accrued_currency'),
-  source: text('source', { enum: ['moex', 'cbr', 'binance', 'manual'] }).notNull(),
+  source: text('source', { enum: ['moex', 'cbr', 'binance', 'manual', 'broker-report'] }).notNull(),
   asOf: text('as_of').notNull(),
 });
 

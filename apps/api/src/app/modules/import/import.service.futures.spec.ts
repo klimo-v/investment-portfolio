@@ -61,7 +61,7 @@ describe('ImportService — фьючерсы', () => {
     expect(inst.name).toContain('17.12.2026');
 
     const [q] = db.select().from(quotes).where(eq(quotes.instrumentId, inst.id)).all();
-    expect(q).toMatchObject({ price: '12387', currency: 'RUB', source: 'manual' });
+    expect(q).toMatchObject({ price: '12387', currency: 'RUB', source: 'broker-report' });
     expect(q.asOf.slice(0, 10)).toBe('2026-11-05');
   });
 

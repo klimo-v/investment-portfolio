@@ -19,18 +19,11 @@ export class CbrProvider {
   private cache: { rates: Record<string, number>; asOf: number } | null = null;
   private readonly TTL_MS = 60 * 60 * 1000; // 1 час
 
-  /** Курс валюты к рублю (например USD → 78.4). RUB → 1. */
-  async getRate(currency: string): Promise<number> {
-    if (currency === 'RUB') return 1;
-    const rates = await this.getRates();
-    return rates[currency] ?? 1;
-  }
-
-  /** Курс валюты или null, если ЦБ недоступен/валюты нет — для записи в историю, где «1» вместо «нет курса» недопустимо */
+  /** RUB = 1; иностранная валюта — только конечный положительный курс. */
   async getRateOrNull(currency: string): Promise<number | null> {
     if (currency === 'RUB') return 1;
-    const rates = await this.getRates();
-    return rates[currency] ?? null;
+    const rate = (await this.getRates())[currency];
+    return typeof rate === 'number' && Number.isFinite(rate) && rate > 0 ? rate : null;
   }
 
   private async getRates(): Promise<Record<string, number>> {
@@ -43,7 +36,14 @@ export class CbrProvider {
       const json = (await res.json()) as CbrResponse;
       const rates: Record<string, number> = {};
       for (const [code, v] of Object.entries(json.Valute)) {
-        rates[code] = v.Value / v.Nominal;
+        if (typeof v?.Value !== 'number' || typeof v?.Nominal !== 'number' ||
+            !Number.isFinite(v.Value) || !Number.isFinite(v.Nominal) || v.Value <= 0 || v.Nominal <= 0) continue;
+        const rate = v.Value / v.Nominal;
+        if (Number.isFinite(rate) && rate > 0) rates[code] = rate;
+      }
+      // Некорректный ответ не должен уничтожать пригодный кешированный курс.
+      for (const [code, rate] of Object.entries(this.cache?.rates ?? {})) {
+        if (!(code in rates) && Number.isFinite(rate) && rate > 0) rates[code] = rate;
       }
       this.cache = { rates, asOf: Date.now() };
       return rates;
