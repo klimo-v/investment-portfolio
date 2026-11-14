@@ -22,7 +22,13 @@ import { provideAppCharts, syncChartDefaultsWithTheme } from '../../shared/chart
   providers: [provideAppCharts()],
   template: `
     <div class="chart-box" [class.tall]="tall()">
-      <canvas baseChart [type]="config().type" [data]="config().data" [options]="config().options">
+      <canvas
+        baseChart
+        [type]="config().type"
+        [data]="config().data"
+        [options]="config().options"
+        [plugins]="config().plugins ?? []"
+      >
       </canvas>
     </div>
   `,
