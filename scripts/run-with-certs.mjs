@@ -25,7 +25,9 @@ import { fileURLToPath } from 'node:url';
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const CERT = join(ROOT, 'certs', 'russian_trusted_root_ca.pem');
 // tmp/ в .gitignore; файл перезаписывается при каждом запуске
-const CA_BUNDLE = join(ROOT, 'tmp', 'extra-ca-certs.pem');
+const CA_BUNDLE = process.env.DATA_DIR
+  ? resolve(process.env.DATA_DIR, 'tmp', 'extra-ca-certs.pem')
+  : join(ROOT, 'tmp', 'extra-ca-certs.pem');
 
 const [command, ...args] = process.argv.slice(2);
 

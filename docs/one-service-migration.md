@@ -6,6 +6,12 @@
 > API слушает только `127.0.0.1` (`API_HOST`). Не сделано: 1.5 (launchd-сервис),
 > бэкап, Этапы 2–3. Раздел «Context» ниже описывает состояние **до** Этапа 1.
 
+> **Дополнение (14 ноября 2026).** Реализован автономный runtime macOS arm64:
+> `pnpm build:mac` → `dist/mac-arm64`, закреплённый Node, runtime-зависимости,
+> launcher с отдельным DATA_DIR, health и SIGTERM. Это ресурсы будущей Swift-обёртки,
+> а не launchd-сервис или готовое подписанное .app. Контракт и приёмка:
+> [mac-runtime.md](mac-runtime.md).
+
 ## Context
 
 Сегодня запуск — два процесса в двух терминалах (`pnpm start` → :4200 и `pnpm start:api`

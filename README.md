@@ -92,6 +92,33 @@ pnpm db:studio        # Drizzle Studio — просмотр БД в браузе
 Если на вашей машине pnpm ругается на симлинки в HOME — раскомментируйте
 `node-linker=hoisted` в `.npmrc`.
 
+### Автономный сервер для macOS Apple Silicon
+
+```bash
+pnpm install --frozen-lockfile
+pnpm build:mac                   # результат: dist/mac-arm64/
+pnpm test:mac                    # приёмка только с временными данными
+```
+
+На машине сборки нужны macOS arm64 и pnpm 9.15.9. Сборка скачивает официальный
+Node 22.22.3 с проверкой закреплённого SHA-256 и использует его для Angular/NestJS
+и проверки нативного SQLite. Для первого скачивания и встраивания Google Fonts
+при production-сборке нужен интернет. На машине запуска Node и pnpm не нужны.
+
+```bash
+DATA_DIR="/абсолютный/путь/Данные" PORT=3000 \
+  "/абсолютный/путь/mac-arm64/start.sh" &
+pid=$!
+# Готовность: GET http://127.0.0.1:3000/api/health
+kill -TERM "$pid"
+wait "$pid"
+```
+
+Ресурсы можно переносить целиком, сохраняя права исполнения и относительные
+симлинки. Данные по умолчанию: `~/Library/Application Support/Investment Portfolio`.
+Параметры, контракт для Swift и результаты приёмки — в
+[docs/mac-runtime.md](docs/mac-runtime.md). Команды запуска из репозитория сохранены.
+
 ### Импорт из T-Invest API (опционально)
 
 Кроме загрузки файлов-отчётов, операции можно тянуть напрямую из Т-Банка.

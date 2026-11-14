@@ -5,6 +5,8 @@
   "private": true,
   "packageManager": "pnpm@9.15.9",
   "scripts": {
+    "build:mac": "node scripts/build-mac-runtime.mjs",
+    "test:mac": "node scripts/test-mac-runtime.mjs",
     "app": "pnpm build && pnpm start:app",
     "start:app": "node scripts/run-with-certs.mjs node dist/apps/api/main.js",
     "dev": "node scripts/run-with-certs.mjs nx run-many -t serve -p web api --parallel=2",

@@ -35,6 +35,9 @@ module.exports = {
   plugins: [
     new NxAppWebpackPlugin({
       target: 'node',
+      // Явно: все npm-импорты остаются runtime-зависимостями. Автономная
+      // сборка извлекает фактические require из бандла и копирует их граф.
+      externalDependencies: 'all',
       compiler: 'tsc',
       main: './src/main.ts',
       tsConfig: './tsconfig.app.json',
