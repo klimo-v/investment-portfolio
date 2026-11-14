@@ -38,6 +38,8 @@ const env = { HOME: testRoot, PATH: '/usr/bin:/bin', DATA_DIR: data, NODE_EXTRA_
 // Другой CA-путь заставляет обёртку записать объединённый сертификат в DATA_DIR.
 cpSync(env.NODE_EXTRA_CA_CERTS, join(testRoot, 'Corporate CA.pem'));
 env.NODE_EXTRA_CA_CERTS = join(testRoot, 'Corporate CA.pem');
+const init = execFileSync(join(resources, 'start.sh'), ['profile', 'init-empty'], { cwd, env, encoding: 'utf8' });
+assert.equal(JSON.parse(init).ok, true);
 let child;
 let log = '';
 async function start() {

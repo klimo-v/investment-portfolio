@@ -1,5 +1,4 @@
 import 'reflect-metadata';
-import './load-env';
-import { startHttp } from './http-server';
+import { runEntry, reportEntryError } from './profile/entry';
 
-void startHttp(() => undefined);
+void runEntry().catch(reportEntryError);
