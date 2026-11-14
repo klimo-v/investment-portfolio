@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
+import { createHash } from 'node:crypto';
 import { createServer } from 'node:net';
 import { once } from 'node:events';
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
@@ -63,10 +64,10 @@ function harness(name, dataOverride) {
     state: () => { try { return JSON.parse(readFileSync(join(control, 'state.json'))); } catch { return {}; } },
     async install(app) { assert.ok(!this.alive(), 'Перед заменой приложение должно завершиться'); rmSync(installed, { recursive: true, force: true }); run('/usr/bin/ditto', [app, installed]); },
     alive() { const pid = this.state().pid; if (!pid) return false; try { process.kill(pid, 0); return true; } catch { return false; } },
-    async launch({ expect = 'ready' } = {}) {
+    async launch({ expect = 'ready', dataPath = data } = {}) {
       active = this; if (!port) port = await freePort();
       rmSync(join(control, 'state.json'), { force: true });
-      run('/usr/bin/open', ['-n', '-a', installed, '--args', '--test-profile', data, '--test-control', control, '--test-port', String(port), '--no-browser']);
+      run('/usr/bin/open', ['-n', '-a', installed, '--args', '--test-profile', dataPath, '--test-control', control, '--test-port', String(port), '--no-browser']);
       return until(() => { const s = this.state(); return (expect === 'ready' ? s.ready : expect === 'onboarding' ? s.onboarding && !s.busy : s.state === 'Ошибка' && !s.busy) && s; }, `${name} launch ${expect}`);
     },
     async command(action, source) {
@@ -181,7 +182,7 @@ try {
   // Готовые дополнительные DMG с явно обозначенными синтетическими миграциями.
   const migratedApp = await migrationFixture(next, 'migration', '0.1.2', false);
   const brokenApp = await migrationFixture(next, 'failure', '0.1.3', true);
-  const migration = harness('migration-update'); await migration.install(next); await migration.launch({ expect: 'onboarding' }); await migration.command('init-empty'); await migration.ready();
+  const migration = harness('migration-update'); await migration.install(previous); await migration.launch({ expect: 'onboarding' }); await migration.command('init-empty'); await migration.ready();
   const mid = await seed(migration); const migrationBefore = await controls(migration, mid); const schemaBefore = inspect(migration.data);
   await migration.quit(); await migration.install(migratedApp); await migration.launch();
   assert.equal(inspect(migration.data).migrations, schemaBefore.migrations + 1); assert.deepEqual(await controls(migration, mid), migrationBefore);
@@ -195,17 +196,32 @@ try {
   const afterRollbackWrite = await controls(migration, mid);
   assert.equal(afterRollbackWrite.count, 3); assert.equal(afterRollbackWrite.totalRub, '9700.22');
   const pairsBeforeReopen = readdirSync(join(migration.data, 'backups')).sort();
-  await migration.quit(); await migration.launch();
-  assert.equal(realpathSync(migration.state().runtime), realpathSync(savedRuntime));
-  assert.deepEqual(await controls(migration, mid), afterRollbackWrite);
-  assert.ok((await migration.api('/api/operations')).some(row => row.id === 'dmg-after-rollback'));
-  assert.deepEqual(readdirSync(join(migration.data, 'backups')).sort(), pairsBeforeReopen, 'Повторное открытие не создаёт восстановление или страховочную пару');
+  await migration.quit(); await migration.install(next);
+  const canonicalData = realpathSync(migration.data);
+  assert.ok(canonicalData.startsWith('/private/var/'));
+  const shortData = canonicalData.slice('/private'.length);
+  const key = path => createHash('sha256').update(join(path, 'portfolio.sqlite')).digest('hex').slice(0, 16);
+  const states = [shortData, canonicalData].map(path => join(canonicalData, '.profile', key(path)));
+  // Воспроизводим сборку 3: оба каталога существуют, отметка только у /var.
+  const marked = states.find(path => existsSync(join(path, 'required-release.json')));
+  const marker = readFileSync(join(marked, 'required-release.json'));
+  for (const state of states) { mkdirSync(state, { recursive: true }); rmSync(join(state, 'required-release.json'), { force: true }); }
+  writeFileSync(join(states[0], 'required-release.json'), marker);
+  for (const dataPath of [shortData, canonicalData, shortData]) {
+    await migration.launch({ dataPath });
+    assert.equal(realpathSync(migration.state().runtime), realpathSync(savedRuntime));
+    assert.deepEqual(await controls(migration, mid), afterRollbackWrite);
+    assert.ok((await migration.api('/api/operations')).some(row => row.id === 'dmg-after-rollback'));
+    assert.deepEqual(readdirSync(join(migration.data, 'backups')).sort(), pairsBeforeReopen, 'Повторное открытие не создаёт восстановление или страховочную пару');
+    await migration.quit();
+  }
+  await migration.launch({ dataPath: canonicalData });
   await migration.command('stop'); await until(() => migration.state().state === 'Остановлен', 'stop reopened rollback server');
   await migration.command('start'); await migration.ready();
   assert.deepEqual(await controls(migration, mid), afterRollbackWrite);
   await migration.quit();
   report.migration = { before: schemaBefore, after: { migrations: schemaBefore.migrations + 1, integrity: 'ok' }, recovered: inspect(migration.data), controls: migrationBefore, afterRollbackWriteAndReopen: afterRollbackWrite, savedRuntime };
-  report.checks.push('schema migration and menu rollback; extra operation survives full GUI quit/reopen and menu stop/start; same saved runtime and current DB; no snapshot restoration');
+  report.checks.push('build 3 legacy state in both /var and /private/var hashes; build 4 selects same saved build 3 runtime; 700.07 RUB operation and 9700.22 RUB total survive alternating full quit/reopen and menu stop/start; no snapshot restoration');
 
   const failure = harness('failed-update'); await failure.install(next); await failure.launch({ expect: 'onboarding' }); await failure.command('init-empty'); await failure.ready();
   const fid = await seed(failure);

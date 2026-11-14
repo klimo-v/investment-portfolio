@@ -26,12 +26,14 @@ import { validateRuntime } from './runtime-check';
 import {
   absolutePath,
   atomicJson,
+  canonicalPath,
   hashFile,
   privateDirectory,
   ProfileError,
   syncDirectory,
   syncFile,
 } from './profile-files';
+import { reconcileProfileState, stateKey } from './profile-state';
 
 const Pending = z.object({
   stage: z.string(),
@@ -57,9 +59,16 @@ interface Options {
 export class LocalProfile {
   readonly backups: PortfolioBackup;
   private readonly state: string;
+  private readonly original: { dataDir: string; dbPath: string };
   constructor(readonly options: Options) {
+    this.original = { dataDir: options.dataDir, dbPath: options.dbPath };
+    this.options = {
+      ...options,
+      dataDir: canonicalPath(options.dataDir),
+      dbPath: canonicalPath(options.dbPath),
+    };
     this.backups = new PortfolioBackup(options.migrationsFolder);
-    this.state = join(options.dataDir, '.profile', createHash('sha256').update(options.dbPath).digest('hex').slice(0, 16));
+    this.state = join(this.options.dataDir, '.profile', stateKey(this.options.dbPath));
   }
   private initialiseDirectories(): void {
     privateDirectory(this.options.dataDir);
@@ -101,6 +110,7 @@ export class LocalProfile {
   }
   /** Незавершённая установка не зависит от исходника: подготовленный файл уже локальный. */
   resume(): void {
+    reconcileProfileState(this.original.dataDir, this.original.dbPath);
     this.initialiseDirectories();
     if (existsSync(this.pendingPath)) {
       const pending = Pending.parse(JSON.parse(readFileSync(this.pendingPath, 'utf8')));

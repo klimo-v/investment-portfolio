@@ -9,11 +9,12 @@ import {
   openSync,
   readSync,
   readFileSync,
+  realpathSync,
   renameSync,
   unlinkSync,
   writeFileSync,
 } from 'node:fs';
-import { dirname, isAbsolute, join, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { parseEnv } from 'node:util';
 
 export class ProfileError extends Error {
@@ -28,6 +29,13 @@ export function absolutePath(path: string): string {
   if (!isAbsolute(path))
     throw new ProfileError('INVALID_PATH', 'Выберите полный путь к файлу или каталогу.');
   return path;
+}
+/** Работает и до создания БД: разрешаем симлинки ближайшего существующего родителя. */
+export function canonicalPath(path: string): string {
+  const full = resolve(path);
+  if (existsSync(full)) return realpathSync(full);
+  const parent = dirname(full);
+  return parent === full ? full : join(canonicalPath(parent), basename(full));
 }
 export function privateDirectory(path: string): void {
   mkdirSync(path, { recursive: true, mode: 0o700 });

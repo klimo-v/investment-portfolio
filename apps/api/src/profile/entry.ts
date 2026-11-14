@@ -142,6 +142,9 @@ export async function runEntry(): Promise<void> {
   let handedOff = false;
   try {
     profile.resume();
+    // HTTP и сохранённые runtime используют тот же физический профиль.
+    process.env['DATA_DIR'] = profile.options.dataDir;
+    process.env['DB_PATH'] = profile.options.dbPath;
     if (cli) {
       const action = args[1];
       const input = ['status', 'init-empty', 'resolve-start'].includes(action)

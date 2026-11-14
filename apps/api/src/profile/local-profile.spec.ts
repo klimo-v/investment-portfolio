@@ -10,6 +10,7 @@ import {
   realpathSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { join } from 'node:path';
@@ -18,6 +19,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { LocalProfile } from './local-profile';
 import { hashFile, lockProfile, sourceFromProject } from './profile-files';
 import { applyMigrations } from '../db/apply-migrations';
+import { stateKey } from './profile-state';
 
 // Настоящий запуск сохранённого runtime проверяется отдельной macOS-приёмкой.
 vi.mock('./runtime-check', () => ({ validateRuntime: vi.fn(async () => undefined) }));
@@ -98,6 +100,79 @@ function summary(file: string) {
 }
 
 describe('первый запуск до открытия singleton SQLite', () => {
+  it('объединяет два состояния сборки 3 для физически одного профиля без повторного отката', async () => {
+    const dir = temporary();
+    const data = join(dir, 'user');
+    const alias = join(dir, 'alias');
+    const resources = resource(join(dir, 'app'));
+    const target = profile(data, full, resources);
+    await target.initialise();
+    symlinkSync(data, alias, 'dir');
+    const pair = await target.prepareUpdate();
+    const rolled = await target.recoverUpdate(pair, 'RESTORE UPDATE BACKUP');
+    const canonicalState = join(data, '.profile', stateKey(target.options.dbPath));
+    const legacyState = join(data, '.profile', stateKey(join(alias, 'portfolio.sqlite')));
+    mkdirSync(legacyState);
+    // В сборке 3 отметка оказалась только в состоянии другого написания пути.
+    cpSync(
+      join(canonicalState, 'required-release.json'),
+      join(legacyState, 'required-release.json'),
+    );
+    rmSync(join(canonicalState, 'required-release.json'));
+    const db = new Database(target.options.dbPath);
+    db.exec("INSERT INTO portfolios(id,name) VALUES ('after-rollback','Keep current')");
+    db.close();
+    const before = hashFile(target.options.dbPath);
+    rmSync(join(pair, 'portfolio.sqlite'));
+    for (const path of [alias, data, alias, data]) {
+      const reopened = profile(path, full, resources);
+      reopened.resume();
+      expect(await reopened.resolveStart()).toEqual({
+        launchPath: realpathSync(rolled.launchPath),
+      });
+      expect(hashFile(reopened.options.dbPath)).toBe(before);
+    }
+    expect(realpathSync(legacyState)).toBe(realpathSync(canonicalState));
+  });
+  it('противоречивые отметки и pending двух написаний останавливаются до изменения базы', async () => {
+    const dir = temporary();
+    const data = join(dir, 'user');
+    const alias = join(dir, 'alias');
+    const target = profile(data);
+    await target.initialise();
+    symlinkSync(data, alias, 'dir');
+    const states = [data, alias].map((path) =>
+      join(data, '.profile', stateKey(join(path, 'portfolio.sqlite'))),
+    );
+    for (const [index, state] of states.entries()) {
+      mkdirSync(state, { recursive: true });
+      writeFileSync(
+        join(state, 'required-release.json'),
+        JSON.stringify({ id: String(index), launchPath: join(data, 'backups/start.sh') }),
+      );
+    }
+    const before = hashFile(target.options.dbPath);
+    expect(() => profile(alias).resume()).toThrow(
+      expect.objectContaining({ code: 'PROFILE_STATE_CONFLICT' }),
+    );
+    expect(hashFile(target.options.dbPath)).toBe(before);
+    for (const [index, state] of states.entries()) {
+      rmSync(join(state, 'required-release.json'));
+      writeFileSync(
+        join(state, 'pending.json'),
+        JSON.stringify({
+          stage: join(data, 'stage/portfolio.sqlite'),
+          digest: String(index),
+          previousDigest: before,
+          requiredRelease: null,
+        }),
+      );
+    }
+    expect(() => profile(alias).resume()).toThrow(
+      expect.objectContaining({ code: 'PROFILE_STATE_CONFLICT' }),
+    );
+    expect(hashFile(target.options.dbPath)).toBe(before);
+  });
   it('явный пустой старт; существующий профиль не перезаписывается; неверный путь не создаёт БД', async () => {
     const target = profile();
     target.resume();
