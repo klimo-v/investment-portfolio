@@ -9,7 +9,7 @@ import { applyMigrations } from './apply-migrations';
  * (копируется через `assets` в webpack.config.js). Поэтому путь один и тот же
  * относительно `__dirname`, а не относительно рабочего каталога.
  */
-const MIGRATIONS_FOLDER = join(__dirname, 'migrations');
+export const MIGRATIONS_FOLDER = join(__dirname, 'migrations');
 
 /**
  * Применяет невыполненные миграции к текущей БД (логика — apply-migrations.ts).

@@ -1,3 +1,4 @@
+import { dataGate } from '../../../data-management/data-gate';
 import { randomUUID } from 'node:crypto';
 import { BadRequestException, Inject, Injectable } from '@nestjs/common';
 import { and, desc, eq, isNull, lte, notLike, or } from 'drizzle-orm';
@@ -153,12 +154,20 @@ export class ImportService {
    * Map с ограничением размера вместо TTL/внешнего кэша (YAGNI).
    */
   private readonly uploads = new Map<string, ParsedUpload>();
+  private uploadGeneration = dataGate.generation;
+  private checkUploadGeneration(): void {
+    if (this.uploadGeneration !== dataGate.generation) {
+      this.uploads.clear();
+      this.uploadGeneration = dataGate.generation;
+    }
+  }
   private static readonly MAX_UPLOADS = 20;
 
   /** Строки файла: из кэша по uploadId либо свежий разбор content (Factory: формат → парсер) */
   private async resolveRawRows(
     input: ImportInput,
   ): Promise<ParsedUpload & { uploadId: string }> {
+    this.checkUploadGeneration();
     if (input.uploadId) {
       const cached = this.uploads.get(input.uploadId);
       if (cached) return { ...cached, uploadId: input.uploadId };
@@ -238,6 +247,7 @@ export class ImportService {
     marks: FuturesMark[] = [],
     settlements: FuturesSettlement[] = [],
   ): string {
+    this.checkUploadGeneration();
     const uploadId = reuseId ?? randomUUID();
     // общие шаги нормализации для ЛЮБОГО источника (файлы и API сходятся именно здесь):
     // комиссия отдельной строкой по ссылке на сделку прибавляется к fee сделки

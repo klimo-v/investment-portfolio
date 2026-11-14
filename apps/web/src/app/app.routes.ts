@@ -39,5 +39,10 @@ export const appRoutes: Route[] = [
     loadComponent: () => import('./pages/import/import.page').then((m) => m.ImportPage),
     title: 'Импорт',
   },
+  {
+    path: 'data',
+    loadComponent: () => import('./pages/data-management/data.page').then((m) => m.DataPage),
+    title: 'Данные',
+  },
   { path: '**', redirectTo: 'dashboard' },
 ];

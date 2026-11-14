@@ -89,7 +89,8 @@ try {
     assert.match(missing.headers.get('content-type') ?? '', /application\/json/);
   }
   assert.equal((await fetch(`${base}/api/not-a-route`)).status, 404);
-  const response = await fetch(`${base}/api/systems`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: 'Temporary acceptance system' }) });
+  const { generation } = await (await fetch(`${base}/api/data/status`)).json();
+  const response = await fetch(`${base}/api/systems`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-portfolio-generation': generation }, body: JSON.stringify({ name: 'Temporary acceptance system' }) });
   assert.equal(response.status, 201); const system = await response.json();
   assert.ok((await (await fetch(`${base}/api/systems`)).json()).some((row) => row.id === system.id));
   assert.ok(existsSync(join(data, 'from-user-env.sqlite')));

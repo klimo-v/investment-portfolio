@@ -179,6 +179,7 @@ export class App {
       { path: 'operations', label: 'Операции', icon: 'edit_note' },
       { path: 'trades', label: 'Сделки', icon: 'folder' },
       { path: 'import', label: 'Импорт', icon: 'upload_file' },
+      { path: 'data', label: 'Данные', icon: 'storage' },
     ];
   });
 }

@@ -4,9 +4,11 @@ import { FastifyAdapter, NestFastifyApplication } from '@nestjs/platform-fastify
 import { AppModule } from './app/app.module';
 import { APP_ROOT } from './app-paths';
 import { resolveDbPath } from './db/db-path';
-import { runMigrations } from './db/run-migrations';
+import { MIGRATIONS_FOLDER, runMigrations } from './db/run-migrations';
 import { assertSpaReady, serveSpa } from './serve-spa';
 import { sqlite } from './db/client';
+import { registerDataHttp } from './data-management/data-http';
+import { DataGateInterceptor } from './data-management/data-gate';
 
 /**
  * Импорт брокерских отчётов приходит одним JSON-телом, xlsx — внутри него в
@@ -27,6 +29,8 @@ export async function startHttp(unlockProfile: () => void): Promise<void> {
     new FastifyAdapter({ bodyLimit: BODY_LIMIT }),
   );
   app.setGlobalPrefix('api');
+  app.useGlobalInterceptors(new DataGateInterceptor());
+  await registerDataHttp(app.getHttpAdapter().getInstance(), sqlite, MIGRATIONS_FOLDER);
 
   // CORS нужен только в режиме разработки, где фронт живёт на отдельном порту.
   // Когда бэкенд раздаёт SPA сам, origin общий и заголовки ни на что не влияют.

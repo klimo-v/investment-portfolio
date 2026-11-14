@@ -13,6 +13,7 @@ import {
 import { provideAnimationsAsync } from '@angular/platform-browser/animations/async';
 import { provideNativeDateAdapter } from '@angular/material/core';
 import { loadingInterceptor, httpToastInterceptor } from '@web-shared';
+import { profileSessionInterceptor } from './shared/profile-session';
 import { appRoutes } from './app.routes';
 
 /**
@@ -34,7 +35,7 @@ export const appConfig: ApplicationConfig = {
     provideHttpClient(
       withFetch(),
       withXsrfConfiguration({ cookieName: 'XSRF-TOKEN', headerName: 'X-XSRF-TOKEN' }),
-      withInterceptors([loadingInterceptor, httpToastInterceptor]),
+      withInterceptors([profileSessionInterceptor, loadingInterceptor, httpToastInterceptor]),
     ),
     provideAnimationsAsync(),
     provideNativeDateAdapter(),
