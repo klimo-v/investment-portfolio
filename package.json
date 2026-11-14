@@ -20,7 +20,9 @@
     "db:migrate": "tsx apps/api/src/db/migrate.ts",
     "db:seed": "tsx apps/api/src/db/seed.ts",
     "db:fix-duplicates": "tsx --tsconfig apps/api/tsconfig.app.json apps/api/src/db/fix-instrument-duplicates.ts",
-    "db:studio": "drizzle-kit studio --config apps/api/drizzle.config.ts"
+    "db:studio": "drizzle-kit studio --config apps/api/drizzle.config.ts",
+    "release:mac": "node scripts/release-mac.mjs",
+    "test:mac:update": "node scripts/test-mac-update.mjs"
   },
   "devDependencies": {
     "@angular/build": "^22.0.0",
