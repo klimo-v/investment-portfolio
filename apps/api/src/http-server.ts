@@ -1,4 +1,5 @@
 import 'reflect-metadata';
+import { calendarDate } from '@core';
 import { NestFactory } from '@nestjs/core';
 import { FastifyAdapter, NestFastifyApplication } from '@nestjs/platform-fastify';
 import { AppModule } from './app/app.module';
@@ -51,12 +52,16 @@ export async function startHttp(unlockProfile: () => void): Promise<void> {
     .get('/api/health', (_request, reply) => {
       try {
         sqlite.prepare('SELECT 1').get();
-        if (spaEnabled) assertSpaReady();
+        // SPA уже проверена и удерживается целым снимком в serveSpa().
+        // Промежуточное состояние dist при пересборке не делает сервер нездоровым.
       } catch {
         return reply.status(503).send({ status: 'unavailable' });
       }
       return reply.send({
-        status: 'ok', spa: spaEnabled,
+        status: 'ok',
+        spa: spaEnabled,
+        today: calendarDate(),
+        timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
         instance: process.env['APP_INSTANCE_ID'],
         version: process.env['APP_VERSION'],
         build: process.env['APP_BUILD'],

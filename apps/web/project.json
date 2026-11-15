@@ -3,24 +3,80 @@
   "$schema": "../../node_modules/nx/schemas/project-schema.json",
   "projectType": "application",
   "sourceRoot": "apps/web/src",
-  "tags": ["type:app", "scope:web"],
+  "tags": [
+    "type:app",
+    "scope:web"
+  ],
   "targets": {
     "build": {
+      "executor": "nx:run-commands",
+      "outputs": [
+        "{workspaceRoot}/dist/apps/web"
+      ],
+      "options": {
+        "command": "node scripts/build-web.mjs production"
+      },
+      "configurations": {
+        "production": {
+          "command": "node scripts/build-web.mjs production"
+        },
+        "development": {
+          "command": "node scripts/build-web.mjs development"
+        }
+      },
+      "defaultConfiguration": "production"
+    },
+    "test": {
+      "executor": "@angular/build:unit-test",
+      "options": {
+        "tsConfig": "apps/web/tsconfig.spec.json",
+        "providersFile": "apps/web/src/test-providers.ts",
+        "buildTarget": "web:bundle:development"
+      }
+    },
+    "serve": {
+      "executor": "@angular/build:dev-server",
+      "options": {
+        "buildTarget": "web:bundle:development",
+        "port": 4200,
+        "proxyConfig": "apps/web/proxy.conf.json"
+      },
+      "configurations": {
+        "production": {
+          "buildTarget": "web:bundle:production"
+        }
+      }
+    },
+    "bundle": {
       "executor": "@angular/build:application",
-      "outputs": ["{options.outputPath}"],
+      "outputs": [
+        "{options.outputPath}"
+      ],
       "options": {
         "outputPath": "dist/apps/web",
         "index": "apps/web/src/index.html",
         "browser": "apps/web/src/main.ts",
         "tsConfig": "apps/web/tsconfig.app.json",
-        "assets": ["apps/web/src/assets"],
-        "styles": ["apps/web/src/styles.scss"]
+        "assets": [
+          "apps/web/src/assets"
+        ],
+        "styles": [
+          "apps/web/src/styles.scss"
+        ]
       },
       "configurations": {
         "production": {
           "budgets": [
-            { "type": "initial", "maximumWarning": "720kb", "maximumError": "800kb" },
-            { "type": "anyComponentStyle", "maximumWarning": "4kb", "maximumError": "8kb" }
+            {
+              "type": "initial",
+              "maximumWarning": "720kb",
+              "maximumError": "800kb"
+            },
+            {
+              "type": "anyComponentStyle",
+              "maximumWarning": "4kb",
+              "maximumError": "8kb"
+            }
           ],
           "outputHashing": "all"
         },
@@ -31,25 +87,6 @@
         }
       },
       "defaultConfiguration": "production"
-    },
-    "test": {
-      "executor": "@angular/build:unit-test",
-      "options": {
-        "tsConfig": "apps/web/tsconfig.spec.json",
-        "providersFile": "apps/web/src/test-providers.ts",
-        "buildTarget": "web:build:development"
-      }
-    },
-    "serve": {
-      "executor": "@angular/build:dev-server",
-      "options": {
-        "buildTarget": "web:build:development",
-        "port": 4200,
-        "proxyConfig": "apps/web/proxy.conf.json"
-      },
-      "configurations": {
-        "production": { "buildTarget": "web:build:production" }
-      }
     }
   }
 }
