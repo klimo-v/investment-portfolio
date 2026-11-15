@@ -4,7 +4,14 @@ import { migrate } from 'drizzle-orm/better-sqlite3/migrator';
 import { eq } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DashboardSummarySchema } from '@core';
-import { instruments, operations, portfolios, quotes, systems, priceHistory } from '../../../db/schema';
+import {
+  instruments,
+  operations,
+  portfolios,
+  quotes,
+  systems,
+  priceHistory,
+} from '../../../db/schema';
 import { QuotesService } from '../quotes/quotes.service';
 import type { MoexProvider } from '../quotes/moex.provider';
 import type { BinanceProvider } from '../quotes/binance.provider';
@@ -142,8 +149,20 @@ describe('Оценка позиций и сделок без курса и ча�
   );
   it('дневная история имеет дату котировки, а не выдуманное время получения', async () => {
     quoted(db, 'RUB');
-    db.insert(priceHistory).values({ instrumentId: 'USD', date: '2026-02-02', price: '12', currency: 'RUB', source: 'moex' }).run();
-    expect((await service.positions())[0]).toMatchObject({ currentPrice: '12', priceAsOf: null, quoteDate: '2026-02-02' });
+    db.insert(priceHistory)
+      .values({
+        instrumentId: 'USD',
+        date: '2026-02-02',
+        price: '12',
+        currency: 'RUB',
+        source: 'moex',
+      })
+      .run();
+    expect((await service.positions())[0]).toMatchObject({
+      currentPrice: '12',
+      priceAsOf: null,
+      quoteDate: '2026-02-02',
+    });
   });
   it('курс 90 оценивает 10 USD в 900 RUB в обеих ветках; RUB не требует курса', async () => {
     quoted(db);
@@ -268,39 +287,249 @@ describe('Оценка позиций и сделок без курса и ча�
     quoted(db, 'RUB');
     db.update(quotes).set({ price: '2.134567' }).run();
     expect((await service.positions())[0]).toMatchObject({
-      avgBuyPrice: '2.134567', currentPrice: '2.134567', currentValueRub: '21345.67',
+      avgBuyPrice: '2.134567',
+      currentPrice: '2.134567',
+      currentValueRub: '21345.67',
     });
     db.update(operations).set({ price: '0.00001234' }).run();
     expect((await service.positions())[0].avgBuyPrice).toBe('0.00001234');
   });
   it('передаёт состав +100 −30 +10 = +80 и ноль для закрытой позиции', async () => {
     db.update(operations).set({ quantity: '2', price: '100' }).run();
-    db.insert(operations).values([
-      { id: 'sell-part', date: '2026-01-02', systemId: 's1', portfolioId: 'p1', instrumentId: 'USD', operationType: 'Sell', quantity: '1', price: '200', currency: 'RUB' },
-      { id: 'payout', date: '2026-01-03', systemId: 's1', portfolioId: 'p1', instrumentId: 'USD', operationType: 'Dividend', quantity: '1', price: '10', currency: 'RUB' },
-    ]).run();
+    db.insert(operations)
+      .values([
+        {
+          id: 'sell-part',
+          date: '2026-01-02',
+          systemId: 's1',
+          portfolioId: 'p1',
+          instrumentId: 'USD',
+          operationType: 'Sell',
+          quantity: '1',
+          price: '200',
+          currency: 'RUB',
+        },
+        {
+          id: 'payout',
+          date: '2026-01-03',
+          systemId: 's1',
+          portfolioId: 'p1',
+          instrumentId: 'USD',
+          operationType: 'Dividend',
+          quantity: '1',
+          price: '10',
+          currency: 'RUB',
+        },
+      ])
+      .run();
     quoted(db, 'RUB');
     db.update(quotes).set({ price: '70' }).run();
-    expect((await service.positions())[0]).toMatchObject({realizedPnlRub: '100.00', unrealizedPnlRub: '-30.00', dividendsRub: '10.00', pnlRub: '80.00'});
+    expect((await service.positions())[0]).toMatchObject({
+      realizedPnlRub: '100.00',
+      unrealizedPnlRub: '-30.00',
+      dividendsRub: '10.00',
+      pnlRub: '80.00',
+    });
     db.delete(quotes).run();
-    expect((await service.positions())[0]).toMatchObject({realizedPnlRub: '100.00', unrealizedPnlRub: null, dividendsRub: '10.00', pnlRub: null});
-    db.insert(operations).values({ id: 'close', date: '2026-01-04', systemId: 's1', portfolioId: 'p1', instrumentId: 'USD', operationType: 'Sell', quantity: '1', price: '100', currency: 'RUB' }).run();
-    expect((await service.positions())[0]).toMatchObject({unrealizedPnlRub: '0.00', pnlRub: '110.00'});
+    expect((await service.positions())[0]).toMatchObject({
+      realizedPnlRub: '100.00',
+      unrealizedPnlRub: null,
+      dividendsRub: '10.00',
+      pnlRub: null,
+    });
+    db.insert(operations)
+      .values({
+        id: 'close',
+        date: '2026-01-04',
+        systemId: 's1',
+        portfolioId: 'p1',
+        instrumentId: 'USD',
+        operationType: 'Sell',
+        quantity: '1',
+        price: '100',
+        currency: 'RUB',
+      })
+      .run();
+    expect((await service.positions())[0]).toMatchObject({
+      unrealizedPnlRub: '0.00',
+      pnlRub: '110.00',
+    });
   });
   it('состав P&L короткого фьючерса сохраняет знак', async () => {
     db.update(instruments).set({ type: 'Future' }).where(eq(instruments.id, 'USD')).run();
     db.update(operations).set({ operationType: 'Sell', quantity: '2', price: '100' }).run();
     quoted(db, 'RUB');
     db.update(quotes).set({ price: '90' }).run();
-    expect((await service.positions())[0]).toMatchObject({quantity: '-2', unrealizedPnlRub: '20.00', pnlRub: '20.00'});
+    expect((await service.positions())[0]).toMatchObject({
+      quantity: '-2',
+      unrealizedPnlRub: '20.00',
+      pnlRub: '20.00',
+    });
   });
-  it.each(['manual', 'broker-report'] as const)('цена отчёта: старый и новый источник %s', async (source) => {
-    quoted(db, 'RUB');
-    db.update(quotes).set({source, asOf: '2026-01-01T00:00:00.000Z'}).run();
-    db.insert(priceHistory).values({instrumentId: 'USD', date: '2026-01-01', price: '10', currency: 'RUB', source: 'broker-report'}).run();
-    expect((await service.positions())[0]).toMatchObject({priceSource: 'broker-report', quoteDate: '2026-01-01', priceAsOf: null});
-    db.update(quotes).set({source: 'manual', asOf: '2026-01-01T12:34:00.000Z'}).run();
-    expect((await service.positions())[0]).toMatchObject({priceSource: 'manual', quoteDate: null, priceAsOf: '2026-01-01T12:34:00.000Z'});
+  it.each(['manual', 'broker-report'] as const)(
+    'цена отчёта: старый и новый источник %s',
+    async (source) => {
+      quoted(db, 'RUB');
+      db.update(quotes).set({ source, asOf: '2026-01-01T00:00:00.000Z' }).run();
+      db.insert(priceHistory)
+        .values({
+          instrumentId: 'USD',
+          date: '2026-01-01',
+          price: '10',
+          currency: 'RUB',
+          source: 'broker-report',
+        })
+        .run();
+      expect((await service.positions())[0]).toMatchObject({
+        priceSource: 'broker-report',
+        quoteDate: '2026-01-01',
+        priceAsOf: null,
+      });
+      db.update(quotes).set({ source: 'manual', asOf: '2026-01-01T12:34:00.000Z' }).run();
+      expect((await service.positions())[0]).toMatchObject({
+        priceSource: 'manual',
+        quoteDate: null,
+        priceAsOf: '2026-01-01T12:34:00.000Z',
+      });
+    },
+  );
+
+  it('историческая сводка: 10×120=1200, будущие 200 и продажа не меняют прошлое', async () => {
+    db.update(operations).set({ quantity: '10', price: '100' }).run();
+    db.insert(priceHistory)
+      .values([
+        {
+          instrumentId: 'USD',
+          date: '2026-01-02',
+          price: '120',
+          currency: 'RUB',
+          source: 'manual',
+        },
+        {
+          instrumentId: 'USD',
+          date: '2026-01-03',
+          price: '200',
+          currency: 'RUB',
+          source: 'manual',
+        },
+      ])
+      .run();
+    db.insert(operations)
+      .values({
+        id: 'sold',
+        date: '2026-01-04',
+        systemId: 's1',
+        portfolioId: 'p1',
+        instrumentId: 'USD',
+        operationType: 'Sell',
+        quantity: '10',
+        price: '200',
+        currency: 'RUB',
+      })
+      .run();
+    for (const filter of [
+      {},
+      { systemId: 's1' },
+      { portfolioId: 'p1' },
+      { systemId: 's1', portfolioId: 'p1' },
+    ]) {
+      const past = await service.summary({ ...filter, from: '2026-01-02', till: '2026-01-02' });
+      expect(past.valuationDate).toBe('2026-01-02');
+      expect(past.totals).toMatchObject({
+        currentValueRub: 1200,
+        investedRub: 1000,
+        realizedPnlRub: 0,
+        unvaluedPositionCount: 0,
+      });
+      expect(past.bySystem[0].currentValueRub).toBe(1200);
+      expect(past.byPortfolio[0].currentValueRub).toBe(1200);
+      expect(past.cash).toEqual({ cashRub: -1000, totalValueRub: 200 });
+    }
+    expect((await service.summary()).totals.currentValueRub).toBe(0);
+    expect((await service.positions())[0].quantity).toBe('0');
+  });
+  it('историческая валюта и НКД: курс после till и текущий курс не используются', async () => {
+    db.insert(priceHistory)
+      .values([
+        {
+          instrumentId: 'USD',
+          date: '2026-01-02',
+          price: '10',
+          currency: 'USD',
+          accruedInterest: '2',
+          accruedCurrency: 'EUR',
+          source: 'manual',
+        },
+        { instrumentId: 'fx:USD', date: '2026-01-02', price: '90', currency: 'RUB', source: 'cbr' },
+        {
+          instrumentId: 'fx:EUR',
+          date: '2026-01-02',
+          price: '100',
+          currency: 'RUB',
+          source: 'cbr',
+        },
+        {
+          instrumentId: 'fx:USD',
+          date: '2026-01-03',
+          price: '200',
+          currency: 'RUB',
+          source: 'cbr',
+        },
+      ])
+      .run();
+    fx = 1000;
+    expect((await service.summary({ till: '2026-01-02' })).totals.currentValueRub).toBe(1100);
+    db.delete(priceHistory).where(eq(priceHistory.instrumentId, 'fx:EUR')).run();
+    expect((await service.summary({ till: '2026-01-02' })).totals).toMatchObject({
+      currentValueRub: null,
+      pnlRub: null,
+      unvaluedPositionCount: 1,
+    });
+    db.update(priceHistory)
+      .set({ accruedInterest: '0' })
+      .where(eq(priceHistory.instrumentId, 'USD'))
+      .run();
+    expect((await service.summary({ till: '2026-01-02' })).totals.currentValueRub).toBe(900);
   });
 
+  it('сводка ждёт догрузки истории перед чтением, без гонки с performance', async () => {
+    const history = {
+      ensureForInstruments: vi.fn(async () => {
+        await Promise.resolve();
+        db.insert(priceHistory)
+          .values({
+            instrumentId: 'USD',
+            date: '2026-01-02',
+            price: '120',
+            currency: 'RUB',
+            source: 'manual',
+          })
+          .run();
+      }),
+    } as unknown as PriceHistoryService;
+    service = new OperationsService(db, {} as QuotesService, history);
+    expect((await service.summary({ till: '2026-01-02' })).totals.currentValueRub).toBe(120);
+    expect(history.ensureForInstruments).toHaveBeenCalledWith(
+      new Map([['USD', '2026-01-01']]),
+      '2026-01-02',
+    );
+  });
+
+  it('сегодня в календаре Mac использует текущий FX, вчера — только исторический', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date(2026, 10, 15, 0, 30));
+    fx = 90;
+    quoted(db);
+    db.insert(priceHistory)
+      .values({
+        instrumentId: 'fx:USD',
+        date: '2026-11-14',
+        price: '80',
+        currency: 'RUB',
+        source: 'cbr',
+      })
+      .run();
+    expect((await service.summary({ till: '2026-11-15' })).totals.currentValueRub).toBe(900);
+    expect((await service.summary({ till: '2026-11-14' })).totals.currentValueRub).toBe(800);
+  });
 });

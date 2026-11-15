@@ -1,9 +1,13 @@
+import { calendarDate } from '@core';
 import { randomUUID } from 'node:crypto';
-import { Inject, Injectable } from '@nestjs/common';
-import { eq, sql } from 'drizzle-orm';
+import { Inject, Injectable, Optional } from '@nestjs/common';
+import { eq, lte, sql } from 'drizzle-orm';
 import Decimal from 'decimal.js';
 import {
   calculatePositions,
+  PriceCursor,
+  fxRateAt,
+  type PriceObservation,
   calculateTrades,
   cashBalanceRub,
   futureUnrealizedPnl,
@@ -20,6 +24,7 @@ import {
   type Trade,
   type TradeResult,
 } from '@core';
+import { PriceHistoryService } from '../quotes/price-history.service';
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
 import {
   operations,
@@ -27,6 +32,7 @@ import {
   systems,
   portfolios,
   quotes,
+  priceHistory,
   futuresSettlements,
   type OperationRow,
   type QuoteRow,
@@ -71,6 +77,7 @@ export class OperationsService {
   constructor(
     @Inject(DB) private readonly db: BetterSQLite3Database,
     private readonly quotesService: QuotesService,
+    @Optional() private readonly priceHistory?: PriceHistoryService,
   ) {}
 
   /**
@@ -94,7 +101,10 @@ export class OperationsService {
    * Берётся последний импортированный отчёт по паре «портфель × инструмент»; считается
    * по ВСЕМУ журналу портфеля (ВМ не делится между системами). Ключ — `портфель|инструмент`.
    */
-  settlementChecks(): Map<string, SettlementCheckDto & { ticker: string; portfolioId: string; systemIds: Set<string> }> {
+  settlementChecks(): Map<
+    string,
+    SettlementCheckDto & { ticker: string; portfolioId: string; systemIds: Set<string> }
+  > {
     const rows = this.db.select().from(futuresSettlements).all();
     const latest = new Map<string, (typeof rows)[number]>();
     for (const r of rows) {
@@ -105,8 +115,17 @@ export class OperationsService {
     if (latest.size === 0) return new Map();
 
     const ops = this.list();
-    const tickerById = new Map(this.db.select().from(instruments).all().map((i) => [i.id, i.ticker]));
-    const result = new Map<string, SettlementCheckDto & { ticker: string; portfolioId: string; systemIds: Set<string> }>();
+    const tickerById = new Map(
+      this.db
+        .select()
+        .from(instruments)
+        .all()
+        .map((i) => [i.id, i.ticker]),
+    );
+    const result = new Map<
+      string,
+      SettlementCheckDto & { ticker: string; portfolioId: string; systemIds: Set<string> }
+    >();
     for (const [key, st] of latest) {
       const check = reconcileFuturesSettlement(ops, st.instrumentId, st.portfolioId, st);
       result.set(key, {
@@ -196,7 +215,13 @@ export class OperationsService {
    * выигрывает котировка (она не старше).
    */
   private currentQuotes(): Map<string, QuoteRow & { quoteDate?: string }> {
-    const result = new Map<string, QuoteRow & { quoteDate?: string }>(this.db.select().from(quotes).all().map((q) => [q.instrumentId, q]));
+    const result = new Map<string, QuoteRow & { quoteDate?: string }>(
+      this.db
+        .select()
+        .from(quotes)
+        .all()
+        .map((q) => [q.instrumentId, q]),
+    );
     // Старые импорты хранили manual и полночь UTC. История подтверждает
     // происхождение; настоящее время ручного ввода не подменяем датой отчёта.
     const legacyReports = this.db.all<{ instrument_id: string }>(sql`
@@ -244,30 +269,96 @@ export class OperationsService {
     return result;
   }
 
+  /** Те же наблюдения и forward-fill, что в дневном ряду; будущие цены/курсы исключены. */
+  private historicalQuotes(day: string) {
+    const observations: PriceObservation[] = this.db
+      .select()
+      .from(priceHistory)
+      .where(lte(priceHistory.date, day))
+      .all();
+    const cached = this.db
+      .select()
+      .from(quotes)
+      .all()
+      .filter((q) => q.asOf.slice(0, 10) <= day);
+    for (const q of cached) observations.push({ ...q, date: q.asOf.slice(0, 10) });
+    const cursor = new PriceCursor(observations);
+    const historical = new Map<string, QuoteRow & { quoteDate?: string }>();
+    for (const id of new Set(observations.map((p) => p.instrumentId))) {
+      if (id.startsWith('fx:')) continue;
+      const p = cursor.at(id, day);
+      if (p)
+        historical.set(id, {
+          instrumentId: id,
+          price: p.price,
+          currency: p.currency,
+          accruedInterest: p.accruedInterest ?? null,
+          accruedCurrency: p.accruedCurrency ?? null,
+          source: 'manual',
+          asOf: `${p.date}T00:00:00.000Z`,
+          quoteDate: p.date,
+        });
+    }
+    return {
+      quotes: historical,
+      rate: async (currency: string) => {
+        if (day === calendarDate()) {
+          const current = await this.quotesService.getFxRateOrNull(currency);
+          if (current !== null) return current;
+        }
+        return fxRateAt(currency, day, cursor)?.toNumber() ?? null;
+      },
+    };
+  }
+
   /** Общая рублёвая оценка котировки и НКД для позиций и сделок. */
-  private async valueQuote(quantity: Decimal, quote: QuoteRow, currency: string) {
+  private async valueQuote(
+    quantity: Decimal,
+    quote: QuoteRow,
+    currency: string,
+    historicalRate?: (currency: string) => number | null | Promise<number | null>,
+  ) {
     const priceCurrency = quote.currency || currency;
     const accruedCurrency = quote.accruedCurrency || priceCurrency;
-    const hasAccrued = quote.accruedInterest !== null && !new Decimal(quote.accruedInterest).isZero();
+    const hasAccrued =
+      quote.accruedInterest !== null && !new Decimal(quote.accruedInterest).isZero();
     const rate = async (ccy: string) => {
       if (ccy === 'RUB') return 1;
-      const value = await this.quotesService.getFxRateOrNull(ccy);
+      const value = historicalRate
+        ? await historicalRate(ccy)
+        : await this.quotesService.getFxRateOrNull(ccy);
       return value !== null && Number.isFinite(value) && value > 0 ? value : null;
     };
     const fx = await rate(priceCurrency);
-    const accruedFx = hasAccrued ? (accruedCurrency === priceCurrency ? fx : await rate(accruedCurrency)) : 1;
-    const valuationIssue = fx === null ? `Нет курса ${priceCurrency}`
-      : accruedFx === null ? `Нет курса ${accruedCurrency} для НКД` : null;
+    const accruedFx = hasAccrued
+      ? accruedCurrency === priceCurrency
+        ? fx
+        : await rate(accruedCurrency)
+      : 1;
+    const valuationIssue =
+      fx === null
+        ? `Нет курса ${priceCurrency}`
+        : accruedFx === null
+          ? `Нет курса ${accruedCurrency} для НКД`
+          : null;
     return {
       currentPrice: quote.price,
       priceCurrency,
       valuationIssue,
-      currentValueRub: fx === null || accruedFx === null ? null : marketValueRub({
-        quantity, price: quote.price, fxRate: fx,
-        accruedInterest: quote.accruedInterest, accruedFxRate: accruedFx,
-      }).toFixed(2),
-      accruedInterestRub: quote.accruedInterest === null || accruedFx === null ? null
-        : quantity.mul(quote.accruedInterest).mul(accruedFx).toFixed(2),
+      currentValueRub:
+        fx === null || accruedFx === null
+          ? null
+          : marketValueRub({
+              quantity,
+              price: quote.price,
+              fxRate: fx,
+              accruedInterest: quote.accruedInterest,
+              accruedFxRate: accruedFx,
+            }).toFixed(2),
+      accruedInterestRub:
+        quote.accruedInterest === null || accruedFx === null
+          ? null
+          : quantity.mul(quote.accruedInterest).mul(accruedFx).toFixed(2),
     };
   }
 
@@ -277,11 +368,12 @@ export class OperationsService {
    * Принимает список операций (по умолчанию — весь журнал), чтобы `summary()` мог
    * посчитать позиции на отфильтрованном срезе (глобальный фильтр дашборда).
    */
-  async positions(ops: Operation[] = this.list()): Promise<Position[]> {
+  async positions(ops: Operation[] = this.list(), asOf?: string): Promise<Position[]> {
     const futureIds = this.futureIds();
     const instrumentRows = this.db.select().from(instruments).all();
     const instrumentById = new Map(instrumentRows.map((i) => [i.id, i]));
-    const quoteByInstrument = this.currentQuotes();
+    const historical = asOf ? this.historicalQuotes(asOf) : null;
+    const quoteByInstrument = historical?.quotes ?? this.currentQuotes();
 
     const checks = this.settlementChecks();
     const result: Position[] = [];
@@ -309,7 +401,7 @@ export class OperationsService {
       } else if (quote) {
         currentPrice = quote.price;
         ({ currentPrice, priceCurrency, accruedInterestRub, currentValueRub, valuationIssue } =
-          await this.valueQuote(p.quantity, quote, currency));
+          await this.valueQuote(p.quantity, quote, currency, historical?.rate));
       }
       // P&L считаем, если знаем рублёвую стоимость остатка (известны цена и курсы), либо
       // остатка нет вовсе (позиция закрыта, qty=0) — тогда нереализованная часть
@@ -320,10 +412,15 @@ export class OperationsService {
         // реализ. (по проданным частям) + нереализ. (по остатку) + дивиденды/купоны —
         // тот же состав, что и в trades() ниже; раньше здесь не было реализованного
         // P&L, из-за чего закрытая позиция с прибылью только от продажи показывала 0
-        const unrealizedRub = p.quantity.isZero() ? new Decimal(0)
+        const unrealizedRub = p.quantity.isZero()
+          ? new Decimal(0)
           : new Decimal(currentValueRub as string).minus(p.investedRub);
         unrealizedPnlRub = unrealizedRub.toFixed(2);
-        pnlRub = p.realizedPnlRub.plus(unrealizedRub).plus(p.dividendsRub).plus(p.couponsRub).toFixed(2);
+        pnlRub = p.realizedPnlRub
+          .plus(unrealizedRub)
+          .plus(p.dividendsRub)
+          .plus(p.couponsRub)
+          .toFixed(2);
       }
 
       result.push({
@@ -342,7 +439,7 @@ export class OperationsService {
         couponsRub: p.couponsRub.toFixed(2),
         avgPriceCurrency: p.tradeCurrency || currency,
         marketSource: instrument?.marketSource ?? 'manual',
-        priceAsOf: quote?.quoteDate ? null : quote?.asOf ?? null,
+        priceAsOf: quote?.quoteDate ? null : (quote?.asOf ?? null),
         quoteDate: quote?.quoteDate ?? null,
         priceSource: quote?.source ?? null,
         currentPrice,
@@ -376,52 +473,69 @@ export class OperationsService {
    * Открытые сделки обогащаем текущей ценой/P&L, как и позиции.
    */
   async trades(): Promise<Trade[]> {
-    const instrumentById = new Map(this.db.select().from(instruments).all().map((i) => [i.id, i]));
-    return (await this.valuedTrades()).map(({ trade: t, currentPrice, priceCurrency, currentValueRub, valuationIssue }) => {
-      const instrument = instrumentById.get(t.instrumentId);
-      const currency = instrument?.currency ?? 'RUB';
-      // P&L = реализованный (по проданной части) + нереализованный (по остатку) + выплаты
-      const unrealizedRub = t.quantity.isZero() ? new Decimal(0)
-        : currentValueRub === null ? null : new Decimal(currentValueRub).minus(t.investedRub);
-      const pnlRub = unrealizedRub === null ? null
-        : t.realizedPnlRub.plus(unrealizedRub).plus(t.dividendsRub).plus(t.couponsRub).toFixed(2);
+    const instrumentById = new Map(
+      this.db
+        .select()
+        .from(instruments)
+        .all()
+        .map((i) => [i.id, i]),
+    );
+    return (await this.valuedTrades()).map(
+      ({ trade: t, currentPrice, priceCurrency, currentValueRub, valuationIssue }) => {
+        const instrument = instrumentById.get(t.instrumentId);
+        const currency = instrument?.currency ?? 'RUB';
+        // P&L = реализованный (по проданной части) + нереализованный (по остатку) + выплаты
+        const unrealizedRub = t.quantity.isZero()
+          ? new Decimal(0)
+          : currentValueRub === null
+            ? null
+            : new Decimal(currentValueRub).minus(t.investedRub);
+        const pnlRub =
+          unrealizedRub === null
+            ? null
+            : t.realizedPnlRub
+                .plus(unrealizedRub)
+                .plus(t.dividendsRub)
+                .plus(t.couponsRub)
+                .toFixed(2);
 
-      return {
-        id: t.operationIds[0],
-        instrumentId: t.instrumentId,
-        ticker: instrument?.ticker ?? t.instrumentId,
-        systemId: t.systemId,
-        portfolioId: t.portfolioId,
-        type: instrument?.type ?? 'Stock',
-        currency,
-        status: t.status,
-        quantity: t.quantity.toString(),
-        qtyBought: t.qtyBought.toString(),
-        qtySold: t.qtySold.toString(),
-        avgBuyPrice: t.avgBuyPrice.toFixed(2),
-        investedCcy: t.investedCcy.toFixed(2),
-        investedRub: t.investedRub.toFixed(2),
-        proceedsCcy: t.proceedsCcy.toFixed(2),
-        proceedsRub: t.proceedsRub.toFixed(2),
-        realizedPnlCcy: t.realizedPnlCcy.toFixed(2),
-        realizedPnlRub: t.realizedPnlRub.toFixed(2),
-        dividendsRub: t.dividendsRub.toFixed(2),
-        couponsRub: t.couponsRub.toFixed(2),
-        avgPriceCurrency: t.tradeCurrency || currency,
-        currentPrice,
-        priceCurrency,
-        currentValueRub,
-        valuationIssue,
-        pnlRub,
-        direction: t.direction,
-        openedAt: t.openedAt,
-        closedAt: t.closedAt,
-        openedTime: t.openedTime,
-        closedTime: t.closedTime,
-        feesRub: t.feesRub.toFixed(2),
-        operationIds: t.operationIds,
-      };
-    });
+        return {
+          id: t.operationIds[0],
+          instrumentId: t.instrumentId,
+          ticker: instrument?.ticker ?? t.instrumentId,
+          systemId: t.systemId,
+          portfolioId: t.portfolioId,
+          type: instrument?.type ?? 'Stock',
+          currency,
+          status: t.status,
+          quantity: t.quantity.toString(),
+          qtyBought: t.qtyBought.toString(),
+          qtySold: t.qtySold.toString(),
+          avgBuyPrice: t.avgBuyPrice.toFixed(2),
+          investedCcy: t.investedCcy.toFixed(2),
+          investedRub: t.investedRub.toFixed(2),
+          proceedsCcy: t.proceedsCcy.toFixed(2),
+          proceedsRub: t.proceedsRub.toFixed(2),
+          realizedPnlCcy: t.realizedPnlCcy.toFixed(2),
+          realizedPnlRub: t.realizedPnlRub.toFixed(2),
+          dividendsRub: t.dividendsRub.toFixed(2),
+          couponsRub: t.couponsRub.toFixed(2),
+          avgPriceCurrency: t.tradeCurrency || currency,
+          currentPrice,
+          priceCurrency,
+          currentValueRub,
+          valuationIssue,
+          pnlRub,
+          direction: t.direction,
+          openedAt: t.openedAt,
+          closedAt: t.closedAt,
+          openedTime: t.openedTime,
+          closedTime: t.closedTime,
+          feesRub: t.feesRub.toFixed(2),
+          operationIds: t.operationIds,
+        };
+      },
+    );
   }
 
   /**
@@ -439,12 +553,18 @@ export class OperationsService {
         (!filter.till || o.date <= filter.till),
     );
     const futureIds = this.futureIds();
-    const instrumentById = new Map(this.db.select().from(instruments).all().map((i) => [i.id, i]));
+    const instrumentById = new Map(
+      this.db
+        .select()
+        .from(instruments)
+        .all()
+        .map((i) => [i.id, i]),
+    );
     const quoteByInstrument = this.currentQuotes();
 
     // Котировки только текущие. Если `till` в прошлом, сделки «открытые на till» нельзя
     // честно оценить сегодняшней ценой (смесь прошлого и настоящего) — оценку не даём
-    const pastTill = !!filter.till && filter.till < new Date().toISOString().slice(0, 10);
+    const pastTill = !!filter.till && filter.till < calendarDate();
 
     const result: ValuedTrade[] = [];
     for (const t of calculateTrades(ops, { futureIds })) {
@@ -470,8 +590,11 @@ export class OperationsService {
         }
       } else if (quote && t.quantity.gt(0)) {
         currentPrice = quote.price;
-        ({ currentPrice, priceCurrency, currentValueRub, valuationIssue } =
-          await this.valueQuote(t.quantity, quote, currency));
+        ({ currentPrice, priceCurrency, currentValueRub, valuationIssue } = await this.valueQuote(
+          t.quantity,
+          quote,
+          currency,
+        ));
       }
       result.push({ trade: t, currentPrice, priceCurrency, currentValueRub, valuationIssue });
     }
@@ -504,14 +627,29 @@ export class OperationsService {
    */
   async summary(filter: SummaryFilter = {}): Promise<DashboardSummary> {
     const allOps = this.list();
+    const today = calendarDate();
+    const valuationDate = filter.till ? (filter.till < today ? filter.till : today) : null;
     const opsUpTo = allOps.filter(
       (o) =>
         (!filter.systemId || o.systemId === filter.systemId) &&
         (!filter.portfolioId || o.portfolioId === filter.portfolioId) &&
-        (!filter.till || o.date <= filter.till),
+        o.date <= (valuationDate ?? today),
     );
     const periodOps = opsUpTo.filter((o) => !filter.from || o.date >= filter.from);
-    const positions = await this.positions(opsUpTo);
+    if (valuationDate && this.priceHistory) {
+      const first = new Map<string, string>();
+      for (const op of opsUpTo) {
+        if (
+          op.instrumentId &&
+          (!first.has(op.instrumentId) || op.date < (first.get(op.instrumentId) as string))
+        )
+          first.set(op.instrumentId, op.date);
+      }
+      // Как у ValuationService: сначала подготовить историю, затем прочитать оценки.
+      // Сводка не зависит от того, какой параллельный HTTP-запрос первым догрузил цены.
+      await this.priceHistory.ensureForInstruments(first, valuationDate);
+    }
+    const positions = await this.positions(opsUpTo, valuationDate ?? undefined);
     const futureIds = this.futureIds();
     const systemRows = this.db.select().from(systems).all();
     const portfolioRows = this.db.select().from(portfolios).all();
@@ -580,11 +718,12 @@ export class OperationsService {
     const cashRub = cashBalanceRub(opsUpTo, futureIds).toNumber();
     // В totalValueRub — только известная часть вместе с деньгами.
     // Неполнота этой суммы обозначается totals.unvaluedPositionCount в API и UI.
-    const knownPositionsRub = positions.filter((p) => !new Decimal(p.quantity).isZero() && p.currentValueRub !== null)
+    const knownPositionsRub = positions
+      .filter((p) => !new Decimal(p.quantity).isZero() && p.currentValueRub !== null)
       .reduce((sum, p) => sum + Number(p.currentValueRub), 0);
     const cash = { cashRub, totalValueRub: knownPositionsRub + cashRub };
 
-    return { timeline, bySystem, byPortfolio, breakdown, totals, cash };
+    return { timeline, bySystem, byPortfolio, breakdown, totals, cash, valuationDate };
   }
 
   /**
@@ -612,14 +751,21 @@ export class OperationsService {
    * libs/core/period-performance.ts (GET /api/performance). Тут остались суммы в рублях
    * для карточек «Вложено»/«Стоимость» и разреза.
    */
-  private effectiveness(ops: Operation[], positions: Position[], periodFrom: string | undefined, futureIds: ReadonlySet<string>): Effectiveness {
+  private effectiveness(
+    ops: Operation[],
+    positions: Position[],
+    periodFrom: string | undefined,
+    futureIds: ReadonlySet<string>,
+  ): Effectiveness {
     const periodOps = periodFrom ? ops.filter((o) => o.date >= periodFrom) : ops;
 
     const open = positions.filter((p) => !new Decimal(p.quantity).isZero());
     const unvaluedPositionCount = open.filter((p) => p.currentValueRub === null).length;
     const valued = open.filter((p) => p.currentValueRub !== null);
-    const currentValueRub = open.length > 0 && valued.length === 0 ? null
-      : valued.reduce((sum, p) => sum + Number(p.currentValueRub), 0);
+    const currentValueRub =
+      open.length > 0 && valued.length === 0
+        ? null
+        : valued.reduce((sum, p) => sum + Number(p.currentValueRub), 0);
     const investedRub = positions.reduce((s, p) => s + Number(p.investedRub), 0);
     const dividendsRub = periodOps.reduce((s, op) => {
       if (op.operationType !== 'Dividend' && op.operationType !== 'Coupon') return s;
@@ -627,12 +773,18 @@ export class OperationsService {
     }, 0);
     const realized = realizedPnlInRange(ops, periodFrom, undefined, { futureIds });
     const realizedPnlRub = realized.reduce((s, r) => s + r.realizedPnlRub.toNumber(), 0);
-    const unrealizedPnlRub = unvaluedPositionCount > 0 ? null : open.reduce(
-      (s, p) =>
-        p.currentValueRub === null ? s : s + (Number(p.currentValueRub) - Number(p.investedRub)),
-      0,
-    );
-    const pnlRub = unrealizedPnlRub === null ? null : realizedPnlRub + unrealizedPnlRub + dividendsRub;
+    const unrealizedPnlRub =
+      unvaluedPositionCount > 0
+        ? null
+        : open.reduce(
+            (s, p) =>
+              p.currentValueRub === null
+                ? s
+                : s + (Number(p.currentValueRub) - Number(p.investedRub)),
+            0,
+          );
+    const pnlRub =
+      unrealizedPnlRub === null ? null : realizedPnlRub + unrealizedPnlRub + dividendsRub;
 
     return {
       investedRub,

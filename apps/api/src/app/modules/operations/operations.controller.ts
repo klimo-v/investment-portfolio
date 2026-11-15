@@ -1,5 +1,21 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, Query } from '@nestjs/common';
-import type { Operation, Position, DashboardSummary, Trade } from '@core';
+import {
+  BadRequestException,
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Param,
+  Patch,
+  Post,
+  Query,
+} from '@nestjs/common';
+import {
+  SummaryQuerySchema,
+  type Operation,
+  type Position,
+  type DashboardSummary,
+  type Trade,
+} from '@core';
 import { OperationsService } from './operations.service';
 
 /**
@@ -45,7 +61,9 @@ export class OperationsController {
     @Query('from') from?: string,
     @Query('till') till?: string,
   ): Promise<DashboardSummary> {
-    return this.service.summary({ systemId, portfolioId, from, till });
+    const parsed = SummaryQuerySchema.safeParse({ systemId, portfolioId, from, till });
+    if (!parsed.success) throw new BadRequestException(parsed.error.issues);
+    return this.service.summary(parsed.data);
   }
 
   @Get('trades')

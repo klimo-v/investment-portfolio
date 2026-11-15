@@ -184,7 +184,7 @@ function ageDays(from: string, to: string): number {
 const CARRIED_AFTER_DAYS = 3;
 
 /** Последняя цена ≤ дня по каждому инструменту; дни обходятся по возрастанию, поэтому курсор только растёт */
-class PriceCursor {
+export class PriceCursor {
   private readonly rows = new Map<string, PriceObservation[]>();
   private readonly pos = new Map<string, number>();
 
@@ -254,7 +254,7 @@ export function valuationSeries(
     options.groupBy === 'instrument' ? (o.instrumentId ?? NO_INSTRUMENT_GROUP) : keyOf(o);
 
   const keys = [...new Set([...ops.map(keyOf), ...incomeOps.map(incomeKeyOf)])].sort();
-  if (ops.length === 0) {
+  if (keys.length === 0) {
     return { from: options.from ?? null, till: options.till, groupBy: options.groupBy, groups: [], netContributionsRub: [] };
   }
 
@@ -282,7 +282,8 @@ export function valuationSeries(
   });
 
   const cursor = new PriceCursor(prices);
-  const firstDay = incomeOps.length > 0 && incomeOps[0].date < ops[0].date ? incomeOps[0].date : ops[0].date;
+  const firstDay = [ops[0]?.date, incomeOps[0]?.date, ops.length === 0 ? cashOps[0]?.date : undefined]
+    .filter((date): date is string => date !== undefined).sort()[0];
   const outFrom = options.from && options.from > firstDay ? options.from : firstDay;
   const points = new Map<string, ValuationPoint[]>(keys.map((k) => [k, []]));
 
@@ -396,7 +397,7 @@ function valueOpenTrade(
     if (!trade.quantity.gt(0)) return; // спот с нулём/минусом — некорректные данные, как в текущей оценке
     const fx = fxRateAt(obs.currency, day, cursor);
     const accruedFx =
-      obs.accruedInterest === null || obs.accruedInterest === undefined
+      obs.accruedInterest === null || obs.accruedInterest === undefined || new Decimal(obs.accruedInterest).isZero()
         ? fx
         : fxRateAt(obs.accruedCurrency || obs.currency, day, cursor);
     if (fx === null || accruedFx === null) return fallback('no-fx');
@@ -417,11 +418,13 @@ function valueOpenTrade(
 }
 
 /** Курс валюты к рублю на день (forward-fill); RUB — 1; null — курса нет */
-function fxRateAt(currency: string, day: string, cursor: PriceCursor): Decimal | null {
+export function fxRateAt(currency: string, day: string, cursor: PriceCursor): Decimal | null {
   const c = currency.toUpperCase();
   if (c === 'RUB') return new Decimal(1);
   const obs = cursor.at(fxInstrumentId(c), day);
-  return obs ? new Decimal(obs.price) : null;
+  if (!obs) return null;
+  const rate = new Decimal(obs.price);
+  return rate.isFinite() && rate.gt(0) ? rate : null;
 }
 
 /**

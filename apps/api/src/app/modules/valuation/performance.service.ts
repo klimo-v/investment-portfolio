@@ -1,11 +1,13 @@
+import Decimal from 'decimal.js';
 import { Inject, Injectable } from '@nestjs/common';
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
 import {
   journalCompleteness,
+  rebaseToPeriod,
+  NO_INSTRUMENT_GROUP,
   payoutsInPeriod,
   periodPerformance,
   PerformanceSchema,
-  type CarriedPrice,
   type PerformanceContour,
   type PerformanceDto,
   type PerformanceQuery,
@@ -39,7 +41,12 @@ export class PerformanceService {
   async performance(query: PerformanceQuery): Promise<PerformanceDto> {
     const till = this.valuation.cap(query.till);
     const systemId = query.scope === 'system' ? query.id : undefined;
-    const portfolioId = query.scope === 'portfolio' ? query.id : query.scope === 'system' ? query.portfolioId : undefined;
+    const portfolioId =
+      query.scope === 'portfolio'
+        ? query.id
+        : query.scope === 'system'
+          ? query.portfolioId
+          : undefined;
     const contour: PerformanceContour = systemId ? 'positions' : 'wealth';
 
     const ops = this.operations.list();
@@ -51,13 +58,32 @@ export class PerformanceService {
     // самое дорогое, а ряды по системам и счетам считаются из того же входа чистой функцией.
     // Ряд — всегда с начала журнала: `from` задаёт период расчёта, а не окно запроса.
     const inputs = await this.valuation.prepare(till);
-    const series = (q: { groupBy: 'system' | 'portfolio'; systemId?: string; portfolioId?: string }) =>
-      this.valuation.build(inputs, { ...q, till });
+    const series = (q: {
+      groupBy: 'system' | 'portfolio' | 'instrument';
+      systemId?: string;
+      portfolioId?: string;
+    }) => this.valuation.build(inputs, { ...q, till });
     const base = series({ groupBy: 'system', ...filtered });
-    const total = periodPerformance(base, { from: query.from, contour, payoutsRub: payouts(filtered) });
+    const total = periodPerformance(base, {
+      from: query.from,
+      contour,
+      payoutsRub: payouts(filtered),
+    });
 
-    const systemNames = new Map(this.db.select().from(systems).all().map((s) => [s.id, s.name]));
-    const portfolioNames = new Map(this.db.select().from(portfolios).all().map((p) => [p.id, p.name]));
+    const systemNames = new Map(
+      this.db
+        .select()
+        .from(systems)
+        .all()
+        .map((s) => [s.id, s.name]),
+    );
+    const portfolioNames = new Map(
+      this.db
+        .select()
+        .from(portfolios)
+        .all()
+        .map((p) => [p.id, p.name]),
+    );
 
     const bySystem = base.groups.map((g) => ({
       id: g.key,
@@ -85,8 +111,48 @@ export class PerformanceService {
       });
     }
 
-    const tickers = new Map(this.db.select().from(instruments).all().map((i) => [i.id, i.ticker]));
-    const warnings = await this.completeness(ops, filtered, till, contour === 'wealth' ? base : null);
+    const tickers = new Map(
+      this.db
+        .select()
+        .from(instruments)
+        .all()
+        .map((i) => [i.id, i.ticker]),
+    );
+    const instrumentSeries = series({ groupBy: 'instrument', ...filtered });
+    const byInstrument = instrumentSeries.groups.map((g) => {
+      const points = query.from ? rebaseToPeriod(g.points, query.from) : g.points;
+      return {
+        instrumentId: g.key === NO_INSTRUMENT_GROUP ? null : g.key,
+        name: g.key === NO_INSTRUMENT_GROUP ? 'Без инструмента' : (tickers.get(g.key) ?? g.key),
+        resultRub: points.at(-1)?.totalRub ?? '0.00',
+        quality:
+          periodPerformance(instrumentSeries, {
+            from: query.from,
+            contour: 'positions',
+            groupKey: g.key,
+          }).quality ?? [],
+      };
+    });
+    // Different aggregation orders round group values to kopecks. Keep the displayed
+    // breakdown additive to the canonical card; allocate the rounding residue to
+    // the largest absolute row (stable input order breaks ties).
+    const sum = byInstrument.reduce((s, r) => s.plus(r.resultRub), new Decimal(0));
+    const residue = new Decimal(total.resultRub).minus(sum);
+    if (residue.abs().gt(new Decimal('0.02').mul(byInstrument.length + base.groups.length))) {
+      throw new Error('Instrument breakdown does not reconcile with period result');
+    }
+    const largest = byInstrument.reduce<(typeof byInstrument)[number] | undefined>(
+      (a, b) => (!a || new Decimal(b.resultRub).abs().gt(new Decimal(a.resultRub).abs()) ? b : a),
+      undefined,
+    );
+    if (largest && !residue.isZero())
+      largest.resultRub = new Decimal(largest.resultRub).plus(residue).toFixed(2);
+    const warnings = await this.completeness(
+      ops,
+      filtered,
+      till,
+      contour === 'wealth' ? base : null,
+    );
 
     return PerformanceSchema.parse({
       scope: query.scope,
@@ -96,8 +162,15 @@ export class PerformanceService {
       total,
       bySystem,
       byPortfolio,
-      warnings: warnings.map((w) => ({ ...w, inPeriod: warningTouchesPeriod(w, query.from, till) })),
-      carried: carriedAtEnd(base).map((c) => ({ ...c, ticker: tickers.get(c.instrumentId) ?? c.instrumentId })),
+      byInstrument,
+      warnings: warnings.map((w) => ({
+        ...w,
+        inPeriod: warningTouchesPeriod(w, query.from, till),
+      })),
+      carried: (total.quality ?? []).map((c) => ({
+        ...c,
+        ticker: tickers.get(c.instrumentId) ?? c.instrumentId,
+      })),
     });
   }
 
@@ -124,9 +197,17 @@ export class PerformanceService {
       if (known === undefined || o.date < known) firstOpDate.set(o.instrumentId, o.date);
     }
     await this.coupons.ensure(firstOpDate, till);
-    const tickers = new Map(this.db.select().from(instruments).all().map((i) => [i.id, i.ticker]));
+    const tickers = new Map(
+      this.db
+        .select()
+        .from(instruments)
+        .all()
+        .map((i) => [i.id, i.ticker]),
+    );
     const dates = cashFrom?.groups[0]?.points.map((p) => p.date) ?? [];
-    const cash = cashFrom ? cashFrom.cashRub.map((cashRub, i) => ({ date: dates[i], cashRub })) : undefined;
+    const cash = cashFrom
+      ? cashFrom.cashRub.map((cashRub, i) => ({ date: dates[i], cashRub }))
+      : undefined;
     return journalCompleteness({
       operations: scoped,
       schedules: this.coupons.list([...firstOpDate.keys()]),
@@ -136,14 +217,4 @@ export class PerformanceService {
       today: till,
     });
   }
-}
-
-/** Пометки «цена не за день» на последний день ряда — по ним карточка помечается как неточная */
-function carriedAtEnd(series: ValuationSeriesDto): CarriedPrice[] {
-  const seen = new Map<string, CarriedPrice>();
-  for (const g of series.groups) {
-    const last = g.points[g.points.length - 1];
-    for (const c of last?.carried ?? []) if (!seen.has(c.instrumentId)) seen.set(c.instrumentId, c);
-  }
-  return [...seen.values()];
 }

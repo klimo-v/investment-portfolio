@@ -59,7 +59,10 @@ export const OperationSchema = z.object({
   note: z.string().nullish(),
   brokerRef: z.string().nullish(),
   /** время сделки «ЧЧ:ММ:СС» — порядок внутри дня (важен для шортов по фьючерсам) */
-  executedAt: z.string().regex(/^\d{2}:\d{2}:\d{2}$/, 'Время в формате ЧЧ:ММ:СС').nullish(),
+  executedAt: z
+    .string()
+    .regex(/^\d{2}:\d{2}:\d{2}$/, 'Время в формате ЧЧ:ММ:СС')
+    .nullish(),
   importBatchId: z.string().nullish(),
 });
 export type Operation = z.infer<typeof OperationSchema>;
@@ -272,6 +275,8 @@ export type Cash = z.infer<typeof CashSchema>;
  * P&L по системам, breakdown прибыль/убыток по инструментам.
  */
 export const DashboardSummarySchema = z.object({
+  /** null — текущая оценка, дата — состояние на конец выбранного периода. */
+  valuationDate: z.string().nullable().default(null),
   // временной ряд по месяцам (для комбо-графика)
   timeline: z.array(
     z.object({
@@ -322,7 +327,6 @@ export const BenchmarkResponseSchema = z.object({
   moneyMarket: BenchmarkSeriesSchema.nullable(),
 });
 export type BenchmarkResponse = z.infer<typeof BenchmarkResponseSchema>;
-
 
 /** Статус сделки: открыта / частично закрыта / закрыта по остатку количества */
 export const TradeStatus = z.enum(['Open', 'Partial', 'Closed']);
@@ -558,8 +562,12 @@ export const SystemPerformanceSchema = z.object({
     result: z.array(ResultPointSchema),
     byMonth: z.array(z.object({ period: z.string(), pnlRub: decimalString, trades: z.number() })),
     /** weekday: 1 = понедельник … 7 = воскресенье (по дате закрытия) */
-    byWeekday: z.array(z.object({ weekday: z.number(), pnlRub: decimalString, trades: z.number() })),
-    histogram: z.array(z.object({ fromRub: decimalString, toRub: decimalString, count: z.number() })),
+    byWeekday: z.array(
+      z.object({ weekday: z.number(), pnlRub: decimalString, trades: z.number() }),
+    ),
+    histogram: z.array(
+      z.object({ fromRub: decimalString, toRub: decimalString, count: z.number() }),
+    ),
   }),
 });
 export type SystemPerformance = z.infer<typeof SystemPerformanceSchema>;
@@ -583,6 +591,9 @@ export const SystemPerformanceQuerySchema = z
   .refine((q) => !q.from || !q.till || q.from <= q.till, {
     message: '`from` не может быть позже `till`',
   });
+export const SummaryQuerySchema = SystemPerformanceQuerySchema.safeExtend({
+  systemId: z.string().min(1).optional(),
+});
 export type SystemPerformanceQuery = z.infer<typeof SystemPerformanceQuerySchema>;
 
 /**
@@ -645,10 +656,18 @@ export type ValuationQuery = z.infer<typeof ValuationQuerySchema>;
 
 // --- Единый расчёт периода: GET /api/performance (libs/core/period-performance.ts) ---
 
-const PerformanceUnavailableSchema = z.enum(['no-capital', 'negative-capital', 'no-data', 'xirr-undefined']);
+const PerformanceUnavailableSchema = z.enum([
+  'no-capital',
+  'negative-capital',
+  'no-data',
+  'xirr-undefined',
+]);
+
+const PeriodValuationIssueSchema = CarriedPriceSchema.extend({ dates: z.array(z.string()) });
 
 /** Доходность за период по одному контуру: результат ₽, TWR, доходность денег, средний капитал */
 export const PeriodPerformanceSchema = z.object({
+  quality: z.array(PeriodValuationIssueSchema).default([]),
   contour: z.enum(['wealth', 'positions']),
   from: z.string().nullable(),
   till: z.string().nullable(),
@@ -703,7 +722,9 @@ export const PerformanceQuerySchema = z
     till: isoDate.optional(),
   })
   .refine((q) => q.scope === 'all' || !!q.id, { message: 'для scope=portfolio|system нужен `id`' })
-  .refine((q) => !q.from || !q.till || q.from <= q.till, { message: '`from` не может быть позже `till`' });
+  .refine((q) => !q.from || !q.till || q.from <= q.till, {
+    message: '`from` не может быть позже `till`',
+  });
 export type PerformanceQuery = z.infer<typeof PerformanceQuerySchema>;
 
 export const PerformanceSchema = z.object({
@@ -714,6 +735,16 @@ export const PerformanceSchema = z.object({
   total: PeriodPerformanceSchema,
   bySystem: z.array(PerformanceRowSchema),
   byPortfolio: z.array(PerformanceRowSchema),
+  byInstrument: z
+    .array(
+      z.object({
+        instrumentId: z.string().nullable(),
+        name: z.string(),
+        resultRub: decimalString,
+        quality: z.array(PeriodValuationIssueSchema),
+      }),
+    )
+    .default([]),
   /** предупреждения о полноте журнала (libs/core/journal-completeness.ts); inPeriod — задевает выбранный период */
   warnings: z.array(
     z.object({
@@ -727,8 +758,8 @@ export const PerformanceSchema = z.object({
       inPeriod: z.boolean(),
     }),
   ),
-  /** инструменты, оценённые не по цене дня на конец периода (перенос цены / нет цены) */
-  carried: z.array(z.object({ instrumentId: z.string(), ticker: z.string(), reason: z.enum(['no-price', 'no-fx', 'carried']), priceDate: z.string().nullable() })),
+  /** качество цен на базе расчёта и на всём выбранном интервале */
+  carried: z.array(PeriodValuationIssueSchema.extend({ ticker: z.string() })),
 });
 export type PerformanceDto = z.infer<typeof PerformanceSchema>;
 
@@ -742,7 +773,10 @@ export const BenchmarkQuerySchema = z
     till: isoDate,
   })
   .refine((q) => q.from <= q.till, { message: '`from` не может быть позже `till`' })
-  .refine((q) => (Date.parse(q.till) - Date.parse(q.from)) / 86_400_000 <= BENCHMARK_MAX_SPAN_DAYS, {
-    message: 'Окно запроса не должно превышать 20 лет',
-  });
+  .refine(
+    (q) => (Date.parse(q.till) - Date.parse(q.from)) / 86_400_000 <= BENCHMARK_MAX_SPAN_DAYS,
+    {
+      message: 'Окно запроса не должно превышать 20 лет',
+    },
+  );
 export type BenchmarkQuery = z.infer<typeof BenchmarkQuerySchema>;

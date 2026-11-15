@@ -2,7 +2,7 @@ import Decimal from 'decimal.js';
 import { maxDrawdown, xirr, type CashFlow } from './metrics';
 import type { Operation } from './schemas';
 import { twrLevels } from './twr';
-import { incomeAmountRub, type ValuationSeries } from './valuation';
+import { incomeAmountRub, type ValuationSeries, type CarriedPrice } from './valuation';
 
 /**
  * Единый расчёт доходности за период (docs/tasks/unified-performance-prompt.md, §2.1).
@@ -84,7 +84,13 @@ export interface TwrPoint {
   index: number;
 }
 
+export interface PeriodValuationIssue extends CarriedPrice {
+  /** Фактически затронутые дни, включая реальную базу расчёта. */
+  dates: string[];
+}
+
 export interface PeriodPerformance {
+  quality?: PeriodValuationIssue[];
   contour: PerformanceContour;
   from: string | null;
   till: string | null;
@@ -224,6 +230,7 @@ export function periodPerformance(series: ValuationSeries, options: PeriodPerfor
   const from = options.from;
   const idxFrom = from === undefined ? 0 : days.findIndex((d) => d.date >= from);
   const empty = (reason: PerformanceUnavailable): PeriodPerformance => ({
+    quality: [],
     contour: options.contour,
     from: options.from ?? null,
     till: days.length > 0 ? days[days.length - 1].date : null,
@@ -326,6 +333,7 @@ export function periodPerformance(series: ValuationSeries, options: PeriodPerfor
   const payouts = options.payoutsRub ?? null;
   const fixedDelta = end.fixed.minus(start.fixed);
   return {
+    quality: periodQuality(series, baseDate, end.date, options.groupKey),
     contour: options.contour,
     from: options.from ?? null,
     till: end.date,
@@ -349,4 +357,24 @@ export function periodPerformance(series: ValuationSeries, options: PeriodPerfor
     averageCapitalRub: money(averageCapital),
     twrSuggestedFrom: reliable && hasCapital ? suggestTwrStart(period) : null,
   };
+}
+
+/** Пометки на всех днях расчёта и его фактической базе, отдельно для каждой группы. */
+function periodQuality(series: ValuationSeries, from: string, till: string, groupKey?: string): PeriodValuationIssue[] {
+  const issues = new Map<string, PeriodValuationIssue>();
+  for (const group of series.groups) {
+    if (groupKey !== undefined && group.key !== groupKey) continue;
+    for (const point of group.points) {
+      if (point.date < from || point.date > till) continue;
+      for (const note of point.carried) {
+        const key = JSON.stringify([note.instrumentId, note.reason]);
+        const issue = issues.get(key) ?? { ...note, dates: [] };
+        if (!issue.dates.includes(point.date)) issue.dates.push(point.date);
+        // Последняя использованная цена — справка; даты храним точно, без заполнения разрывов.
+        issue.priceDate = note.priceDate;
+        issues.set(key, issue);
+      }
+    }
+  }
+  return [...issues.values()].map((issue) => ({ ...issue, dates: issue.dates.sort() }));
 }

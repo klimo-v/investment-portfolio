@@ -1,6 +1,19 @@
+import { calendarDate } from '@core';
 import { Inject, Injectable } from '@nestjs/common';
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
-import { cashSeries, fxInstrumentId, isFxInstrumentId, NO_INSTRUMENT_GROUP, ValuationSeriesSchema, valuationEvents, valuationSeries, type Operation, type PriceObservation, type ValuationQuery, type ValuationSeriesDto } from '@core';
+import {
+  cashSeries,
+  fxInstrumentId,
+  isFxInstrumentId,
+  NO_INSTRUMENT_GROUP,
+  ValuationSeriesSchema,
+  valuationEvents,
+  valuationSeries,
+  type Operation,
+  type PriceObservation,
+  type ValuationQuery,
+  type ValuationSeriesDto,
+} from '@core';
 import { instruments, portfolios, quotes, systems } from '../../../db/schema';
 import { DB } from '../../db/drizzle.module';
 import { OperationsService } from '../operations/operations.service';
@@ -12,7 +25,7 @@ export interface SeriesInputs {
   till: string;
   ops: Operation[];
   observations: PriceObservation[];
-  /** по фильтру нет ни одной сделки — ряда нет */
+  /** по фильтру нет операций до конца периода — ряда нет */
   empty: boolean;
 }
 
@@ -34,13 +47,16 @@ export class ValuationService {
   /** Ряд оценки под запрос: подготовка входа (сеть, история цен) + чистый расчёт */
   async series(query: ValuationQuery): Promise<ValuationSeriesDto> {
     const till = this.cap(query.till);
-    const inputs = await this.prepare(till, { systemId: query.systemId, portfolioId: query.portfolioId });
+    const inputs = await this.prepare(till, {
+      systemId: query.systemId,
+      portfolioId: query.portfolioId,
+    });
     return this.build(inputs, query);
   }
 
   /** Конец периода: не позже сегодня */
   cap(till: string | undefined): string {
-    const today = new Date().toISOString().slice(0, 10);
+    const today = calendarDate();
     return till && till < today ? till : today;
   }
 
@@ -49,8 +65,11 @@ export class ValuationService {
    * котировки и курсы. Вынесено из series(), чтобы расчёт с несколькими рядами (доходность по
    * системам и счетам) готовил вход ОДИН раз: догрузка истории и сетевые курсы — самое дорогое.
    */
-  async prepare(till: string, filter: { systemId?: string; portfolioId?: string } = {}): Promise<SeriesInputs> {
-    const today = new Date().toISOString().slice(0, 10);
+  async prepare(
+    till: string,
+    filter: { systemId?: string; portfolioId?: string } = {},
+  ): Promise<SeriesInputs> {
+    const today = calendarDate();
     const ops = this.operations
       .list()
       .filter(
@@ -58,8 +77,10 @@ export class ValuationService {
           (!filter.systemId || o.systemId === filter.systemId) &&
           (!filter.portfolioId || o.portfolioId === filter.portfolioId),
       );
-    const traded = ops.filter((o) => o.instrumentId && o.operationType !== 'Transfer' && o.date <= till);
-    if (traded.length === 0) return { till, ops, observations: [], empty: true };
+    const traded = ops.filter(
+      (o) => o.instrumentId && o.operationType !== 'Transfer' && o.date <= till,
+    );
+    if (!ops.some(o => o.date <= till)) return { till, ops, observations: [], empty: true };
 
     const instrumentIds = [...new Set(traded.map((o) => o.instrumentId as string))];
     // начало загрузки — своё у каждой бумаги: дата её первой операции
@@ -79,7 +100,11 @@ export class ValuationService {
     // дате побеждает последняя.
     const targets = this.priceHistory.targetsFor(instrumentIds);
     const observations: PriceObservation[] = this.priceHistory
-      .list(targets.map((t) => t.instrumentId), undefined, till)
+      .list(
+        targets.map((t) => t.instrumentId),
+        undefined,
+        till,
+      )
       .map((r) => ({
         instrumentId: r.instrumentId,
         date: r.date,
@@ -88,23 +113,30 @@ export class ValuationService {
         accruedInterest: r.accruedInterest,
         accruedCurrency: r.accruedCurrency,
       }));
-    if (till === today) {
+    {
       const ids = new Set(instrumentIds);
       for (const q of this.db.select().from(quotes).all()) {
-        if (!ids.has(q.instrumentId)) continue;
+        if (!ids.has(q.instrumentId) || q.asOf.slice(0, 10) > till) continue;
         observations.push({
           instrumentId: q.instrumentId,
-          date: q.asOf.slice(0, 10) < till ? q.asOf.slice(0, 10) : till,
+          date: q.asOf.slice(0, 10),
           price: q.price,
           currency: q.currency,
           accruedInterest: q.accruedInterest,
           accruedCurrency: q.accruedCurrency,
         });
       }
+    }
+    if (till === today) {
       for (const t of targets.filter((x) => isFxInstrumentId(x.instrumentId))) {
         const rate = await this.quotesService.getFxRateOrNull(t.ticker);
         if (rate !== null) {
-          observations.push({ instrumentId: fxInstrumentId(t.ticker), date: till, price: String(rate), currency: 'RUB' });
+          observations.push({
+            instrumentId: fxInstrumentId(t.ticker),
+            date: till,
+            price: String(rate),
+            currency: 'RUB',
+          });
         }
       }
     }
@@ -116,7 +148,13 @@ export class ValuationService {
   build(inputs: SeriesInputs, query: ValuationQuery): ValuationSeriesDto {
     const { till, ops, observations } = inputs;
     if (inputs.empty) {
-      return ValuationSeriesSchema.parse({ from: query.from ?? null, till, groupBy: query.groupBy, groups: [], netContributionsRub: [] });
+      return ValuationSeriesSchema.parse({
+        from: query.from ?? null,
+        till,
+        groupBy: query.groupBy,
+        groups: [],
+        netContributionsRub: [],
+      });
     }
     const futureIds = this.operations.futureIds();
     const result = valuationSeries(ops, observations, {
@@ -138,21 +176,46 @@ export class ValuationService {
       systemId: query.systemId,
       portfolioId: query.portfolioId,
       futureIds,
-    }).map((e) => ({ ...e, name: e.instrumentId ? (tickers.get(e.instrumentId) ?? e.instrumentId) : (tickers.get(NO_INSTRUMENT_GROUP) ?? '') }));
+    }).map((e) => ({
+      ...e,
+      name: e.instrumentId
+        ? (tickers.get(e.instrumentId) ?? e.instrumentId)
+        : (tickers.get(NO_INSTRUMENT_GROUP) ?? ''),
+    }));
     return ValuationSeriesSchema.parse({
       ...result,
       groups: result.groups.map((g) => ({ ...g, name: names.get(g.key) ?? g.key })),
       hasCash,
-      cashRub: hasCash ? cashSeries(result, ops, { portfolioId: query.portfolioId, futureIds }) : [],
+      cashRub: hasCash
+        ? cashSeries(result, ops, { portfolioId: query.portfolioId, futureIds })
+        : [],
       events,
     });
   }
 
   private nameOf(groupBy: ValuationQuery['groupBy']): Map<string, string> {
-    if (groupBy === 'system') return new Map(this.db.select().from(systems).all().map((s) => [s.id, s.name]));
-    if (groupBy === 'portfolio') return new Map(this.db.select().from(portfolios).all().map((p) => [p.id, p.name]));
+    if (groupBy === 'system')
+      return new Map(
+        this.db
+          .select()
+          .from(systems)
+          .all()
+          .map((s) => [s.id, s.name]),
+      );
+    if (groupBy === 'portfolio')
+      return new Map(
+        this.db
+          .select()
+          .from(portfolios)
+          .all()
+          .map((p) => [p.id, p.name]),
+      );
     return new Map([
-      ...this.db.select().from(instruments).all().map((i): [string, string] => [i.id, i.ticker]),
+      ...this.db
+        .select()
+        .from(instruments)
+        .all()
+        .map((i): [string, string] => [i.id, i.ticker]),
       [NO_INSTRUMENT_GROUP, 'Без инструмента'],
     ]);
   }

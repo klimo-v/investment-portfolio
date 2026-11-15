@@ -291,3 +291,22 @@ describe('rebaseToPeriod: результат за период', () => {
     expect(rebaseToPeriod(full, '2027-01-01')).toEqual([]);
   });
 });
+
+describe('ряд без сделок с бумагами', () => {
+  it.each(['instrument', 'portfolio', 'system'] as const)('комиссия без инструмента: %s', groupBy => {
+    const fee = op({ date: '2026-01-03', instrumentId: null, operationType: 'Fee', price: '7' });
+    const series = valuationSeries([fee], [], { groupBy, till: '2026-01-04', portfolioId: 'p1' });
+    expect(series.groups).toHaveLength(1);
+    expect(series.groups[0].points.at(-1)?.totalRub).toBe('-7.00');
+    expect(rebaseToPeriod(series.groups[0].points, '2026-01-04').at(-1)?.totalRub).toBe('0.00');
+  });
+  it('база денежных средств до комиссии сохраняется и без покупок', () => {
+    const series = valuationSeries([
+      op({ date: '2026-01-01', instrumentId: null, operationType: 'Deposit', price: '1000' }),
+      op({ date: '2026-01-03', instrumentId: null, operationType: 'Fee', price: '7' }),
+    ], [], { groupBy: 'instrument', till: '2026-01-04' });
+    expect(series.groups[0].points[0].date).toBe('2026-01-01');
+    expect(series.netContributionsRub[0]).toBe('1000.00');
+    expect(series.groups[0].points.at(-1)?.totalRub).toBe('-7.00');
+  });
+});

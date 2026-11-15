@@ -1,3 +1,4 @@
+import { calendarDate } from '@core';
 import { BadRequestException, Inject, Injectable, NotFoundException } from '@nestjs/common';
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
 import { eq } from 'drizzle-orm';
@@ -73,7 +74,7 @@ export class QuotesService {
 
   /** Курс каждой нерублёвой валюты котировок на сегодня — в ту же историю (fx:USD) */
   private async recordFxToday(currencies: Iterable<string>): Promise<void> {
-    const date = new Date().toISOString().slice(0, 10);
+    const date = calendarDate();
     for (const c of new Set([...currencies].map((x) => x.toUpperCase()))) {
       if (c === 'RUB') continue;
       const rate = await this.cbr.getRateOrNull(c);
