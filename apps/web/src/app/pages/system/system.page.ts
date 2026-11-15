@@ -16,7 +16,10 @@ import { queryParams } from '../../shared/query-param';
 import { dashboardFilter } from '../../widgets/dashboard-filters/dashboard-filter.state';
 import { SystemExecution } from '../../widgets/system-execution/system-execution';
 import { SystemKpis } from '../../widgets/system-kpis/system-kpis';
-import { SystemEquityChart, type EquityCurve } from '../../widgets/system-equity-chart/system-equity-chart';
+import {
+  SystemEquityChart,
+  type EquityCurve,
+} from '../../widgets/system-equity-chart/system-equity-chart';
 import { SystemPnlBreakdown } from '../../widgets/system-pnl-breakdown/system-pnl-breakdown';
 import { SystemTradeDistribution } from '../../widgets/system-trade-distribution/system-trade-distribution';
 import { TradesTable } from '../../widgets/trades-table/trades-table';
@@ -54,7 +57,9 @@ import { TradesTable } from '../../widgets/trades-table/trades-table';
   template: `
     <div class="page-header">
       <h1 class="page-title">
-        <a class="back" routerLink="/dashboard" aria-label="К дашборду"><mat-icon>arrow_back</mat-icon></a>
+        <a class="back" routerLink="/dashboard" aria-label="К дашборду"
+          ><mat-icon>arrow_back</mat-icon></a
+        >
         {{ title() }}
         @if (filter.label(); as label) {
           <span class="period-range">({{ label }})</span>
@@ -63,7 +68,10 @@ import { TradesTable } from '../../widgets/trades-table/trades-table';
       <div class="filters">
         <mat-form-field appearance="outline" subscriptSizing="dynamic">
           <mat-label>Портфель</mat-label>
-          <mat-select [value]="filter.portfolio()" (selectionChange)="filter.setPortfolio($event.value)">
+          <mat-select
+            [value]="filter.portfolio()"
+            (selectionChange)="filter.setPortfolio($event.value)"
+          >
             <mat-option [value]="null">Все</mat-option>
             @for (p of reference.portfolios.value(); track p.id) {
               <mat-option [value]="p.id">{{ p.name }}</mat-option>
@@ -79,16 +87,37 @@ import { TradesTable } from '../../widgets/trades-table/trades-table';
           <mat-button-toggle value="ytd">YTD</mat-button-toggle>
           <mat-button-toggle value="1y">1 год</mat-button-toggle>
           <mat-button-toggle value="all">Всё время</mat-button-toggle>
+          @if (filter.period() === 'custom') {
+            <mat-button-toggle value="custom">Произвольный</mat-button-toggle>
+          }
         </mat-button-toggle-group>
       </div>
     </div>
 
-    @if (performance.error()) {
+    @if (filter.calendarError()) {
+      <app-state-message
+        kind="error"
+        title="Не удалось загрузить календарь портфеля"
+        hint="Проверьте связь с сервером и повторите."
+        retryLabel="Повторить"
+        (retry)="filter.retryCalendar()"
+      />
+    } @else if (filter.calendarLoading()) {
+      <p role="status">Загрузка календаря портфеля…</p>
+    } @else if (!filter.ready()) {
+      <p>{{ filter.error() ?? 'Укажите обе даты периода.' }}</p>
+    } @else if (performance.isLoading()) {
+      <p>Загрузка выбранного периода…</p>
+    } @else if (performance.error()) {
       <!-- 404: такой системы нет; прочее — сервер недоступен -->
       <app-state-message
         kind="error"
         [title]="notFound() ? 'Система не найдена' : 'Не удалось загрузить статистику'"
-        [hint]="notFound() ? 'Проверьте адрес или выберите систему на дашборде.' : 'Проверьте, что сервер запущен, и попробуйте ещё раз.'"
+        [hint]="
+          notFound()
+            ? 'Проверьте адрес или выберите систему на дашборде.'
+            : 'Проверьте, что сервер запущен, и попробуйте ещё раз.'
+        "
         [retryLabel]="notFound() ? '' : 'Повторить'"
         (retry)="performance.reload()"
       />
@@ -113,14 +142,22 @@ import { TradesTable } from '../../widgets/trades-table/trades-table';
         }
         @for (rec of p.reconciliation; track rec.ticker + rec.portfolioId) {
           <p class="recon recon--{{ rec.status }}" role="status">
-            <mat-icon>{{ rec.status === 'ok' ? 'verified' : rec.status === 'mismatch' ? 'warning' : 'help_outline' }}</mat-icon>
+            <mat-icon>{{
+              rec.status === 'ok'
+                ? 'verified'
+                : rec.status === 'mismatch'
+                  ? 'warning'
+                  : 'help_outline'
+            }}</mat-icon>
             {{ rec.ticker }}:
             @switch (rec.status) {
               @case ('ok') {
                 сверено с вариационной маржой брокера (отчёт на {{ rec.asOf }}).
               }
               @case ('mismatch') {
-                расхождение с вариационной маржой брокера {{ money(rec.diffRub ?? '0') }} (журнал {{ money(rec.engineRub ?? '0') }}, брокер {{ money(rec.brokerRub) }}). Проверьте, что импортированы все сделки.
+                расхождение с вариационной маржой брокера {{ money(rec.diffRub ?? '0') }} (журнал
+                {{ money(rec.engineRub ?? '0') }}, брокер {{ money(rec.brokerRub) }}). Проверьте,
+                что импортированы все сделки.
               }
               @default {
                 сверить не удалось: {{ rec.reason }}
@@ -133,7 +170,8 @@ import { TradesTable } from '../../widgets/trades-table/trades-table';
         <div class="charts">
           <div class="wide">
             @defer (on viewport) {
-              <app-system-equity-chart [performance]="p"
+              <app-system-equity-chart
+                [performance]="p"
                 [curve]="curve()"
                 [periodFrom]="filter.range().from ?? null"
                 [periodTill]="filter.range().till ?? null"
@@ -160,7 +198,10 @@ import { TradesTable } from '../../widgets/trades-table/trades-table';
         }
 
         <h2 class="section-title">Сделки системы</h2>
-        <app-trades-table [trades]="systemTrades()" [operations]="operationApi.operations.value() ?? []" />
+        <app-trades-table
+          [trades]="systemTrades()"
+          [operations]="operationApi.operations.value() ?? []"
+        />
       }
     }
   `,
@@ -223,7 +264,8 @@ export class SystemPage {
     void this.params.patch({ curve: value === 'result' ? null : value });
   }
 
-  private readonly performanceFilter = computed<SystemPerformanceFilter>(() => {
+  private readonly performanceFilter = computed<SystemPerformanceFilter | null>(() => {
+    if (!this.filter.ready()) return null;
     const r = this.filter.range();
     return {
       portfolioId: this.filter.portfolio() ?? undefined,

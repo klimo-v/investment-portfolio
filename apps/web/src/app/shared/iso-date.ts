@@ -26,5 +26,5 @@ export function parseIsoDate(raw: string | null): Date | null {
   if (!raw || !/^\d{4}-\d{2}-\d{2}$/.test(raw)) return null;
   const [y, m, d] = raw.split('-').map(Number);
   const date = new Date(y, m - 1, d);
-  return Number.isNaN(date.getTime()) ? null : date;
+  return Number.isNaN(date.getTime()) || toIsoDate(date) !== raw ? null : date;
 }

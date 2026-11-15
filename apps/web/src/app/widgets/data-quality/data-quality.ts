@@ -7,7 +7,7 @@ type Carried = PerformanceDto['carried'][number];
 /**
  * «Данные: N предупреждений» — единое место для всего, что делает цифры дашборда неточными:
  * пропуски журнала (купон по графику биржи есть, а операции нет; кэш ушёл в минус — не хватает
- * ввода денег) и дыры в истории цен (цена на конец периода не найдена или взята от более ранней
+ * ввода денег) и дыры в истории цен (цена на базе расчёта или внутри периода не найдена либо взята от более ранней
  * даты). Метрики это не блокирует, но список позволяет увидеть, чему верить с оговоркой.
  * Презентационный виджет (FSD): расчёт — на бэке (libs/core/journal-completeness.ts).
  */
@@ -34,7 +34,7 @@ type Carried = PerformanceDto['carried'][number];
               }
             </li>
           }
-          @for (c of carried(); track c.instrumentId) {
+          @for (c of carried(); track c.instrumentId + c.reason) {
             <li>{{ carriedText(c) }}</li>
           }
         </ul>
@@ -86,7 +86,7 @@ export class DataQuality {
   readonly carried = input<readonly Carried[]>([]);
 
   protected readonly total = computed(() => this.warnings().length + this.carried().length);
-  /** Сколько из них задевает выбранный период; пометки цен относятся к концу периода — всегда задевают */
+  /** Сколько из них задевает выбранный период; пометки цен уже отобраны по фактическому интервалу расчёта */
   protected readonly inPeriod = computed(() => this.warnings().filter((w) => w.inPeriod).length + this.carried().length);
 
   protected plural(n: number): string {
@@ -98,10 +98,10 @@ export class DataQuality {
   }
 
   protected carriedText(c: Carried): string {
-    return c.reason === 'no-price'
-      ? `${c.ticker}: цена на конец периода не найдена, оценено по себестоимости — стоимость и результат приблизительны.`
-      : c.reason === 'no-fx'
-        ? `${c.ticker}: нет курса валюты цены, оценено по себестоимости — стоимость и результат приблизительны.`
-        : `${c.ticker}: цена на конец периода взята от ${c.priceDate} — стоимость может отставать от рынка.`;
+    const dates = c.dates.length <= 3 ? c.dates.join(', ') : `${c.dates[0]}…${c.dates[c.dates.length - 1]} (${c.dates.length} дней)`;
+    const reason = c.reason === 'no-price' ? 'нет цены, оценено по себестоимости'
+      : c.reason === 'no-fx' ? 'нет курса валюты цены или НКД, оценено по себестоимости'
+      : `перенос старой цены (последняя за ${c.priceDate})`;
+    return `${c.ticker} · ${dates}: ${reason} — доходность и результат приблизительны.`;
   }
 }

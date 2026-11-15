@@ -17,7 +17,7 @@ import {
 } from '@web-shared';
 
 /**
- * Строка разреза: суммы на сегодня (вложено/стоимость/дивиденды — из сводки) плюс доходность
+ * Строка разреза: суммы на конец периода (вложено/стоимость/дивиденды — из сводки) плюс доходность
  * за период из единого расчёта (GET /api/performance) — одна и та же функция для любой строки.
  */
 export interface EffRow {
@@ -52,7 +52,12 @@ export type EffGroupBy = 'system' | 'portfolio';
   template: `
     <mat-card class="eff">
       <div class="eff-head">
-        <h3>Эффективность</h3>
+        <h3>
+          Эффективность
+          <small>{{
+            valuationDate() ? 'стоимость на ' + valuationDate() : 'текущая стоимость'
+          }}</small>
+        </h3>
         <mat-button-toggle-group
           [value]="groupBy()"
           (change)="groupByChange.emit($event.value)"
@@ -77,64 +82,113 @@ export type EffGroupBy = 'system' | 'portfolio';
             <th mat-header-cell *matHeaderCellDef mat-sort-header>Название</th>
             <td mat-cell *matCellDef="let r">
               @if (groupBy() === 'system') {
-                <a [routerLink]="['/systems', r.id]" [queryParams]="portfolioId() ? { portfolio: portfolioId() } : null">{{ r.name }}</a>
+                <a [routerLink]="['/systems', r.id]" [queryParams]="systemQueryParams()">{{
+                  r.name
+                }}</a>
               } @else {
                 {{ r.name }}
               }
             </td>
           </ng-container>
           <ng-container matColumnDef="invested">
-            <th mat-header-cell *matHeaderCellDef mat-sort-header
-              >Вложено
-              <app-hint label="Вложено" text="Себестоимость ТЕКУЩЕГО остатка (открытых позиций). Уже закрытые (полностью проданные) позиции сюда не входят — их результат учтён в «Зафикс.», а вложенный в них капитал уже вернулся при продаже. Это величина на сегодня, а не за период." /></th
-            >
+            <th mat-header-cell *matHeaderCellDef mat-sort-header>
+              Вложено
+              <app-hint
+                label="Вложено"
+                text="Себестоимость остатка на указанную дату (открытых позиций). Уже закрытые (полностью проданные) позиции сюда не входят — их результат учтён в «Зафикс.», а вложенный в них капитал уже вернулся при продаже. Это состояние на конец выбранного периода."
+              />
+            </th>
             <td mat-cell *matCellDef="let r">{{ money(r.investedRub) }}</td>
           </ng-container>
           <ng-container matColumnDef="value">
             <th mat-header-cell *matHeaderCellDef mat-sort-header>Стоимость</th>
-            <td mat-cell *matCellDef="let r">{{ valuation(r.currentValueRub, r.unvaluedPositionCount) }}</td>
+            <td mat-cell *matCellDef="let r">
+              {{ valuation(r.currentValueRub, r.unvaluedPositionCount) }}
+            </td>
           </ng-container>
           <ng-container matColumnDef="realized">
-            <th mat-header-cell *matHeaderCellDef mat-sort-header
-              >Зафикс. / Переоценка
-              <app-hint label="Зафикс. / Переоценка" text="Зафикс. — продажи и выплаты (дивиденды, купоны) ВНУТРИ выбранного периода. Переоценка — изменение стоимости остатка именно за период: прибыль, заработанная до его начала, сюда не входит. Вместе они дают «Результат»." /></th
-            >
+            <th mat-header-cell *matHeaderCellDef mat-sort-header>
+              Зафикс. / Переоценка
+              <app-hint
+                label="Зафикс. / Переоценка"
+                text="Зафикс. — продажи и выплаты (дивиденды, купоны) ВНУТРИ выбранного периода. Переоценка — изменение стоимости остатка именно за период: прибыль, заработанная до его начала, сюда не входит. Вместе они дают «Результат»."
+              />
+            </th>
             <td mat-cell *matCellDef="let r">
-              <span [class]="cls(num(r.performance.breakdown.fixedRub))">{{ money(num(r.performance.breakdown.fixedRub)) }}</span>
+              <span [class]="cls(num(r.performance.breakdown.fixedRub))">{{
+                money(num(r.performance.breakdown.fixedRub))
+              }}</span>
               /
-              <span [class]="cls(r.unvaluedPositionCount > 0 ? 0 : num(r.performance.breakdown.revaluationRub))">{{ money(r.unvaluedPositionCount > 0 ? null : num(r.performance.breakdown.revaluationRub)) }}</span>
+              <span
+                [class]="
+                  cls(r.unvaluedPositionCount > 0 ? 0 : num(r.performance.breakdown.revaluationRub))
+                "
+                >{{
+                  money(
+                    r.unvaluedPositionCount > 0 ? null : num(r.performance.breakdown.revaluationRub)
+                  )
+                }}</span
+              >
             </td>
           </ng-container>
           <ng-container matColumnDef="pnl">
-            <th mat-header-cell *matHeaderCellDef mat-sort-header
-              >Результат <app-hint [text]="pnlHint()" label="Результат" /></th
+            <th mat-header-cell *matHeaderCellDef mat-sort-header>
+              Результат <app-hint [text]="pnlHint()" label="Результат" />
+            </th>
+            <td
+              mat-cell
+              *matCellDef="let r"
+              [class]="cls(r.unvaluedPositionCount > 0 ? 0 : num(r.performance.resultRub))"
             >
-            <td mat-cell *matCellDef="let r" [class]="cls(r.unvaluedPositionCount > 0 ? 0 : num(r.performance.resultRub))">{{ money(r.unvaluedPositionCount > 0 ? null : num(r.performance.resultRub)) }}</td>
+              {{ money(r.unvaluedPositionCount > 0 ? null : num(r.performance.resultRub)) }}
+              @if (r.performance.quality.length > 0) {
+                <small>приблизительно</small>
+              }
+            </td>
           </ng-container>
           <ng-container matColumnDef="twr">
-            <th mat-header-cell *matHeaderCellDef mat-sort-header
-              >Доходность (TWR)
-              <app-hint label="Доходность (TWR)" text="Time-weighted return: доходность капитала независимо от того, когда вы вносили и выводили деньги. Сравнима между строками и с индексом. «—» — за период не было капитала (например, система только из фьючерсов): смотрите результат в рублях." /></th
-            >
-            <td mat-cell *matCellDef="let r" [class]="cls(r.performance.twr.pct ?? 0)">{{ pct(r.performance.twr.pct) }}</td>
+            <th mat-header-cell *matHeaderCellDef mat-sort-header>
+              Доходность (TWR)
+              <app-hint
+                label="Доходность (TWR)"
+                text="Time-weighted return: доходность капитала независимо от того, когда вы вносили и выводили деньги. Сравнима между строками и с индексом. «—» — за период не было капитала (например, система только из фьючерсов): смотрите результат в рублях."
+              />
+            </th>
+            <td mat-cell *matCellDef="let r" [class]="cls(r.performance.twr.pct ?? 0)">
+              {{ pct(r.performance.twr.pct) }}
+              @if (r.performance.quality.length > 0) {
+                <small>приблизительно</small>
+              }
+            </td>
           </ng-container>
           <ng-container matColumnDef="mwr">
-            <th mat-header-cell *matHeaderCellDef mat-sort-header
-              >Доходность денег
-              <app-hint label="Доходность денег" text="Доходность ваших денег с учётом сумм и дат вводов. Период от года — в годовых (XIRR), короче — за период (результат / средний капитал). Может отличаться от TWR: так бывает, когда крупный ввод пришёлся перед ростом или падением." /></th
-            >
+            <th mat-header-cell *matHeaderCellDef mat-sort-header>
+              Доходность денег
+              <app-hint
+                label="Доходность денег"
+                text="Доходность ваших денег с учётом сумм и дат вводов. Период от года — в годовых (XIRR), короче — за период (результат / средний капитал). Может отличаться от TWR: так бывает, когда крупный ввод пришёлся перед ростом или падением."
+              />
+            </th>
             <td mat-cell *matCellDef="let r" [class]="cls(r.performance.mwr.pct ?? 0)">
               {{ pct(r.performance.mwr.pct) }}
+              @if (r.performance.quality.length > 0) {
+                <small>приблизительно</small>
+              }
               @if (r.performance.mwr.pct !== null) {
-                <span class="unit">{{ r.performance.mwr.kind === 'annual' ? 'год.' : 'за период' }}</span>
+                <span class="unit">{{
+                  r.performance.mwr.kind === 'annual' ? 'год.' : 'за период'
+                }}</span>
               }
             </td>
           </ng-container>
           <ng-container matColumnDef="dividends">
-            <th mat-header-cell *matHeaderCellDef mat-sort-header
-              >Дивиденды
-              <app-hint label="Дивиденды" text="Дивиденды и купоны, полученные вами деньгами ВНУТРИ выбранного периода — сумма операций типа «Дивиденд»/«Купон» из журнала, как есть. Эта сумма входит в «Зафикс.» и в «Результат»." /></th
-            >
+            <th mat-header-cell *matHeaderCellDef mat-sort-header>
+              Дивиденды
+              <app-hint
+                label="Дивиденды"
+                text="Дивиденды и купоны, полученные вами деньгами ВНУТРИ выбранного периода — сумма операций типа «Дивиденд»/«Купон» из журнала, как есть. Эта сумма входит в «Зафикс.» и в «Результат»."
+              />
+            </th>
             <td mat-cell *matCellDef="let r">{{ money(r.dividendsRub) }}</td>
           </ng-container>
           <ng-container matColumnDef="divyield">
@@ -180,7 +234,9 @@ export type EffGroupBy = 'system' | 'portfolio';
   ],
 })
 export class EffectivenessTable {
+  readonly systemQueryParams = input<Record<string, string>>({});
   readonly rows = input<readonly EffRow[]>([]);
+  readonly valuationDate = input<string | null>(null);
   readonly groupBy = input.required<EffGroupBy>();
   /** Разрез выбирает страница — он же определяет, какие строки сюда приедут */
   readonly groupByChange = output<EffGroupBy>();

@@ -26,7 +26,12 @@ import { ChartCanvas } from '../chart-canvas/chart-canvas';
   template: `
     <mat-card>
       <div class="head">
-        <h3>Портфель против рынка</h3>
+        <h3>
+          Портфель против рынка
+          @if (approximate()) {
+            <small>приблизительно</small>
+          }
+        </h3>
         <mat-form-field appearance="outline" subscriptSizing="dynamic" class="picker">
           <mat-label>Ориентир</mat-label>
           <mat-select [value]="selected()" (valueChange)="selectedChange.emit($event)">
@@ -37,8 +42,8 @@ import { ChartCanvas } from '../chart-canvas/chart-canvas';
         </mat-form-field>
       </div>
       <p class="note">
-        Рост ₽100 на начало периода: доходность вашей стратегии (TWR — без учёта ваших вводов и выводов),
-        выбранный ориентир и денежный рынок (RUSFAR).
+        Рост ₽100 на начало периода: доходность вашей стратегии (TWR — без учёта ваших вводов и
+        выводов), выбранный ориентир и денежный рынок (RUSFAR).
         @if (note(); as n) {
           {{ n }}
         }
@@ -49,7 +54,10 @@ import { ChartCanvas } from '../chart-canvas/chart-canvas';
         <p class="note">Нужно минимум два дня истории портфеля.</p>
       }
       @if (benchmark() && !benchmark()?.index) {
-        <p class="note warn">Ряд выбранного ориентира не загружен (источник MOEX недоступен) — показаны портфель и денежный рынок.</p>
+        <p class="note warn">
+          Ряд выбранного ориентира не загружен (источник MOEX недоступен) — показаны портфель и
+          денежный рынок.
+        </p>
       }
     </mat-card>
   `,
@@ -71,7 +79,9 @@ import { ChartCanvas } from '../chart-canvas/chart-canvas';
         font-weight: 500;
       }
       .picker {
-        min-width: 260px;
+        min-width: 0;
+        width: 260px;
+        max-width: 100%;
       }
       .note {
         margin: 0 0 12px;
@@ -86,6 +96,7 @@ import { ChartCanvas } from '../chart-canvas/chart-canvas';
 })
 export class BenchmarkChart {
   /** Индекс доходности портфеля (TWR, база 100 в первый день), по возрастанию даты */
+  readonly approximate = input(false);
   readonly values = input.required<readonly { date: string; valueRub: number }[]>();
   /** Выбранный индекс и денежный рынок на той же базе; undefined — ещё грузится */
   readonly benchmark = input<BenchmarkResponse | undefined>(undefined);

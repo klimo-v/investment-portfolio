@@ -30,13 +30,14 @@ function performanceUrl(filter: PerformanceFilter): string {
  * перезапрашивает расчёт после любой записи (операция, импорт, «Обновить цены»).
  */
 export function performanceResource(
-  filter: Signal<PerformanceFilter>,
+  filter: Signal<PerformanceFilter | null>,
 ): HttpResourceRef<PerformanceDto | undefined> {
   const revision = inject(DataRevision);
   return httpResource(
     () => {
       revision.value();
-      return performanceUrl(filter());
+      const current = filter();
+      return current ? performanceUrl(current) : undefined;
     },
     { parse: PerformanceSchema.parse },
   );

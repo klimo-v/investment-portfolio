@@ -27,28 +27,31 @@ import {
       @if (!systemScoped()) {
         <app-kpi-card
           label="Всего в портфеле"
+          [sub]="valuationSub()"
           [value]="valuation(cash().totalValueRub, totals().unvaluedPositionCount)"
-          hint="Сколько сейчас в портфеле всего: рыночная стоимость открытых позиций плюс свободные деньги. Не зависит от выбранного периода — это величина на сегодня, а не за окно."
+          hint="Рыночная стоимость позиций плюс свободные деньги на конец выбранного периода."
         />
       }
       <app-kpi-card
         label="Позиции"
+        [sub]="valuationSub()"
         [value]="valuation(totals().currentValueRub, totals().unvaluedPositionCount)"
-        hint="Рыночная стоимость открытых позиций по последним известным ценам. Деньги на счёте сюда не входят — они в соседней карточке."
+        hint="Рыночная стоимость открытых позиций на указанную дату по известным к ней ценам и курсам. Деньги на счёте сюда не входят — они в соседней карточке."
       />
       @if (!systemScoped()) {
         <app-kpi-card
           label="Свободные деньги"
           [value]="money(cash().cashRub)"
           [tone]="cashIncomplete() ? 'negative' : 'neutral'"
-          [sub]="cashIncomplete() ? 'журнал неполон' : ''"
+          [sub]="valuationSub() + (cashIncomplete() ? ' · журнал неполон' : '')"
           hint="Остаток на счёте по журналу: пополнения − выводы − покупки + продажи + дивиденды и купоны − налоги и комиссии. Минус означает, что в журнал попали не все движения денег (пополнения, переводы между счетами, отдельные налоги/комиссии) — либо позиции набирались с плечом."
         />
       }
       <app-kpi-card
         label="Вложено"
+        [sub]="valuationSub()"
         [value]="money(totals().investedRub)"
-        hint="Себестоимость держимого остатка — сходится с колонкой «Вложено» на странице «Сделки»"
+        hint="Себестоимость открытого остатка на указанную дату."
       />
 
       <!--
@@ -131,6 +134,8 @@ import {
 })
 export class SummaryKpis {
   readonly totals = input.required<Effectiveness>();
+  readonly valuationDate = input<string | null>(null);
+  protected readonly valuationSub = computed(() => this.valuationDate() ? `на ${this.valuationDate()}` : 'текущая оценка');
   readonly cash = input.required<Cash>();
   /** Единый расчёт периода (GET /api/performance); undefined — ещё грузится */
   readonly performance = input<PeriodPerformanceDto | undefined>(undefined);
@@ -175,8 +180,9 @@ export class SummaryKpis {
 
   /** Подпись карточки плюс пометка, если период задевают предупреждения о данных */
   protected withWarning(sub: string): string {
+    const approximate = (this.performance()?.quality?.length ?? 0) > 0 ? 'приблизительно' : '';
     const mark = this.dataWarnings() > 0 ? `⚠ данные неполны (${this.dataWarnings()})` : '';
-    return [sub, mark].filter(Boolean).join(' · ');
+    return [approximate, sub, mark].filter(Boolean).join(' · ');
   }
 
   protected num(v: string): number {

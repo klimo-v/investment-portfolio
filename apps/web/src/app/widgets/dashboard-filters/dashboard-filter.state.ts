@@ -1,4 +1,5 @@
-import { computed, type Signal } from '@angular/core';
+import { computed, inject, type Signal } from '@angular/core';
+import { PortfolioCalendar } from '../../shared/portfolio-calendar';
 import { parseEnum, queryParams } from '../../shared/query-param';
 // даты — общая утилита shared: тем же преобразованием пользуется период
 // синхронизации с брокером на странице импорта
@@ -56,6 +57,15 @@ export interface DashboardFilter {
   readonly customFrom: Signal<Date | null>;
   readonly customTill: Signal<Date | null>;
   readonly range: Signal<PeriodRange>;
+  readonly ready: Signal<boolean>;
+  readonly calendarLoading: Signal<boolean>;
+  readonly calendarError: Signal<boolean>;
+  retryCalendar(): void;
+  readonly error: Signal<string | null>;
+  readonly rawFrom: Signal<string | null>;
+  readonly rawTill: Signal<string | null>;
+  readonly linkParams: Signal<Record<string, string>>;
+  setRawRange(from: string | null, till: string | null): void;
   readonly label: Signal<string | null>;
   setSystem(id: string | null): void;
   setPortfolio(id: string | null): void;
@@ -85,7 +95,34 @@ export function dashboardFilter(): DashboardFilter {
   const period = computed<Period>(() => parseEnum(rawPeriod(), PERIODS, 'all'));
   const customFrom = computed(() => parseIsoDate(rawFrom()));
   const customTill = computed(() => parseIsoDate(rawTill()));
-  const range = computed(() => periodToRange(period(), new Date(), customFrom(), customTill()));
+  const calendar = inject(PortfolioCalendar);
+  const range = computed(() => {
+    const day = calendar.today();
+    const today = parseIsoDate(day) ?? new Date();
+    const r = periodToRange(period(), today, customFrom(), customTill());
+    return r.till && day && r.till > day ? { ...r, till: day } : r;
+  });
+  const error = computed(() => {
+    if (period() !== 'custom') return null;
+    const rawError = rangeError(rawFrom(), rawTill());
+    if (rawError) return rawError;
+    const r = range();
+    return r.from && r.till && r.from > r.till
+      ? 'Весь выбранный период находится в будущем. Начало должно быть не позже текущей даты.'
+      : null;
+  });
+  const ready = computed(
+    () =>
+      !!calendar.today() &&
+      !calendar.context.error() &&
+      !error() &&
+      (period() !== 'custom' || (!!customFrom() && !!customTill())),
+  );
+  const linkParams = computed(() => ({
+    ...(portfolio() ? { portfolio: portfolio()! } : {}),
+    period: period(),
+    ...(period() === 'custom' ? { from: rawFrom() ?? '', till: rawTill() ?? '' } : {}),
+  }));
 
   return {
     system,
@@ -94,6 +131,19 @@ export function dashboardFilter(): DashboardFilter {
     customFrom,
     customTill,
     range,
+    ready,
+    calendarLoading: calendar.context.isLoading,
+    calendarError: computed(() => !!calendar.context.error()),
+    retryCalendar: () => {
+      calendar.context.reload();
+    },
+    error,
+    rawFrom,
+    rawTill,
+    linkParams,
+    setRawRange: (from, till) => {
+      void params.patch({ period: 'custom', from, till });
+    },
     label: computed(() => formatRangeLabel(range())),
     setSystem: (id) => params.patch({ system: id }),
     setPortfolio: (id) => params.patch({ portfolio: id }),
@@ -109,6 +159,19 @@ export function dashboardFilter(): DashboardFilter {
       ),
     setCustomFrom: (date) => params.patch({ from: date ? toIsoDate(date) : null }),
     setCustomTill: (date) => params.patch({ till: date ? toIsoDate(date) : null }),
-    setCustomRange: (from, till) => params.patch({ period: 'custom', from: toIsoDate(from), till: toIsoDate(till) }),
+    setCustomRange: (from, till) =>
+      params.patch({ period: 'custom', from: toIsoDate(from), till: toIsoDate(till) }),
   };
+}
+
+/** Missing bounds are unfinished input; impossible dates and reversed bounds are errors. */
+export function rangeError(from: string | null, till: string | null): string | null {
+  const partial = (v: string) => /^[0-9.-]+$/.test(v) && v.length < 10;
+  if (from && !parseIsoDate(from) && !partial(from))
+    return 'Начало: несуществующая дата. Введите ДД.ММ.ГГГГ.';
+  if (till && !parseIsoDate(till) && !partial(till))
+    return 'Конец: несуществующая дата. Введите ДД.ММ.ГГГГ.';
+  if (from && till && parseIsoDate(from) && parseIsoDate(till) && from > till)
+    return 'Начало периода не может быть позже конца.';
+  return null;
 }

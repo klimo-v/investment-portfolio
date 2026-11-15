@@ -37,13 +37,14 @@ function summaryUrl(filter: SummaryFilter): string {
  * не нужен, а состояние живёт ровно столько, сколько живёт страница.
  */
 export function summaryResource(
-  filter: Signal<SummaryFilter>,
+  filter: Signal<SummaryFilter | null>,
 ): HttpResourceRef<DashboardSummary | undefined> {
   const revision = inject(DataRevision);
   return httpResource(
     () => {
       revision.value();
-      return summaryUrl(filter());
+      const current = filter();
+      return current ? summaryUrl(current) : undefined;
     },
     { parse: DashboardSummarySchema.parse },
   );

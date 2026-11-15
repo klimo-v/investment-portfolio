@@ -1,10 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import {
-  formatRangeLabel,
-  parseIsoDate,
-  periodToRange,
-  toIsoDate,
-} from './dashboard-filter.state';
+import { formatRangeLabel, parseIsoDate, periodToRange, toIsoDate } from './dashboard-filter.state';
 
 /**
  * Границы периода — самая незаметно ломкая часть фильтра: ошибка здесь не падает,
@@ -92,5 +87,13 @@ describe('formatRangeLabel', () => {
   it('без обеих границ подписи нет — период «всё время» диапазоном не описывается', () => {
     expect(formatRangeLabel({})).toBeNull();
     expect(formatRangeLabel({ from: '2026-01-01' })).toBeNull();
+  });
+});
+
+describe('строгие даты P2', () => {
+  it('не нормализует несуществующие дни', () => {
+    expect(parseIsoDate('2026-02-31')).toBeNull();
+    expect(parseIsoDate('2026-02-29')).toBeNull();
+    expect(toIsoDate(parseIsoDate('2024-02-29')!)).toBe('2024-02-29');
   });
 });

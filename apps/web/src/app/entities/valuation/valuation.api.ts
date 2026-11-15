@@ -31,13 +31,14 @@ function valuationUrl(filter: ValuationFilter): string {
  * перезапрашивает ряд после любой записи (операция, импорт, «Обновить цены»).
  */
 export function valuationResource(
-  filter: Signal<ValuationFilter>,
+  filter: Signal<ValuationFilter | null>,
 ): HttpResourceRef<ValuationSeriesDto | undefined> {
   const revision = inject(DataRevision);
   return httpResource(
     () => {
       revision.value();
-      return valuationUrl(filter());
+      const current = filter();
+      return current ? valuationUrl(current) : undefined;
     },
     { parse: ValuationSeriesSchema.parse },
   );

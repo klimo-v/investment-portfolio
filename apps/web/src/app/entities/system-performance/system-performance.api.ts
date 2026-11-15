@@ -29,13 +29,14 @@ function performanceUrl(systemId: string, filter: SystemPerformanceFilter): stri
  */
 export function systemPerformanceResource(
   systemId: Signal<string>,
-  filter: Signal<SystemPerformanceFilter>,
+  filter: Signal<SystemPerformanceFilter | null>,
 ): HttpResourceRef<SystemPerformance | undefined> {
   const revision = inject(DataRevision);
   return httpResource(
     () => {
       revision.value();
-      return performanceUrl(systemId(), filter());
+      const current = filter();
+      return current ? performanceUrl(systemId(), current) : undefined;
     },
     { parse: SystemPerformanceSchema.parse },
   );

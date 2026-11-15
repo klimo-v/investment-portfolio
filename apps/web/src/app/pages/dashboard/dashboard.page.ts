@@ -5,10 +5,17 @@ import { summaryResource, type SummaryFilter } from '../../entities/summary/summ
 import { benchmarkResource, type BenchmarkQuery } from '../../entities/benchmark/benchmark.api';
 import { parseEnum, queryParams } from '../../shared/query-param';
 import { valuationResource, type ValuationFilter } from '../../entities/valuation/valuation.api';
-import { performanceResource, type PerformanceFilter } from '../../entities/performance/performance.api';
+import {
+  performanceResource,
+  type PerformanceFilter,
+} from '../../entities/performance/performance.api';
 import { DataRevision } from '../../shared/data-revision';
 import { DashboardFilters } from '../../widgets/dashboard-filters/dashboard-filters';
-import { dashboardFilter, parseIsoDate } from '../../widgets/dashboard-filters/dashboard-filter.state';
+import {
+  dashboardFilter,
+  formatRangeLabel,
+  parseIsoDate,
+} from '../../widgets/dashboard-filters/dashboard-filter.state';
 import { SummaryKpis } from '../../widgets/summary-kpis/summary-kpis';
 import { DataQuality } from '../../widgets/data-quality/data-quality';
 import { TwrStartHint } from '../../widgets/twr-start-hint/twr-start-hint';
@@ -53,14 +60,30 @@ import { PnlBarChart } from '../../widgets/pnl-bar-chart/pnl-bar-chart';
     <div class="page-header">
       <h1 class="page-title">
         Дашборд
-        @if (filter.label(); as label) {
+        @if (appliedLabel(); as label) {
           <span class="period-range">({{ label }})</span>
         }
       </h1>
       <app-dashboard-filters />
     </div>
 
-    @if (summary.error() || performance.error()) {
+    @if (filter.calendarError()) {
+      <app-state-message
+        kind="error"
+        title="Не удалось загрузить календарь портфеля"
+        hint="Проверьте связь с сервером и повторите."
+        retryLabel="Повторить"
+        (retry)="filter.retryCalendar()"
+      />
+    } @else if (filter.calendarLoading()) {
+      <p role="status">Загрузка календаря портфеля…</p>
+    } @else if (!filter.ready()) {
+      <p role="status">
+        {{ filter.error() ?? 'Выберите обе даты периода. Расчёт приостановлен.' }}
+      </p>
+    } @else if (summary.isLoading() || performance.isLoading()) {
+      <p role="status">Загрузка выбранного периода…</p>
+    } @else if (summary.error() || performance.error()) {
       <app-state-message
         kind="error"
         title="Не удалось загрузить сводку"
@@ -77,31 +100,43 @@ import { PnlBarChart } from '../../widgets/pnl-bar-chart/pnl-bar-chart';
         а скрыто всё только пока данных нет вообще — на первой загрузке.
       -->
     } @else if (summary.hasValue()) {
-      <app-data-quality [warnings]="performance.value()?.warnings ?? []" [carried]="performance.value()?.carried ?? []" />
+      <app-data-quality
+        [warnings]="performanceData()?.warnings ?? []"
+        [carried]="performanceData()?.carried ?? []"
+      />
 
       <app-twr-start-hint
-        [suggestedFrom]="performance.value()?.total?.twrSuggestedFrom ?? null"
+        [suggestedFrom]="performanceData()?.total?.twrSuggestedFrom ?? null"
         [currentFrom]="filter.range().from ?? null"
         (apply)="applySuggestedStart($event)"
       />
 
       <app-summary-kpis
         [dataWarnings]="periodWarnings()"
+        [valuationDate]="summary.value().valuationDate"
         [totals]="totals()"
         [cash]="cash()"
         [systemScoped]="filter.system() !== null"
-        [performance]="performance.value()?.total"
+        [performance]="performanceData()?.total"
         [drawdownPct]="maxDrawdownPct()"
       />
 
       <app-effectiveness-table
+        [valuationDate]="summary.value().valuationDate"
         [rows]="effRows()"
         [groupBy]="groupBy()"
         (groupByChange)="groupBy.set($event)"
         [pnlHint]="pnlHint"
         [portfolioId]="filter.portfolio()"
+        [systemQueryParams]="filter.linkParams()"
       />
 
+      @if ((performanceData()?.total?.quality?.length ?? 0) > 0) {
+        <p>
+          Графики за период: приблизительно — есть пропуски или переносы цен и курсов. Подробности в
+          «Данные».
+        </p>
+      }
       <div class="charts">
         <!--
           Плейсхолдеры повторяют геометрию .chart-box, поэтому подгрузка виджета не
@@ -109,9 +144,23 @@ import { PnlBarChart } from '../../widgets/pnl-bar-chart/pnl-bar-chart';
         -->
         <div class="wide">
           @defer (on viewport) {
+            @if (benchmark.error()) {
+              <app-state-message
+                kind="error"
+                title="Не удалось загрузить ориентир"
+                hint="Линия портфеля остаётся доступна."
+                retryLabel="Повторить"
+                (retry)="benchmark.reload()"
+              />
+            } @else if (benchmark.isLoading()) {
+              <p role="status">Загрузка ориентира…</p>
+            }
             <app-benchmark-chart
+              [approximate]="(performanceData()?.total?.quality?.length ?? 0) > 0"
               [values]="portfolioValues()"
-              [benchmark]="benchmark.value()"
+              [benchmark]="
+                benchmark.hasValue() && !benchmark.isLoading() ? benchmark.value() : undefined
+              "
               [selected]="benchmarkSecid()"
               (selectedChange)="selectBenchmark($event)"
             />
@@ -122,7 +171,20 @@ import { PnlBarChart } from '../../widgets/pnl-bar-chart/pnl-bar-chart';
 
         <div class="wide">
           @defer (on viewport) {
-            <app-positions-series-chart [series]="valuation.value()" />
+            @if (valuation.error()) {
+              <app-state-message
+                kind="error"
+                title="Не удалось загрузить стоимость инструментов"
+                retryLabel="Повторить"
+                (retry)="valuation.reload()"
+              />
+            } @else if (valuation.isLoading()) {
+              <p role="status">Загрузка стоимости инструментов…</p>
+            } @else if (valuation.hasValue()) {
+              <app-positions-series-chart [series]="valuation.value()" />
+            } @else {
+              <p role="status">Загрузка стоимости инструментов…</p>
+            }
           } @placeholder {
             <div class="chart-box tall"></div>
           }
@@ -149,7 +211,10 @@ import { PnlBarChart } from '../../widgets/pnl-bar-chart/pnl-bar-chart';
         <div class="wide">
           @defer (on viewport) {
             <app-pnl-bar-chart
-              title="Прибыль / убыток по инструментам"
+              [title]="
+                'Прибыль / убыток по инструментам' +
+                (instrumentApproximate() ? ' · приблизительно' : '')
+              "
               [bars]="instrumentBars()"
               [horizontal]="true"
               emptyTitle="Нет данных по инструментам"
@@ -178,8 +243,11 @@ import { PnlBarChart } from '../../widgets/pnl-bar-chart/pnl-bar-chart';
        */
       .charts {
         display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+        grid-template-columns: repeat(auto-fit, minmax(min(100%, 360px), 1fr));
         gap: 16px;
+      }
+      .charts > * {
+        min-width: 0;
       }
       .charts .wide {
         grid-column: 1 / -1;
@@ -205,7 +273,8 @@ export class DashboardPage {
     'Результат за период = зафиксированное (продажи, дивиденды, купоны внутри периода) + ' +
     'переоценка остатка именно за период. Прибыль, заработанная до начала периода, сюда не входит.';
 
-  private readonly summaryFilter = computed<SummaryFilter>(() => {
+  private readonly summaryFilter = computed<SummaryFilter | null>(() => {
+    if (!this.filter.ready()) return null;
     const r = this.filter.range();
     return {
       systemId: this.filter.system() ?? undefined,
@@ -228,7 +297,8 @@ export class DashboardPage {
    * «Стоимость инструментов во времени», линия портфеля в «Портфель против рынка» и просадка.
    * Считается из журнала и истории цен, поэтому «Сделать снимок» больше не нужен.
    */
-  private readonly valuationFilter = computed<ValuationFilter>(() => {
+  private readonly valuationFilter = computed<ValuationFilter | null>(() => {
+    if (!this.filter.ready()) return null;
     const r = this.filter.range();
     return {
       groupBy: 'instrument',
@@ -245,21 +315,31 @@ export class DashboardPage {
    * рынка, просадка и таблица эффективности берутся из ОДНОГО DTO. Контур: выбрана система —
    * позиции системы (в пределах счёта, если он выбран); выбран счёт — его богатство; иначе весь журнал.
    */
-  private readonly performanceFilter = computed<PerformanceFilter>(() => {
+  private readonly performanceFilter = computed<PerformanceFilter | null>(() => {
+    if (!this.filter.ready()) return null;
     const r = this.filter.range();
     const system = this.filter.system();
     const portfolio = this.filter.portfolio();
     return system
-      ? { scope: 'system', id: system, portfolioId: portfolio ?? undefined, from: r.from, till: r.till }
+      ? {
+          scope: 'system',
+          id: system,
+          portfolioId: portfolio ?? undefined,
+          from: r.from,
+          till: r.till,
+        }
       : portfolio
         ? { scope: 'portfolio', id: portfolio, from: r.from, till: r.till }
         : { scope: 'all', from: r.from, till: r.till };
   });
   protected readonly performance = performanceResource(this.performanceFilter);
+  protected readonly performanceData = computed(() =>
+    this.performance.hasValue() ? this.performance.value() : undefined,
+  );
 
-  /** Предупреждения о данных, задевающие выбранный период: пропуски журнала и дыры в ценах на конец периода */
+  /** Предупреждения о данных, задевающие выбранный период: пропуски журнала и дыры в ценах на базе расчёта и внутри периода */
   protected readonly periodWarnings = computed(() => {
-    const p = this.performance.value();
+    const p = this.performanceData();
     return p ? p.warnings.filter((w) => w.inPeriod).length + p.carried.length : 0;
   });
 
@@ -276,23 +356,28 @@ export class DashboardPage {
   private static readonly EMPTY_CASH: Cash = { cashRub: 0, totalValueRub: 0 };
 
   protected readonly totals = computed<Effectiveness>(
-    () => (this.summary.hasValue() ? this.summary.value() : undefined)?.totals ?? DashboardPage.EMPTY,
+    () =>
+      (this.summary.hasValue() ? this.summary.value() : undefined)?.totals ?? DashboardPage.EMPTY,
   );
   protected readonly cash = computed<Cash>(
-    () => (this.summary.hasValue() ? this.summary.value() : undefined)?.cash ?? DashboardPage.EMPTY_CASH,
+    () =>
+      (this.summary.hasValue() ? this.summary.value() : undefined)?.cash ??
+      DashboardPage.EMPTY_CASH,
   );
 
   /**
-   * Строки разреза — по системам или по портфелям: суммы на сегодня из сводки, доходность за
+   * Строки разреза — по системам или по портфелям: суммы на конец периода из сводки, доходность за
    * период из единого расчёта (по id). Строка без расчёта не показывается.
    */
   protected readonly effRows = computed<EffRow[]>(() => {
-    const s = (this.summary.hasValue() ? this.summary.value() : undefined);
-    const p = this.performance.value();
+    const s = this.summary.hasValue() ? this.summary.value() : undefined;
+    const p = this.performanceData();
     if (!s || !p) return [];
     const bySystem = this.groupBy() === 'system';
     const sums = new Map<string, Effectiveness>(
-      bySystem ? s.bySystem.map((r) => [r.systemId, r]) : s.byPortfolio.map((r) => [r.portfolioId, r]),
+      bySystem
+        ? s.bySystem.map((r) => [r.systemId, r])
+        : s.byPortfolio.map((r) => [r.portfolioId, r]),
     );
     return (bySystem ? p.bySystem : p.byPortfolio).map((row) => {
       const e = sums.get(row.id) ?? DashboardPage.EMPTY;
@@ -311,39 +396,61 @@ export class DashboardPage {
 
   /** «Результат по системам» — из того же расчёта, что и карточки: рубли за период, а не за всю историю */
   protected readonly systemBars = computed(() =>
-    (this.performance.value()?.bySystem ?? [])
+    (this.performanceData()?.bySystem ?? [])
       .map((r) => ({ label: r.name, pnlRub: Number(r.performance.resultRub) }))
       .sort((a, b) => b.pnlRub - a.pnlRub),
   );
 
   protected readonly instrumentBars = computed(() =>
-    ((this.summary.hasValue() ? this.summary.value() : undefined)?.breakdown ?? []).map((r) => ({ label: r.ticker, pnlRub: r.pnlRub })),
+    (this.performanceData()?.byInstrument ?? []).map((r) => ({
+      label: r.name,
+      pnlRub: Number(r.resultRub),
+    })),
   );
+
+  protected readonly instrumentApproximate = computed(() =>
+    (this.performanceData()?.byInstrument ?? []).some((r) => r.quality.length > 0),
+  );
+  protected readonly appliedLabel = computed(() => {
+    if (!this.filter.ready() || this.performance.isLoading() || !this.performance.hasValue())
+      return null;
+    const p = this.performance.value();
+    return p.from ? formatRangeLabel({ from: p.from, till: p.till }) : null;
+  });
 
   /**
    * Индекс доходности (TWR, база 100) без влияния ввода/вывода денег и продаж — ряд из того же
    * расчёта, что и карточка: последняя точка линии = карточка «Доходность стратегии».
    */
   protected readonly portfolioValues = computed(() =>
-    (this.performance.value()?.total.twr.series ?? []).map((p) => ({ date: p.date, valueRub: p.index })),
+    (this.performanceData()?.total.twr.series ?? []).map((p) => ({
+      date: p.date,
+      valueRub: p.index,
+    })),
   );
 
-  /** «Считать с этой даты»: период становится произвольным [подсказанная дата; выбранный конец или сегодня] */
+  /** Меняем только начало: конец берём из уже показанного серверного расчёта. */
   protected applySuggestedStart(from: string): void {
     const start = parseIsoDate(from);
-    if (!start) return;
-    const chosenTill = parseIsoDate(this.filter.range().till ?? null);
-    this.filter.setCustomRange(start, chosenTill ?? new Date());
+    const till = parseIsoDate(this.performanceData()?.till ?? null);
+    if (!start || !till) return;
+    this.filter.setCustomRange(start, till);
   }
 
   /** Просадка ряда TWR в процентах — считает бэк вместе с рядом (null — меньше двух дней или процентов нет) */
-  protected readonly maxDrawdownPct = computed(() => this.performance.value()?.total.maxDrawdownPct ?? null);
+  protected readonly maxDrawdownPct = computed(
+    () => this.performanceData()?.total.maxDrawdownPct ?? null,
+  );
 
   /** Выбранный ориентир живёт в адресной строке (?benchmark=), как и остальной фильтр дашборда */
   private readonly urlParams = queryParams();
   private readonly rawBenchmark = this.urlParams.read('benchmark');
   protected readonly benchmarkSecid = computed(() =>
-    parseEnum(this.rawBenchmark(), BENCHMARK_INDEXES.map((b) => b.secid), DEFAULT_BENCHMARK),
+    parseEnum(
+      this.rawBenchmark(),
+      BENCHMARK_INDEXES.map((b) => b.secid),
+      DEFAULT_BENCHMARK,
+    ),
   );
 
   protected selectBenchmark(secid: string): void {
@@ -356,7 +463,7 @@ export class DashboardPage {
    */
   private readonly benchmarkQuery = computed<BenchmarkQuery | null>(() => {
     const s = this.portfolioValues();
-    if (s.length < 2) return null;
+    if (!this.filter.ready() || this.performance.isLoading() || s.length < 2) return null;
     return { secid: this.benchmarkSecid(), from: s[0].date, till: s[s.length - 1].date };
   });
 

@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { EffectivenessSchema, PeriodPerformanceSchema } from '@core';
 import { formatMoney, formatRub, formatValuation } from '@web-shared';
 import { SummaryKpis } from './summary-kpis';
+import { DataQuality } from '../data-quality/data-quality';
 import { EffectivenessTable } from '../effectiveness-table/effectiveness-table';
 
 const performance = PeriodPerformanceSchema.parse({
@@ -88,4 +89,31 @@ describe('Неполная оценка в карточках и разреза�
       f.destroy();
     },
   );
+  it('20% помечены как приблизительные, дата стоимости и причина доступны', () => {
+    const quality=[{instrumentId:'TEST',reason:'no-price' as const,priceDate:null,dates:['2026-01-01']}];
+    const p={...performance,quality,twr:{...performance.twr,pct:20},mwr:{...performance.mwr,pct:20}};
+    const f=TestBed.createComponent(SummaryKpis);
+    f.componentRef.setInput('totals',{...totals,unvaluedPositionCount:0,currentValueRub:1200});
+    f.componentRef.setInput('cash',{cashRub:0,totalValueRub:1200});
+    f.componentRef.setInput('performance',p); f.componentRef.setInput('valuationDate','2026-01-04'); f.detectChanges();
+    const cards=[...(f.nativeElement as HTMLElement).querySelectorAll('app-kpi-card')];
+    expect(cards.find(c=>c.textContent?.includes('Доходность стратегии'))?.textContent).toContain('приблизительно');
+    expect(cards.find(c=>c.textContent?.includes('Доходность стратегии'))?.textContent).toContain('+20.00%');
+    expect(cards.find(c=>c.textContent?.includes('Позиции'))?.textContent).toContain('на 2026-01-04');
+    const table=TestBed.createComponent(EffectivenessTable);
+    table.componentRef.setInput('groupBy','system');
+    table.componentRef.setInput('valuationDate','2026-01-04');
+    table.componentRef.setInput('rows',[
+      {...totals,id:'s1',name:'С проблемой',performance:p},
+      {...totals,id:'s2',name:'Без проблемы',performance},
+    ]); table.detectChanges();
+    const rows=[...(table.nativeElement as HTMLElement).querySelectorAll('tr.mat-mdc-row')];
+    expect(rows[0].textContent).toContain('приблизительно');
+    expect(rows[1].textContent).not.toContain('приблизительно');
+    const detail=TestBed.createComponent(DataQuality);
+    detail.componentRef.setInput('carried',[{...quality[0],ticker:'TEST'}]); detail.detectChanges();
+    expect((detail.nativeElement as HTMLElement).textContent).toContain('TEST · 2026-01-01: нет цены, оценено по себестоимости');
+    f.destroy();table.destroy();detail.destroy();
+  });
+
 });
