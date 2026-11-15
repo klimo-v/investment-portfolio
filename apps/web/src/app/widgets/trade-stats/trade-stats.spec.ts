@@ -1,3 +1,4 @@
+import { provideRouter } from '@angular/router';
 import { describe, it, expect, beforeEach } from 'vitest';
 import { TestBed } from '@angular/core/testing';
 import { TradeStats, type TradeStatRow } from './trade-stats';
@@ -37,7 +38,9 @@ describe('TradeStats', () => {
     return fixture;
   }
 
-  beforeEach(() => TestBed.configureTestingModule({ imports: [TradeStats] }));
+  beforeEach(() =>
+    TestBed.configureTestingModule({ imports: [TradeStats], providers: [provideRouter([])] }),
+  );
 
   it('без закрытых сделок показывает объяснение вместо пустых нулей', () => {
     const fixture = render([trade({ status: 'Open', closedAt: null })]);
@@ -62,9 +65,9 @@ describe('TradeStats', () => {
     expect(text).toContain('50%');
   });
 
-  it('разрез по системам появляется только когда систем больше одной', () => {
+  it('разрез по системам сохраняет ссылку даже для одной системы', () => {
     const single = render([trade(), trade()]);
-    expect(single.nativeElement.textContent).toContain('Недостаточно систем');
+    expect(single.nativeElement.querySelector('a')?.getAttribute('href')).toBe('/systems/sys-1');
 
     const many = render([trade(), trade({ systemId: 'sys-2', realizedPnlRub: -300 })]);
     const text = many.nativeElement.textContent as string;

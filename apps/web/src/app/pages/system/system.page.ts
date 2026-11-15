@@ -73,7 +73,10 @@ import { TradesTable } from '../../widgets/trades-table/trades-table';
             (selectionChange)="filter.setPortfolio($event.value)"
           >
             <mat-option [value]="null">Все</mat-option>
-            @for (p of reference.portfolios.value(); track p.id) {
+            @for (
+              p of reference.portfolios.hasValue() ? reference.portfolios.value() : [];
+              track p.id
+            ) {
               <mat-option [value]="p.id">{{ p.name }}</mat-option>
             }
           </mat-select>
@@ -198,10 +201,20 @@ import { TradesTable } from '../../widgets/trades-table/trades-table';
         }
 
         <h2 class="section-title">Сделки системы</h2>
-        <app-trades-table
-          [trades]="systemTrades()"
-          [operations]="operationApi.operations.value() ?? []"
-        />
+        <section class="system-trades" aria-label="Сделки системы">
+          @if (tradeApi.trades.isLoading()) {
+            <p role="status">Загружаем сделки системы…</p>
+          } @else if (tradeApi.trades.error()) {
+            <app-state-message
+              kind="error"
+              title="Не удалось загрузить сделки системы"
+              retryLabel="Повторить"
+              (retry)="tradeApi.trades.reload()"
+            />
+          } @else if (tradeApi.trades.hasValue()) {
+            <app-trades-table [trades]="systemTrades()" />
+          }
+        </section>
       }
     }
   `,
@@ -250,7 +263,7 @@ export class SystemPage {
   protected readonly reference = inject(ReferenceApi);
   protected readonly money = (v: string): string => formatMoney(v, 'RUB');
   protected readonly operationApi = inject(OperationApi);
-  private readonly tradeApi = inject(TradeApi);
+  protected readonly tradeApi = inject(TradeApi);
   protected readonly filter = dashboardFilter();
 
   /** Какая кривая на графике: по закрытым сделкам или результат системы. Живёт в адресе (?curve=) */
@@ -278,8 +291,10 @@ export class SystemPage {
 
   protected readonly title = computed(
     () =>
-      this.performance.value()?.systemName ??
-      this.reference.systems.value()?.find((s) => s.id === this.systemId())?.name ??
+      (this.performance.hasValue() ? this.performance.value().systemName : null) ??
+      (this.reference.systems.hasValue()
+        ? this.reference.systems.value().find((s) => s.id === this.systemId())?.name
+        : null) ??
       'Система',
   );
 
@@ -292,7 +307,7 @@ export class SystemPage {
   protected readonly systemTrades = computed(() => {
     const portfolio = this.filter.portfolio();
     const { from, till } = this.filter.range();
-    return (this.tradeApi.trades.value() ?? []).filter(
+    return (this.tradeApi.trades.hasValue() ? this.tradeApi.trades.value() : []).filter(
       (t) =>
         t.systemId === this.systemId() &&
         (!portfolio || t.portfolioId === portfolio) &&

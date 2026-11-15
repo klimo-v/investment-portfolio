@@ -3,6 +3,8 @@ import {
   Component,
   computed,
   input,
+  model,
+  inject,
   linkedSignal,
   signal,
 } from '@angular/core';
@@ -12,7 +14,9 @@ import { MatIconModule } from '@angular/material/icon';
 import { MatButtonModule } from '@angular/material/button';
 import { MatPaginatorModule, type PageEvent } from '@angular/material/paginator';
 import { MatSortModule, type Sort } from '@angular/material/sort';
-import type { Operation, Trade } from '@core';
+import type { Trade } from '@core';
+import { OperationApi } from '../../entities/operation/operation.api';
+import { ReferenceApi } from '../../entities/reference/reference.api';
 import {
   clampPageIndex,
   formatMoney,
@@ -73,8 +77,12 @@ const STATUS_RANK: Record<Trade['status'], number> = { Open: 0, Partial: 1, Clos
       @if (trades().length === 0) {
         <app-state-message
           kind="empty"
-          title="Сделок нет"
-          hint="Сделки собираются из журнала операций автоматически — добавьте покупки и продажи."
+          [title]="emptyTitle()"
+          [hint]="
+            emptyTitle() === 'Сделок нет'
+              ? 'Сделки собираются из журнала операций автоматически — добавьте покупки и продажи.'
+              : 'Измените или сбросьте фильтры над таблицей.'
+          "
         />
       } @else {
         <div class="table-scroll">
@@ -97,14 +105,26 @@ const STATUS_RANK: Record<Trade['status'], number> = { Open: 0, Partial: 1, Clos
             </ng-container>
             <ng-container matColumnDef="ticker">
               <th mat-header-cell *matHeaderCellDef mat-sort-header>Тикер</th>
-              <td mat-cell *matCellDef="let t">{{ t.ticker }}</td>
+              <td mat-cell *matCellDef="let t">
+                <strong>{{ t.ticker }}</strong>
+                <span class="context"
+                  >{{ systemNames().get(t.systemId) ?? t.systemId }} ·
+                  {{ portfolioNames().get(t.portfolioId) ?? t.portfolioId }}</span
+                >
+                @if (t.pnlRub === null) {
+                  <span class="mobile-issue"
+                    >P&L — · {{ t.valuationIssue ?? 'Нет оценки остатка' }}</span
+                  >
+                }
+                <span class="context">{{ t.direction === 'Short' ? 'Short' : 'Long' }}</span>
+              </td>
             </ng-container>
             <ng-container matColumnDef="qty">
               <th mat-header-cell *matHeaderCellDef mat-sort-header>Кол-во</th>
               <td mat-cell *matCellDef="let t">{{ t.quantity }} / {{ t.qtyBought }}</td>
             </ng-container>
             <ng-container matColumnDef="invested">
-              <th mat-header-cell *matHeaderCellDef mat-sort-header>Вложено (₽)</th>
+              <th mat-header-cell *matHeaderCellDef mat-sort-header>Себестоимость остатка (₽)</th>
               <td mat-cell *matCellDef="let t">{{ money(t.investedRub) }}</td>
             </ng-container>
             <ng-container matColumnDef="payouts">
@@ -113,7 +133,14 @@ const STATUS_RANK: Record<Trade['status'], number> = { Open: 0, Partial: 1, Clos
             </ng-container>
             <ng-container matColumnDef="pnl">
               <th mat-header-cell *matHeaderCellDef mat-sort-header>P&L (₽)</th>
-              <td mat-cell *matCellDef="let t" [class]="cls(t.pnlRub)">{{ money(t.pnlRub) }}</td>
+              <td mat-cell *matCellDef="let t" [class]="cls(t.pnlRub)">
+                {{ money(t.pnlRub) }}
+                @if (t.pnlRub === null) {
+                  <span class="valuation-issue">{{
+                    t.valuationIssue ?? 'Нет оценки остатка'
+                  }}</span>
+                }
+              </td>
             </ng-container>
             <ng-container matColumnDef="dates">
               <th mat-header-cell *matHeaderCellDef mat-sort-header>Открыта / Закрыта</th>
@@ -145,15 +172,50 @@ const STATUS_RANK: Record<Trade['status'], number> = { Open: 0, Partial: 1, Clos
               <td mat-cell *matCellDef="let t" [attr.colspan]="columns.length">
                 @if (expandedId() === t.id) {
                   <div class="detail">
-                    <p class="detail-title">Операции сделки:</p>
-                    <ul>
-                      @for (op of expandedOperations(); track op.id) {
-                        <li>
-                          {{ op.date }} — {{ op.operationType }} {{ op.quantity }} @ {{ op.price }}
-                          @if (op.fee !== '0') { (комиссия {{ op.fee }}) }
-                        </li>
+                    <dl class="amounts">
+                      @if (t.type !== 'Future') {
+                        <dt>Сумма покупок</dt>
+                        <dd>{{ money(t.purchasesRub) }}</dd>
+                      } @else {
+                        <dt>Учёт фьючерса</dt>
+                        <dd>Номинал контракта не считается вложенными деньгами</dd>
                       }
-                    </ul>
+                      <dt>Реализованный торговый результат</dt>
+                      <dd>{{ money(t.realizedPnlRub) }}</dd>
+                      <dt>Дивиденды</dt>
+                      <dd>{{ money(t.dividendsRub) }}</dd>
+                      <dt>Купоны</dt>
+                      <dd>{{ money(t.couponsRub) }}</dd>
+                      <dt>Полный P&L (включая оценку остатка)</dt>
+                      <dd>{{ money(t.pnlRub) }}</dd>
+                    </dl>
+                    <p class="detail-title">Операции сделки:</p>
+                    @if (api.operations.isLoading()) {
+                      <p role="status">Загружаем журнал операций…</p>
+                    } @else if (api.operations.error()) {
+                      <app-state-message
+                        kind="error"
+                        title="Не удалось загрузить журнал операций"
+                        retryLabel="Повторить"
+                        (retry)="api.operations.reload()"
+                      />
+                    } @else if (api.operations.hasValue()) {
+                      @if (expandedOperations().length === 0) {
+                        <p>В журнале нет операций этой сделки.</p>
+                      } @else {
+                        <ul>
+                          @for (op of expandedOperations(); track op.id) {
+                            <li>
+                              {{ op.date }} — {{ op.operationType }} {{ op.quantity }} @
+                              {{ op.price }}
+                              @if (op.fee !== '0') {
+                                (комиссия {{ op.fee }})
+                              }
+                            </li>
+                          }
+                        </ul>
+                      }
+                    }
                   </div>
                 }
               </td>
@@ -182,6 +244,41 @@ const STATUS_RANK: Record<Trade['status'], number> = { Open: 0, Partial: 1, Clos
   `,
   styles: [
     `
+      :host {
+        display: block;
+        min-width: 0;
+      }
+      .context,
+      .valuation-issue {
+        display: block;
+        font-size: 12px;
+        overflow-wrap: anywhere;
+      }
+      .valuation-issue {
+        min-width: 110px;
+        color: var(--app-text-muted);
+      }
+      .amounts {
+        display: grid;
+        grid-template-columns: minmax(140px, 1fr) minmax(120px, 1fr);
+        gap: 6px 12px;
+        max-width: 650px;
+        white-space: normal;
+      }
+      .amounts dd {
+        margin: 0;
+      }
+      .mobile-issue {
+        display: none;
+      }
+      @media (max-width: 600px) {
+        .mobile-issue {
+          display: block;
+          font-size: 12px;
+          white-space: normal;
+          min-width: 140px;
+        }
+      }
       .table-card {
         margin-top: 16px;
       }
@@ -223,8 +320,27 @@ const STATUS_RANK: Record<Trade['status'], number> = { Open: 0, Partial: 1, Clos
 })
 export class TradesTable {
   readonly trades = input<readonly Trade[]>([]);
-  /** Журнал целиком — из него берутся операции раскрытой сделки */
-  readonly operations = input<readonly Operation[]>([]);
+  readonly emptyTitle = input('Сделок нет');
+  protected readonly api = inject(OperationApi);
+  private readonly reference = inject(ReferenceApi);
+  protected readonly systemNames = computed(
+    () =>
+      new Map(
+        (this.reference.systems.hasValue() ? this.reference.systems.value() : []).map((s) => [
+          s.id,
+          s.name,
+        ]),
+      ),
+  );
+  protected readonly portfolioNames = computed(
+    () =>
+      new Map(
+        (this.reference.portfolios.hasValue() ? this.reference.portfolios.value() : []).map((p) => [
+          p.id,
+          p.name,
+        ]),
+      ),
+  );
 
   protected readonly columns = [
     'status',
@@ -242,7 +358,8 @@ export class TradesTable {
    * calculateTrades) осмыслен внутри движка и произволен для читателя.
    */
   protected readonly sort = signal<SortState>({ active: 'dates', direction: 'desc' });
-  protected readonly pageSize = signal(25);
+  /** Страница списка и сортировка локальные; родитель может связать общий размер. */
+  readonly pageSize = model(25);
 
   /**
    * linkedSignal: страница держится, пока существует, и подрезается, когда список
@@ -303,7 +420,13 @@ export class TradesTable {
     const trade = this.trades().find((t) => t.id === id);
     if (!trade) return [];
     const ids = new Set(trade.operationIds);
-    return this.operations().filter((op) => op.id && ids.has(op.id));
+    if (
+      this.api.operations.isLoading() ||
+      this.api.operations.error() ||
+      !this.api.operations.hasValue()
+    )
+      return [];
+    return this.api.operations.value().filter((op) => op.id && ids.has(op.id));
   });
 
   protected onSort(sort: Sort): void {

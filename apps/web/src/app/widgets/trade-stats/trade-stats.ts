@@ -1,4 +1,5 @@
 import { ChangeDetectionStrategy, Component, computed, input, signal } from '@angular/core';
+import { RouterLink, type Params } from '@angular/router';
 import { MatCardModule } from '@angular/material/card';
 import { MatTableModule } from '@angular/material/table';
 import { MatButtonToggleModule } from '@angular/material/button-toggle';
@@ -30,13 +31,22 @@ type GroupBy = 'system' | 'portfolio';
 @Component({
   selector: 'app-trade-stats',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [MatCardModule, MatTableModule, MatButtonToggleModule, KpiCard, StateMessage],
+  imports: [
+    RouterLink,
+    MatCardModule,
+    MatTableModule,
+    MatButtonToggleModule,
+    KpiCard,
+    StateMessage,
+  ],
   template: `
     @if (overall().closedCount > 0) {
       <mat-card class="stats">
         <div class="stats-head">
           <h3>Статистика закрытых сделок</h3>
-          <span class="muted">только зафиксированный результат</span>
+          <span class="muted"
+            >Торговый результат закрытых сделок после комиссий, без дивидендов и купонов</span
+          >
         </div>
         <div class="kpi-grid">
           <app-kpi-card label="Сделок" [value]="overall().closedCount.toString()" />
@@ -62,11 +72,19 @@ type GroupBy = 'system' | 'portfolio';
           <mat-button-toggle value="portfolio">По портфелям</mat-button-toggle>
         </mat-button-toggle-group>
 
-        @if (rows().length > 1) {
+        @if (rows().length > 0) {
           <table mat-table [dataSource]="rows()" class="stats-table">
             <ng-container matColumnDef="name">
               <th mat-header-cell *matHeaderCellDef>{{ nameLabel() }}</th>
-              <td mat-cell *matCellDef="let r">{{ r.name }}</td>
+              <td mat-cell *matCellDef="let r">
+                @if (groupBy() === 'system') {
+                  <a [routerLink]="['/systems', r.id]" [queryParams]="systemQueryParams()">{{
+                    r.name
+                  }}</a>
+                } @else {
+                  {{ r.name }}
+                }
+              </td>
             </ng-container>
             <ng-container matColumnDef="count">
               <th mat-header-cell *matHeaderCellDef>Сделок</th>
@@ -116,7 +134,7 @@ type GroupBy = 'system' | 'portfolio';
         kind="empty"
         icon="query_stats"
         title="Нет закрытых сделок"
-        hint="Win rate, profit factor и матожидание считаются только по зафиксированному результату — закройте хотя бы одну сделку."
+        hint="Win rate, profit factor и матожидание считаются по торговому результату закрытых сделок после комиссий, без выплат."
       />
     }
   `,
@@ -157,6 +175,8 @@ type GroupBy = 'system' | 'portfolio';
 })
 export class TradeStats {
   readonly trades = input<readonly TradeStatRow[]>([]);
+  /** Передаются только фильтры с тем же смыслом на странице системы. */
+  readonly systemQueryParams = input<Params>({});
   /** id → название системы */
   readonly systemNames = input<ReadonlyMap<string, string>>(new Map());
   /** id → название портфеля */
