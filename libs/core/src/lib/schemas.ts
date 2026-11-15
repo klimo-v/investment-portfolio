@@ -352,6 +352,8 @@ export const TradeSchema = z.object({
   avgBuyPrice: decimalString,
   investedCcy: decimalString,
   investedRub: decimalString,
+  /** Сумма покупок с комиссиями по курсам операций, сохраняется после закрытия. */
+  purchasesRub: decimalString,
   proceedsCcy: decimalString,
   proceedsRub: decimalString,
   realizedPnlCcy: decimalString,

@@ -210,6 +210,7 @@ function trade(pnl: string, closedAt: string, over: Partial<TradeResult> = {}): 
     avgBuyPrice: new Decimal(0),
     investedCcy: new Decimal(0),
     investedRub: new Decimal(0),
+    purchasesRub: new Decimal(0),
     proceedsCcy: new Decimal(0),
     proceedsRub: new Decimal(0),
     realizedPnlCcy: new Decimal(pnl),

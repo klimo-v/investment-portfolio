@@ -514,6 +514,7 @@ export class OperationsService {
           avgBuyPrice: t.avgBuyPrice.toFixed(2),
           investedCcy: t.investedCcy.toFixed(2),
           investedRub: t.investedRub.toFixed(2),
+          purchasesRub: t.purchasesRub.toFixed(2),
           proceedsCcy: t.proceedsCcy.toFixed(2),
           proceedsRub: t.proceedsRub.toFixed(2),
           realizedPnlCcy: t.realizedPnlCcy.toFixed(2),

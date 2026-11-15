@@ -37,7 +37,7 @@ export interface PositionResult {
   investedRub: Decimal;
   /** реализованный P&L в валюте инструмента */
   realizedPnlCcy: Decimal;
-  /** реализованный P&L в рублях, по курсу на дату каждой продажи */
+  /** реализованный P&L в рублях: выручка по курсу продажи минус историческая себестоимость */
   realizedPnlRub: Decimal;
   /** накопленные дивиденды в рублях */
   dividendsRub: Decimal;
@@ -100,6 +100,15 @@ function positionKey(op: Operation): string {
 
 function d(value: string): Decimal {
   return new Decimal(value);
+}
+
+/** Списание средней себестоимости: полное закрытие забирает весь остаток без округления. */
+function soldCost(cost: Decimal, quantity: Decimal, sold: Decimal): Decimal {
+  return quantity.lte(0)
+    ? new Decimal(0)
+    : sold.gte(quantity)
+      ? cost
+      : cost.mul(sold).div(quantity);
 }
 
 /**
@@ -175,14 +184,15 @@ export function calculatePositions(
       }
       case 'Sell': {
         // себестоимость проданной части по средней цене
-        const costOfSold = pos.avgBuyPrice.mul(qty);
+        const costOfSold = soldCost(pos.investedCcy, pos.quantity, qty);
+        const costOfSoldRub = soldCost(pos.investedRub, pos.quantity, qty);
         const proceeds = qty.mul(price).minus(fee);
         pos.realizedPnlCcy = pos.realizedPnlCcy.plus(proceeds.minus(costOfSold));
-        pos.realizedPnlRub = pos.realizedPnlRub.plus(proceeds.minus(costOfSold).mul(fxRate));
+        pos.realizedPnlRub = pos.realizedPnlRub.plus(proceeds.mul(fxRate).minus(costOfSoldRub));
         pos.quantity = pos.quantity.minus(qty);
         // вложено уменьшается на себестоимость проданного (нетто-остаток)
         pos.investedCcy = pos.investedCcy.minus(costOfSold);
-        pos.investedRub = pos.investedRub.minus(costOfSold.mul(fxRate));
+        pos.investedRub = pos.investedRub.minus(costOfSoldRub);
         // средняя цена остатка не меняется при продаже по средней
         if (pos.quantity.lte(0)) {
           pos.quantity = new Decimal(0);
@@ -238,15 +248,15 @@ export function realizedPnlInRange(
       instrumentId: string;
       systemId: string;
       portfolioId: string;
+      investedCcy: Decimal;
+      investedRub: Decimal;
       avgBuyPrice: Decimal;
       quantity: Decimal;
       realizedPnlRub: Decimal;
     }
   >();
 
-  const sorted = [...operations]
-    .filter((op) => !till || op.date <= till)
-    .sort(compareOperations);
+  const sorted = [...operations].filter((op) => !till || op.date <= till).sort(compareOperations);
 
   for (const op of sorted) {
     if (!op.instrumentId) continue;
@@ -259,6 +269,8 @@ export function realizedPnlInRange(
         instrumentId: op.instrumentId,
         systemId: op.systemId,
         portfolioId: op.portfolioId,
+        investedCcy: new Decimal(0),
+        investedRub: new Decimal(0),
         avgBuyPrice: new Decimal(0),
         quantity: new Decimal(0),
         realizedPnlRub: new Decimal(0),
@@ -284,15 +296,19 @@ export function realizedPnlInRange(
 
     if (op.operationType === 'Buy') {
       const cost = qty.mul(price).plus(fee);
-      const investedCcy = pos.avgBuyPrice.mul(pos.quantity).plus(cost);
+      pos.investedCcy = pos.investedCcy.plus(cost);
+      pos.investedRub = pos.investedRub.plus(cost.mul(fxRate));
       pos.quantity = pos.quantity.plus(qty);
-      pos.avgBuyPrice = pos.quantity.isZero() ? new Decimal(0) : investedCcy.div(pos.quantity);
+      pos.avgBuyPrice = pos.quantity.isZero() ? new Decimal(0) : pos.investedCcy.div(pos.quantity);
     } else if (op.operationType === 'Sell') {
-      const costOfSold = pos.avgBuyPrice.mul(qty);
+      const costOfSold = soldCost(pos.investedCcy, pos.quantity, qty);
+      const costOfSoldRub = soldCost(pos.investedRub, pos.quantity, qty);
       const proceeds = qty.mul(price).minus(fee);
       if (!from || op.date >= from) {
-        pos.realizedPnlRub = pos.realizedPnlRub.plus(proceeds.minus(costOfSold).mul(fxRate));
+        pos.realizedPnlRub = pos.realizedPnlRub.plus(proceeds.mul(fxRate).minus(costOfSoldRub));
       }
+      pos.investedCcy = pos.investedCcy.minus(costOfSold);
+      pos.investedRub = pos.investedRub.minus(costOfSoldRub);
       pos.quantity = pos.quantity.minus(qty);
       if (pos.quantity.lte(0)) {
         pos.quantity = new Decimal(0);
@@ -340,10 +356,12 @@ export interface TradeResult {
   avgBuyPrice: Decimal;
   investedCcy: Decimal;
   investedRub: Decimal;
+  /** Все покупки жизненного цикла с комиссиями и историческими курсами; у фьючерса 0. */
+  purchasesRub: Decimal;
   proceedsCcy: Decimal;
   proceedsRub: Decimal;
   realizedPnlCcy: Decimal;
-  /** реализованный P&L в рублях, по курсу на дату каждой продажи */
+  /** реализованный P&L в рублях: выручка по курсу продажи минус историческая себестоимость */
   realizedPnlRub: Decimal;
   dividendsRub: Decimal;
   couponsRub: Decimal;
@@ -368,10 +386,7 @@ export interface TradeResult {
   events: TradeEvent[];
 }
 
-function newTrade(
-  op: Operation,
-  direction: 'Long' | 'Short',
-): TradeResult {
+function newTrade(op: Operation, direction: 'Long' | 'Short'): TradeResult {
   return {
     instrumentId: op.instrumentId as string,
     systemId: op.systemId,
@@ -383,6 +398,7 @@ function newTrade(
     avgBuyPrice: new Decimal(0),
     investedCcy: new Decimal(0),
     investedRub: new Decimal(0),
+    purchasesRub: new Decimal(0),
     proceedsCcy: new Decimal(0),
     proceedsRub: new Decimal(0),
     realizedPnlCcy: new Decimal(0),
@@ -453,7 +469,19 @@ export class TradeLedger {
 
     if (this.options.futureIds?.has(op.instrumentId)) {
       if (op.operationType === 'Buy' || op.operationType === 'Sell') {
-        applyFutureTrade(op, op.operationType, qty, price, fee, fxRate, key, this.futurePos, open, this.closed, this.emit);
+        applyFutureTrade(
+          op,
+          op.operationType,
+          qty,
+          price,
+          fee,
+          fxRate,
+          key,
+          this.futurePos,
+          open,
+          this.closed,
+          this.emit,
+        );
       }
       return;
     }
@@ -468,6 +496,7 @@ export class TradeLedger {
       const cost = qty.mul(price).plus(fee);
       trade.investedCcy = trade.investedCcy.plus(cost);
       trade.investedRub = trade.investedRub.plus(cost.mul(fxRate));
+      trade.purchasesRub = trade.purchasesRub.plus(cost.mul(fxRate));
       trade.feesRub = trade.feesRub.plus(fee.mul(fxRate));
       trade.quantity = trade.quantity.plus(qty);
       trade.qtyBought = trade.qtyBought.plus(qty);
@@ -483,19 +512,28 @@ export class TradeLedger {
       if (!trade) {
         // продажа без открытой сделки — некорректные данные: в сделки не идёт, но деньги
         // она двигает (cashDelta) — запоминаем, чтобы расхождение было названо, а не скрыто
-        this.orphanSells.push({ date: op.date, instrumentId: op.instrumentId, amountRub: qty.mul(price).minus(fee).mul(fxRate) });
+        this.orphanSells.push({
+          date: op.date,
+          instrumentId: op.instrumentId,
+          amountRub: qty.mul(price).minus(fee).mul(fxRate),
+        });
         return;
       }
 
-      const costOfSold = trade.avgBuyPrice.mul(qty);
+      const costOfSold = soldCost(trade.investedCcy, trade.quantity, qty);
+      const costOfSoldRub = soldCost(trade.investedRub, trade.quantity, qty);
       const proceeds = qty.mul(price).minus(fee);
       trade.realizedPnlCcy = trade.realizedPnlCcy.plus(proceeds.minus(costOfSold));
-      trade.realizedPnlRub = trade.realizedPnlRub.plus(proceeds.minus(costOfSold).mul(fxRate));
-      this.emit(trade, { date: op.date, kind: 'realized', rub: proceeds.minus(costOfSold).mul(fxRate) });
+      trade.realizedPnlRub = trade.realizedPnlRub.plus(proceeds.mul(fxRate).minus(costOfSoldRub));
+      this.emit(trade, {
+        date: op.date,
+        kind: 'realized',
+        rub: proceeds.mul(fxRate).minus(costOfSoldRub),
+      });
       trade.proceedsCcy = trade.proceedsCcy.plus(proceeds);
       trade.proceedsRub = trade.proceedsRub.plus(proceeds.mul(fxRate));
       trade.investedCcy = trade.investedCcy.minus(costOfSold);
-      trade.investedRub = trade.investedRub.minus(costOfSold.mul(fxRate));
+      trade.investedRub = trade.investedRub.minus(costOfSoldRub);
       trade.quantity = trade.quantity.minus(qty);
       trade.qtySold = trade.qtySold.plus(qty);
       trade.feesRub = trade.feesRub.plus(fee.mul(fxRate));
@@ -601,7 +639,8 @@ function applyFutureTrade(
     const trade = open.get(key);
     if (trade) {
       record(trade, fill.closedQty, feeClose, fill.pnlCcy);
-      trade.quantity = pos.quantity.isZero() || fill.openedQty.gt(0) ? new Decimal(0) : pos.quantity;
+      trade.quantity =
+        pos.quantity.isZero() || fill.openedQty.gt(0) ? new Decimal(0) : pos.quantity;
       if (pos.quantity.isZero() || fill.openedQty.gt(0)) {
         trade.status = 'Closed';
         trade.closedAt = op.date;
