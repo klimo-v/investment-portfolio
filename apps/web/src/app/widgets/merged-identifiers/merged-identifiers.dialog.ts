@@ -1,3 +1,4 @@
+import { StateMessage } from '@web-shared';
 import { ChangeDetectionStrategy, Component, computed, inject } from '@angular/core';
 import { MatButtonModule } from '@angular/material/button';
 import { MatDialog, MatDialogModule } from '@angular/material/dialog';
@@ -24,13 +25,22 @@ const SCHEME_LABEL: Record<string, string> = {
 @Component({
   selector: 'app-merged-identifiers-dialog',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [MatDialogModule, MatButtonModule, DatePipe],
+  imports: [StateMessage, MatDialogModule, MatButtonModule, DatePipe],
   template: `
     <h2 mat-dialog-title>Привязанные коды</h2>
     <mat-dialog-content>
+      @if (reference.mergedIdentifiers.error()) {
+        <app-state-message
+          kind="error"
+          title="Не удалось загрузить привязанные коды"
+          retryLabel="Повторить"
+          (retry)="reference.mergedIdentifiers.reload()"
+        />
+      }
+
       <p class="hint">
-        Инструменты, к которым при слиянии присоединены другие коды. У слияний из журнала указаны источник и дата;
-        дата у кода — когда код добавлен, а не когда выполнено слияние.
+        Инструменты, к которым при слиянии присоединены другие коды. У слияний из журнала указаны
+        источник и дата; дата у кода — когда код добавлен, а не когда выполнено слияние.
       </p>
       @for (i of items(); track i.instrumentId) {
         <div class="instrument">
@@ -40,7 +50,9 @@ const SCHEME_LABEL: Record<string, string> = {
               <span class="muted">{{ i.name }}</span>
             }
             @if (i.conflicting) {
-              <span class="warn">Подозрительное слияние: несколько тикеров — {{ i.tickers.join(', ') }}</span>
+              <span class="warn"
+                >Подозрительное слияние: несколько тикеров — {{ i.tickers.join(', ') }}</span
+              >
             }
           </div>
           @for (m of i.merges; track m.id) {
@@ -51,14 +63,18 @@ const SCHEME_LABEL: Record<string, string> = {
               @if (!m.undone && m.targetId === i.instrumentId) {
                 <button mat-stroked-button (click)="undoMerge(i, m.id)">Отменить слияние…</button>
               } @else if (!m.undone) {
-                <span class="muted">(слияние в промежуточный инструмент — отменяется в обратном порядке)</span>
+                <span class="muted"
+                  >(слияние в промежуточный инструмент — отменяется в обратном порядке)</span
+                >
               }
             </div>
           }
           @if (i.merges.length === 0) {
             <div class="journal muted">
               Слито до включения журнала: дата и источник неизвестны.
-              <button mat-stroked-button (click)="splitManually(i)">Выделить инструмент заново…</button>
+              <button mat-stroked-button (click)="splitManually(i)">
+                Выделить инструмент заново…
+              </button>
             </div>
           }
           @for (e of i.entries; track e.scheme + e.value) {
@@ -129,18 +145,26 @@ const SCHEME_LABEL: Record<string, string> = {
   ],
 })
 export class MergedIdentifiersDialog {
-  private readonly reference = inject(ReferenceApi);
-  protected readonly items = computed(() => this.reference.mergedIdentifiers.value() ?? []);
+  protected readonly reference = inject(ReferenceApi);
+  protected readonly items = computed(() =>
+    this.reference.mergedIdentifiers.hasValue() ? this.reference.mergedIdentifiers.value() : [],
+  );
   private readonly dialog = inject(MatDialog);
 
   /** Откат слияния из журнала: тот же диалог разделения с планом по снимку */
   protected undoMerge(i: InstrumentIdentifiers, mergeId: string): void {
-    this.dialog.open(SplitInstrumentDialog, { autoFocus: false, data: { instrumentId: i.instrumentId, ticker: i.ticker, mergeId } });
+    this.dialog.open(SplitInstrumentDialog, {
+      autoFocus: false,
+      data: { instrumentId: i.instrumentId, ticker: i.ticker, mergeId },
+    });
   }
 
   /** Слияние без записи в журнале: операции и коды выбирает пользователь */
   protected splitManually(i: InstrumentIdentifiers): void {
-    this.dialog.open(SplitInstrumentDialog, { autoFocus: false, data: { instrumentId: i.instrumentId, ticker: i.ticker } });
+    this.dialog.open(SplitInstrumentDialog, {
+      autoFocus: false,
+      data: { instrumentId: i.instrumentId, ticker: i.ticker },
+    });
   }
 
   /** Время из БД — UTC без зоны (`datetime('now')`): помечаем зону, иначе браузер прочтёт его как локальное */

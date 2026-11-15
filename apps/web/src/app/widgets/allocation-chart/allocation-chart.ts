@@ -24,13 +24,14 @@ export interface AllocationSlice {
     <mat-card class="pie">
       <h3>{{ title() }}</h3>
       @if (config(); as cfg) {
+        @if (unvaluedCount() > 0) {
+          <p class="partial" role="status">
+            Распределение по оценённым позициям · Без оценки: {{ unvaluedCount() }}
+          </p>
+        }
         <app-chart-canvas [config]="cfg" />
       } @else {
-        <app-state-message
-          kind="empty"
-          icon="donut_large"
-          [title]="emptyTitle()"
-        />
+        <app-state-message kind="empty" icon="donut_large" [title]="emptyTitle()" />
       }
     </mat-card>
   `,
@@ -48,6 +49,7 @@ export interface AllocationSlice {
 })
 export class AllocationChart {
   readonly title = input('Распределение');
+  readonly unvaluedCount = input(0);
   readonly emptyTitle = input('Нет активов для распределения');
   readonly slices = input<readonly AllocationSlice[]>([]);
 

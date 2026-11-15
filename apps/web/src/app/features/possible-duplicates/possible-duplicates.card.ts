@@ -1,3 +1,4 @@
+import { StateMessage } from '@web-shared';
 import { ChangeDetectionStrategy, Component, computed, inject } from '@angular/core';
 import { MatButtonModule } from '@angular/material/button';
 import { MatCardModule } from '@angular/material/card';
@@ -17,15 +18,24 @@ import { MergeInstrumentDialog } from '../merge-instrument/merge-instrument.dial
 @Component({
   selector: 'app-possible-duplicates',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [MatCardModule, MatButtonModule],
+  imports: [StateMessage, MatCardModule, MatButtonModule],
   template: `
+    @if (reference.possibleDuplicates.error()) {
+      <app-state-message
+        kind="error"
+        title="Не удалось загрузить возможные дубли"
+        retryLabel="Повторить"
+        (retry)="reference.possibleDuplicates.reload()"
+      />
+    }
+
     @if (duplicates().length > 0) {
       <mat-card class="duplicates">
         <h2 class="title">Возможные дубли инструментов</h2>
         <p class="hint">
-          Похожие инструменты в справочнике. Это подсказка: если это один и тот же актив,
-          объедините — операции и цены перейдут на выбранный, а выбор запомнится, и при
-          повторном импорте дубль не вернётся.
+          Похожие инструменты в справочнике. Это подсказка: если это один и тот же актив, объедините
+          — операции и цены перейдут на выбранный, а выбор запомнится, и при повторном импорте дубль
+          не вернётся.
         </p>
         @for (d of duplicates(); track d.sourceId + d.targetId) {
           <div class="row">
@@ -77,10 +87,12 @@ import { MergeInstrumentDialog } from '../merge-instrument/merge-instrument.dial
   ],
 })
 export class PossibleDuplicatesCard {
-  private readonly reference = inject(ReferenceApi);
+  protected readonly reference = inject(ReferenceApi);
   private readonly dialog = inject(MatDialog);
 
-  protected readonly duplicates = computed(() => this.reference.possibleDuplicates.value() ?? []);
+  protected readonly duplicates = computed(() =>
+    this.reference.possibleDuplicates.hasValue() ? this.reference.possibleDuplicates.value() : [],
+  );
 
   /** Диалог слияния с уже выбранной целью; подтверждение — необратимое действие */
   protected async merge(d: PossibleDuplicate): Promise<void> {

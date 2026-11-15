@@ -1,3 +1,4 @@
+import { StateMessage } from '@web-shared';
 import { ChangeDetectionStrategy, Component, computed, inject } from '@angular/core';
 import { MatButtonModule } from '@angular/material/button';
 import { MatDialog } from '@angular/material/dialog';
@@ -13,8 +14,17 @@ import { MergedIdentifiersDialog } from './merged-identifiers.dialog';
 @Component({
   selector: 'app-merged-identifiers',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [MatButtonModule, MatIconModule],
+  imports: [StateMessage, MatButtonModule, MatIconModule],
   template: `
+    @if (reference.mergedIdentifiers.error()) {
+      <app-state-message
+        kind="error"
+        title="Не удалось загрузить привязанные коды"
+        retryLabel="Повторить"
+        (retry)="reference.mergedIdentifiers.reload()"
+      />
+    }
+
     @if (items().length > 0) {
       <div class="row">
         <button mat-stroked-button (click)="open()">
@@ -43,10 +53,12 @@ import { MergedIdentifiersDialog } from './merged-identifiers.dialog';
   ],
 })
 export class MergedIdentifiersCard {
-  private readonly reference = inject(ReferenceApi);
+  protected readonly reference = inject(ReferenceApi);
   private readonly dialog = inject(MatDialog);
 
-  protected readonly items = computed(() => this.reference.mergedIdentifiers.value() ?? []);
+  protected readonly items = computed(() =>
+    this.reference.mergedIdentifiers.hasValue() ? this.reference.mergedIdentifiers.value() : [],
+  );
   protected readonly suspicious = computed(() => this.items().filter((i) => i.conflicting).length);
 
   protected open(): void {

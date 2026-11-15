@@ -70,6 +70,8 @@ interface Row {
   current: string;
   currentRaw: string | null;
   manual: boolean;
+  canResolve: boolean;
+  sourceLabel: string;
   context: string;
   freshness: string | null;
   /** Накопленный купонный доход по всему остатку, «—» для не-облигаций */
@@ -334,6 +336,7 @@ interface Group {
                     <th mat-header-cell *matHeaderCellDef>Тек. цена</th>
                     <td mat-cell *matCellDef="let r">
                       {{ r.current }}
+                      <small>Источник: {{ r.sourceLabel }}</small>
                       @if (r.freshness) {
                         <small class="freshness">{{ r.freshness }}</small>
                       }
@@ -362,11 +365,16 @@ interface Group {
                     <th mat-header-cell *matHeaderCellDef>P&L (₽)</th>
                     <td mat-cell *matCellDef="let r" [class]="r.pnlClass">
                       <details class="pnl-details">
-                        <summary [attr.aria-label]="'Состав P&L: ' + r.ticker + ', ' + r.context">{{ r.pnl }}</summary>
+                        <summary [attr.aria-label]="'Состав P&L: ' + r.ticker + ', ' + r.context">
+                          {{ r.pnl }}
+                        </summary>
                         <dl>
-                          <dt>Реализованный результат</dt><dd>{{ r.realized }}</dd>
-                          <dt>Нереализованный результат</dt><dd>{{ r.unrealized }}</dd>
-                          <dt>Дивиденды и купоны</dt><dd>{{ r.payouts }}</dd>
+                          <dt>Реализованный результат</dt>
+                          <dd>{{ r.realized }}</dd>
+                          <dt>Нереализованный результат</dt>
+                          <dd>{{ r.unrealized }}</dd>
+                          <dt>Дивиденды и купоны</dt>
+                          <dd>{{ r.payouts }}</dd>
                         </dl>
                       </details>
                     </td>
@@ -374,17 +382,17 @@ interface Group {
                   <ng-container matColumnDef="actions">
                     <th mat-header-cell *matHeaderCellDef></th>
                     <td mat-cell *matCellDef="let r">
+                      @if (r.canResolve) {
+                        <button
+                          mat-icon-button
+                          (click)="resolvePrice(r)"
+                          aria-label="Найти цену на бирже"
+                          matTooltip="Найти автоматический источник цены на MOEX/Binance"
+                        >
+                          <mat-icon>travel_explore</mat-icon>
+                        </button>
+                      }
                       @if (r.suspicious) {
-                        @if (r.type !== 'Future') {
-                          <button
-                            mat-icon-button
-                            (click)="resolvePrice(r)"
-                            aria-label="Найти цену на бирже"
-                            matTooltip="Проверить, не торгуется ли этот инструмент на MOEX/Binance под тем же тикером — импорт из отчёта заводит новые бумаги без автоисточника цены, даже когда биржа их знает."
-                          >
-                            <mat-icon>travel_explore</mat-icon>
-                          </button>
-                        }
                         <button
                           mat-icon-button
                           (click)="mergeInstrument(r)"
@@ -419,7 +427,12 @@ interface Group {
         <!-- @defer: диаграмма живёт в правой колонке и на узком экране уезжает под
              таблицы — грузить chart.js до того, как до неё долистают, незачем -->
         @defer (on viewport) {
-          <app-allocation-chart title="Распределение по типам" [slices]="allocation()" [emptyTitle]="allocationEmptyTitle()" />
+          <app-allocation-chart
+            title="Распределение по типам"
+            [slices]="allocation()"
+            [emptyTitle]="allocationEmptyTitle()"
+            [unvaluedCount]="allocationUnvaluedCount()"
+          />
         } @placeholder {
           <div class="chart-box"></div>
         }
@@ -455,6 +468,7 @@ interface Group {
         min-height: 0;
         min-width: 0;
         max-width: 100%;
+        container-type: inline-size;
       }
       .header {
         flex: 0 0 auto;
@@ -491,9 +505,8 @@ interface Group {
         flex: 0 0 auto;
       }
       /*
-       * Mobile-first: на узком экране таблицы и диаграмма идут друг под другом.
-       * Единственный настоящий медиазапрос во всём приложении — соотношение 2fr/1fr
-       * надо СОХРАНИТЬ на широких экранах, а auto-fit этого выразить не может.
+       * На узкой области таблицы и диаграмма идут друг под другом. Боковую
+       * колонку включаем по доступной ширине страницы, а не всего окна.
        */
       .content {
         display: grid;
@@ -503,9 +516,11 @@ interface Group {
         flex: 0 0 auto;
         min-width: 0;
       }
-      @media (min-width: 960px) {
+      /* Ширина области страницы уже учитывает открытую навигацию. Таблице с НКД
+         оставляем 940px, диаграмме — 300px плюс зазор. */
+      @container (min-width: 1280px) {
         .content {
-          grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
+          grid-template-columns: minmax(940px, 1fr) 300px;
         }
       }
       .tables {
@@ -539,9 +554,16 @@ interface Group {
         font-size: 12px;
         color: var(--app-text-muted);
       }
-      .pnl-details summary { cursor: pointer; }
-      .pnl-details dl { font-size: 12px; color: var(--app-text-muted); }
-      .pnl-details dd { margin: 0 0 6px; }
+      .pnl-details summary {
+        cursor: pointer;
+      }
+      .pnl-details dl {
+        font-size: 12px;
+        color: var(--app-text-muted);
+      }
+      .pnl-details dd {
+        margin: 0 0 6px;
+      }
       .table-scroll {
         max-width: 100%;
         overflow-x: auto;
@@ -552,6 +574,7 @@ interface Group {
       }
       th,
       td {
+        padding-inline: 8px;
         white-space: nowrap;
       }
       .position-context,
@@ -741,15 +764,20 @@ export class PortfolioPage {
         unrealized: formatMoney(p.unrealizedPnlRub),
         payouts: formatMoney(new Decimal(p.dividendsRub).plus(p.couponsRub).toFixed(2)),
         manual: p.marketSource === 'manual',
+        canResolve: p.marketSource === 'manual' && p.type !== 'Future' && Number(p.quantity) !== 0,
+        sourceLabel: { manual: 'Вручную', moex: 'MOEX', binance: 'Binance', cbr: 'ЦБ' }[
+          p.marketSource
+        ],
         currentRaw: p.currentPrice,
         context: `${this.systemNames().get(p.systemId) ?? p.systemId} · ${this.portfolioNames().get(p.portfolioId) ?? p.portfolioId}`,
-        freshness: p.priceSource === 'broker-report' && p.quoteDate
-          ? `Цена по отчёту за ${p.quoteDate}`
-          : p.priceAsOf
-          ? `${p.priceSource === 'manual' ? 'Введено' : 'Получено'} ${new Date(p.priceAsOf).toLocaleString('ru-RU')}`
-          : p.quoteDate
-            ? `Котировка за ${p.quoteDate}`
-            : null,
+        freshness:
+          p.priceSource === 'broker-report' && p.quoteDate
+            ? `Цена по отчёту за ${p.quoteDate}`
+            : p.priceAsOf
+              ? `${p.priceSource === 'manual' ? 'Введено' : 'Получено'} ${new Date(p.priceAsOf).toLocaleString('ru-RU')}`
+              : p.quoteDate
+                ? `Котировка за ${p.quoteDate}`
+                : null,
         current: p.currentPrice ? formatPrice(p.currentPrice, p.priceCurrency ?? p.currency) : '—',
         accrued: p.accruedInterestRub ? formatMoney(p.accruedInterestRub, 'RUB') : '—',
         value: formatMoney(p.currentValueRub, 'RUB'),
@@ -792,8 +820,17 @@ export class PortfolioPage {
    * Фьючерсы в диаграмму не входят: их «стоимость» — нереализованный результат (может
    * быть отрицательной), а не доля капитала, и сектор круга для неё не имеет смысла.
    */
+  protected readonly allocationUnvaluedCount = computed(
+    () =>
+      this.positions().filter(
+        (p) => p.type !== 'Future' && Number(p.quantity) !== 0 && p.currentValueRub === null,
+      ).length,
+  );
+
   protected readonly allocationEmptyTitle = computed(() => {
-    const eligible = this.positions().filter((p) => p.type !== 'Future' && Number(p.quantity) !== 0);
+    const eligible = this.positions().filter(
+      (p) => p.type !== 'Future' && Number(p.quantity) !== 0,
+    );
     if (eligible.length === 0) return 'Нет активов для распределения';
     if (eligible.some((p) => p.currentValueRub === null)) return 'Оценка активов недоступна';
     return 'Нет положительной стоимости для распределения';
@@ -921,7 +958,11 @@ export class PortfolioPage {
    * биржевая при импорте.
    */
   protected async resolvePrice(row: Row): Promise<void> {
-    await this.reference.resolvePrice(row.instrumentId);
+    try {
+      await this.reference.resolvePrice(row.instrumentId);
+    } catch {
+      // HTTP-интерцептор показывает причину; прежняя цена и действия остаются на месте.
+    }
   }
 
   /**

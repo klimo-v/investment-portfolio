@@ -1,3 +1,6 @@
+import { MatDialog } from '@angular/material/dialog';
+import { ReferenceApi } from '../../entities/reference/reference.api';
+import { MergedIdentifiersDialog } from '../../widgets/merged-identifiers/merged-identifiers.dialog';
 import { ErrorHandler } from '@angular/core';
 import { TestBed, type ComponentFixture } from '@angular/core/testing';
 import { HttpTestingController } from '@angular/common/http/testing';
@@ -353,10 +356,27 @@ describe('Портфель: независимые HTTP-ресурсы', () => {
   it('состав P&L принадлежит строке; точные цены и происхождение', async () => {
     for (const req of http.match(() => true)) {
       if (req.request.url.includes('/summary')) req.flush(summary);
-      else if (req.request.url === '/api/operations/positions') req.flush([
-        {...position, avgBuyPrice: '2.134567', currentPrice: '0.00001234', priceSource: 'broker-report', quoteDate: '2026-01-01', realizedPnlRub: '100', unrealizedPnlRub: '-30', dividendsRub: '10', pnlRub: '80'},
-        {...position, portfolioId: 'p2', realizedPnlRub: '200', unrealizedPnlRub: null, pnlRub: null},
-      ]);
+      else if (req.request.url === '/api/operations/positions')
+        req.flush([
+          {
+            ...position,
+            avgBuyPrice: '2.134567',
+            currentPrice: '0.00001234',
+            priceSource: 'broker-report',
+            quoteDate: '2026-01-01',
+            realizedPnlRub: '100',
+            unrealizedPnlRub: '-30',
+            dividendsRub: '10',
+            pnlRub: '80',
+          },
+          {
+            ...position,
+            portfolioId: 'p2',
+            realizedPnlRub: '200',
+            unrealizedPnlRub: null,
+            pnlRub: null,
+          },
+        ]);
       else req.flush([]);
     }
     await settle();
@@ -378,13 +398,150 @@ describe('Портфель: независимые HTTP-ресурсы', () => {
   ])('причина пустого распределения %s/%s', async (type, value, expected) => {
     for (const req of http.match(() => true)) {
       if (req.request.url.includes('/summary')) req.flush(summary);
-      else if (req.request.url === '/api/operations/positions') req.flush([{...position, type, currentValueRub: value}]);
+      else if (req.request.url === '/api/operations/positions')
+        req.flush([{ ...position, type, currentValueRub: value }]);
       else req.flush([]);
     }
     await settle();
     // Причина вычисляется до отбрасывания строк из диаграммы.
     expect(Reflect.get(fixture.componentInstance, 'allocationEmptyTitle')()).toBe(expected);
-    if (type === 'Future') expect(Reflect.get(fixture.componentInstance, 'allocation')()).toEqual([]);
+    if (type === 'Future')
+      expect(Reflect.get(fixture.componentInstance, 'allocation')()).toEqual([]);
   });
 
+  it.each([
+    ['/api/instruments/possible-duplicates', 'Не удалось загрузить возможные дубли'],
+    ['/api/instruments/merged-identifiers', 'Не удалось загрузить привязанные коды'],
+  ])('ошибка %s локальна, повтор затрагивает только её ресурс', async (url, title) => {
+    for (const req of http.match(() => true)) {
+      if (req.request.url === url) req.flush({}, { status: 500, statusText: 'Test' });
+      else
+        req.flush(
+          req.request.url.includes('/summary')
+            ? summary
+            : req.request.url.endsWith('/positions')
+              ? [position]
+              : [],
+        );
+    }
+    await settle();
+    expect(text()).toContain(title);
+    expect(text()).toContain('TEST-USD');
+    expect(text()).toContain('Вложено (₽)');
+    clickRetry(title);
+    const retries = http.match(() => true);
+    expect(retries.map((r) => r.request.url)).toEqual([url]);
+    retries[0].flush([]);
+    await settle();
+    expect(text()).not.toContain(title);
+    expect(
+      (fixture.nativeElement as HTMLElement)
+        .querySelector('app-possible-duplicates')
+        ?.textContent?.trim(),
+    ).toBe('');
+    expect(
+      (fixture.nativeElement as HTMLElement)
+        .querySelector('app-merged-identifiers')
+        ?.textContent?.trim(),
+    ).toBe('');
+  });
+  it('сбой обновления привязанных кодов в открытом диалоге не роняет страницу и повторяется локально', async () => {
+    await initial(false, false);
+    const reference = TestBed.inject(ReferenceApi);
+    reference.mergedIdentifiers.set([
+      {
+        instrumentId: 'test',
+        ticker: 'TEST',
+        name: null,
+        entries: [],
+        conflicting: false,
+        tickers: ['TEST'],
+        merges: [],
+      },
+    ]);
+    const dialog = TestBed.inject(MatDialog).open(MergedIdentifiersDialog);
+    await settle();
+    reference.mergedIdentifiers.reload();
+    await settle();
+    http
+      .expectOne('/api/instruments/merged-identifiers')
+      .flush({}, { status: 500, statusText: 'Test' });
+    await settle();
+    const host = document.querySelector('app-merged-identifiers-dialog');
+    expect(host?.textContent).toContain('Не удалось загрузить привязанные коды');
+    host?.querySelector<HTMLButtonElement>('app-state-message button')?.click();
+    await settle();
+    const requests = http.match(() => true);
+    expect(requests.map((r) => r.request.url)).toEqual(['/api/instruments/merged-identifiers']);
+    requests[0].flush([]);
+    await settle();
+    expect(host?.textContent).not.toContain('Не удалось загрузить');
+    dialog.close();
+    await settle();
+  });
+  it.each([
+    ['manual', 'Stock', '10', '1', true],
+    ['manual', 'Stock', null, '1', true],
+    ['moex', 'Stock', null, '1', false],
+    ['manual', 'Future', '10', '1', false],
+    ['manual', 'Stock', '10', '0', false],
+  ])(
+    'видимость поиска %s/%s/%s/%s',
+    async (marketSource, type, currentPrice, quantity, visible) => {
+      for (const req of http.match(() => true))
+        req.flush(
+          req.request.url.includes('/summary')
+            ? summary
+            : req.request.url.endsWith('/positions')
+              ? [{ ...position, marketSource, type, currentPrice, quantity }]
+              : [],
+        );
+      await settle();
+      expect(
+        (fixture.nativeElement as HTMLElement).querySelectorAll(
+          'button[aria-label="Найти цену на бирже"]',
+        ).length,
+      ).toBe(visible ? 1 : 0);
+      expect(
+        (fixture.nativeElement as HTMLElement).querySelectorAll(
+          'button[aria-label="Объединить с другим инструментом"]',
+        ).length,
+      ).toBe(currentPrice === null && quantity !== '0' ? 1 : 0);
+    },
+  );
+  it.each(['Bond', 'Stock'])(
+    'частичная диаграмма считает позиции без оценки, в том числе одного типа %s',
+    async (type) => {
+      const rows = [
+        { ...position, type: 'Stock', instrumentId: 'good', currentValueRub: '200' },
+        { ...position, type, instrumentId: 'bad', currentPrice: null },
+        { ...position, type: 'Future', instrumentId: 'future' },
+        { ...position, instrumentId: 'closed', quantity: '0' },
+      ].map((row) => PositionSchema.parse(row));
+      for (const req of http.match(() => true))
+        req.flush(
+          req.request.url.includes('/summary')
+            ? summary
+            : req.request.url.endsWith('/positions')
+              ? rows
+              : [],
+        );
+      await settle();
+      const page = fixture.componentInstance;
+      expect(page['allocationUnvaluedCount']()).toBe(1);
+      expect(page['allocation']().find((g) => g.label === 'Акции')?.valueRub).toBe(200);
+      page['systemFilter'].set('no-positions');
+      await settle();
+      http.expectOne('/api/operations/summary?systemId=no-positions').flush(summary);
+      await settle();
+      expect(page['allocationUnvaluedCount']()).toBe(0);
+      page['systemFilter'].set(null);
+      await settle();
+      http.expectOne('/api/operations/summary').flush(summary);
+      await settle();
+      page['positionApi'].positions.set(rows.map((r) => ({ ...r, currentValueRub: '200' })));
+      await settle();
+      expect(page['allocationUnvaluedCount']()).toBe(0);
+    },
+  );
 });
