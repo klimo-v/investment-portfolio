@@ -1,6 +1,6 @@
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
 import { and, eq } from 'drizzle-orm';
-import { shouldReplacePrice, type PriceSource } from '@core';
+import { plainQuoteDecimal, quoteValuesIssue, shouldReplacePrice, type PriceSource } from '@core';
 import { priceHistory } from './schema';
 
 /** Цена на дату — формат строки price_history */
@@ -19,7 +19,13 @@ export interface PricePoint {
  * записи в price_history — её используют и сервис истории, и импорт отчётов, и перенос
  * снимков, поэтому политика конфликтов не расходится. true — строка записана.
  */
-export function recordPrice(db: Pick<BetterSQLite3Database, 'select' | 'insert'>, instrumentId: string, point: PricePoint): boolean {
+export function recordPrice(
+  db: Pick<BetterSQLite3Database, 'select' | 'insert'>,
+  instrumentId: string,
+  point: PricePoint,
+): boolean {
+  const issue = quoteValuesIssue(point.price, point.accruedInterest, true);
+  if (issue) throw new Error(issue);
   const [existing] = db
     .select()
     .from(priceHistory)
@@ -27,9 +33,10 @@ export function recordPrice(db: Pick<BetterSQLite3Database, 'select' | 'insert'>
     .all();
   if (existing && !shouldReplacePrice(existing.source as PriceSource, point.source)) return false;
   const values = {
-    price: point.price,
+    price: plainQuoteDecimal(point.price),
     currency: point.currency,
-    accruedInterest: point.accruedInterest,
+    accruedInterest:
+      point.accruedInterest === null ? null : plainQuoteDecimal(point.accruedInterest),
     accruedCurrency: point.accruedCurrency,
     source: point.source,
   };

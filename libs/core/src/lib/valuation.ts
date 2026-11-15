@@ -1,3 +1,4 @@
+import { quoteValuesIssue } from './quote-values';
 import Decimal from 'decimal.js';
 import type { Operation } from './schemas';
 import { marketValueRub, TradeLedger, type TradeResult } from './engine';
@@ -386,7 +387,7 @@ function valueOpenTrade(
     note(reason);
   };
 
-  if (!obs) return fallback('no-price');
+  if (!obs || quoteValuesIssue(obs.price, obs.accruedInterest, isFuture)) return fallback('no-price');
 
   if (isFuture) {
     // у фьючерса «стоимость» — нереализованный результат, вложено 0 (цена — ₽ за контракт)
@@ -422,7 +423,7 @@ export function fxRateAt(currency: string, day: string, cursor: PriceCursor): De
   const c = currency.toUpperCase();
   if (c === 'RUB') return new Decimal(1);
   const obs = cursor.at(fxInstrumentId(c), day);
-  if (!obs) return null;
+  if (!obs || quoteValuesIssue(obs.price, null)) return null;
   const rate = new Decimal(obs.price);
   return rate.isFinite() && rate.gt(0) ? rate : null;
 }

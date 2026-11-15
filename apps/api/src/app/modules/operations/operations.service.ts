@@ -1,4 +1,4 @@
-import { calendarDate } from '@core';
+import { calendarDate, plainQuoteDecimal, quoteValuesIssue } from '@core';
 import { randomUUID } from 'node:crypto';
 import { Inject, Injectable, Optional } from '@nestjs/common';
 import { eq, lte, sql } from 'drizzle-orm';
@@ -342,7 +342,7 @@ export class OperationsService {
           ? `Нет курса ${accruedCurrency} для НКД`
           : null;
     return {
-      currentPrice: quote.price,
+      currentPrice: plainQuoteDecimal(quote.price),
       priceCurrency,
       valuationIssue,
       currentValueRub:
@@ -380,8 +380,12 @@ export class OperationsService {
     for (const p of calculatePositions(ops, { futureIds })) {
       const instrument = instrumentById.get(p.instrumentId);
       const currency = instrument?.currency ?? 'RUB';
-      const quote = quoteByInstrument.get(p.instrumentId);
+      let quote = quoteByInstrument.get(p.instrumentId);
       const isFuture = futureIds.has(p.instrumentId);
+      const quoteIssue = quote
+        ? quoteValuesIssue(quote.price, quote.accruedInterest, isFuture)
+        : null;
+      if (quoteIssue) quote = undefined;
 
       let currentPrice: string | null = null;
       let priceCurrency: string | null = null;
@@ -389,17 +393,19 @@ export class OperationsService {
       let currentValueRub: string | null = null;
       let pnlRub: string | null = null;
       let unrealizedPnlRub: string | null = null;
-      let valuationIssue: string | null = p.quantity.isZero() ? null : 'Нет котировки';
+      let valuationIssue: string | null = p.quantity.isZero()
+        ? null
+        : (quoteIssue ?? 'Нет котировки');
 
       if (quote && isFuture) {
         // фьючерс: «стоимость» = нереализованный результат (расчётная − средняя) × кол-во
         // со знаком; quantity × price для шорта было бы бессмыслицей. Цена в ₽ за контракт.
-        currentPrice = quote.price;
+        currentPrice = plainQuoteDecimal(quote.price);
         priceCurrency = 'RUB';
         valuationIssue = null;
         currentValueRub = futureUnrealizedPnl(p, quote.price).toFixed(2);
       } else if (quote) {
-        currentPrice = quote.price;
+        currentPrice = plainQuoteDecimal(quote.price);
         ({ currentPrice, priceCurrency, accruedInterestRub, currentValueRub, valuationIssue } =
           await this.valueQuote(p.quantity, quote, currency, historical?.rate));
       }
@@ -571,17 +577,23 @@ export class OperationsService {
     for (const t of calculateTrades(ops, { futureIds })) {
       if (filter.from && t.closedAt && t.closedAt < filter.from) continue;
       const currency = instrumentById.get(t.instrumentId)?.currency ?? 'RUB';
-      const quote = pastTill ? undefined : quoteByInstrument.get(t.instrumentId);
+      let quote = pastTill ? undefined : quoteByInstrument.get(t.instrumentId);
+      const quoteIssue = quote
+        ? quoteValuesIssue(quote.price, quote.accruedInterest, futureIds.has(t.instrumentId))
+        : null;
+      if (quoteIssue) quote = undefined;
 
       let currentPrice: string | null = null;
       let priceCurrency: string | null = null;
       let currentValueRub: string | null = null;
-      let valuationIssue: string | null = t.quantity.isZero() ? null : 'Нет котировки';
+      let valuationIssue: string | null = t.quantity.isZero()
+        ? null
+        : (quoteIssue ?? 'Нет котировки');
 
       if (quote && futureIds.has(t.instrumentId)) {
         // открытая фьючерсная сделка (кол-во со знаком): оценка = нереализованный результат
         if (!t.quantity.isZero()) {
-          currentPrice = quote.price;
+          currentPrice = plainQuoteDecimal(quote.price);
           priceCurrency = 'RUB';
           valuationIssue = null;
           currentValueRub = futureUnrealizedPnl(
@@ -590,7 +602,7 @@ export class OperationsService {
           ).toFixed(2);
         }
       } else if (quote && t.quantity.gt(0)) {
-        currentPrice = quote.price;
+        currentPrice = plainQuoteDecimal(quote.price);
         ({ currentPrice, priceCurrency, currentValueRub, valuationIssue } = await this.valueQuote(
           t.quantity,
           quote,

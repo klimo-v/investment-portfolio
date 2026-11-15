@@ -3,7 +3,7 @@ import { drizzle, type BetterSQLite3Database } from 'drizzle-orm/better-sqlite3'
 import { migrate } from 'drizzle-orm/better-sqlite3/migrator';
 import { eq } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { DashboardSummarySchema } from '@core';
+import { DashboardSummarySchema, PositionSchema, TradeSchema } from '@core';
 import {
   instruments,
   operations,
@@ -16,7 +16,7 @@ import { QuotesService } from '../quotes/quotes.service';
 import type { MoexProvider } from '../quotes/moex.provider';
 import type { BinanceProvider } from '../quotes/binance.provider';
 import type { PriceHistoryService } from '../quotes/price-history.service';
-import { CbrProvider } from '../quotes/cbr.provider';
+import { CbrProvider, CBR_RETRY_MS } from '../quotes/cbr.provider';
 import { OperationsService } from './operations.service';
 
 describe('Оценка позиций и сделок без курса и частичные итоги', () => {
@@ -116,6 +116,7 @@ describe('Оценка позиций и сделок без курса и ча�
       ok: true,
       json: async () => ({ Valute: { USD: { Value: 90, Nominal: 1 } } }),
     });
+    vi.advanceTimersByTime(CBR_RETRY_MS);
     expect((await service.positions())[0].currentValueRub).toBe('900.00');
     vi.advanceTimersByTime(3600001);
     expect((await service.trades())[0].currentValueRub).toBe('900.00');
@@ -531,5 +532,224 @@ describe('Оценка позиций и сделок без курса и ча�
       .run();
     expect((await service.summary({ till: '2026-11-15' })).totals.currentValueRub).toBe(900);
     expect((await service.summary({ till: '2026-11-14' })).totals.currentValueRub).toBe(800);
+  });
+  it.each([
+    ['price', 'Bond'],
+    ['accrued_interest', 'Bond'],
+    ['price', 'Future'],
+  ])(
+    'повреждённое поле %s в SQLite (%s): текущая и историческая оценка доступны',
+    async (field, type) => {
+      sqlite.prepare("UPDATE instruments SET type = ? WHERE id = 'USD'").run(type);
+      quoted(db, 'RUB');
+      db.insert(operations)
+        .values({
+          id: 'good',
+          date: '2026-01-01',
+          systemId: 's1',
+          portfolioId: 'p1',
+          instrumentId: 'RUB',
+          operationType: 'Buy',
+          quantity: '1',
+          price: '100',
+          currency: 'RUB',
+        })
+        .run();
+      db.insert(quotes)
+        .values({
+          instrumentId: 'RUB',
+          price: '200',
+          currency: 'RUB',
+          source: 'manual',
+          asOf: '2026-01-01',
+        })
+        .run();
+      sqlite
+        .prepare(`UPDATE quotes SET ${field} = ? WHERE instrument_id = 'USD'`)
+        .run('broken-price');
+      sqlite
+        .prepare(
+          "INSERT INTO price_history(instrument_id,date,price,currency,accrued_interest,source) VALUES ('USD','2026-01-01',?,'RUB',?,'manual')",
+        )
+        .run(
+          field === 'price' ? 'broken-price' : '10',
+          field === 'accrued_interest' ? 'broken-price' : null,
+        );
+      for (const list of [
+        await service.positions(),
+        await service.positions(service.list(), '2026-01-02'),
+      ]) {
+        expect(list.find((p) => p.instrumentId === 'USD')).toMatchObject({
+          currentValueRub: null,
+          pnlRub: null,
+          valuationIssue: field === 'price' ? 'Некорректная цена' : 'Некорректный НКД',
+        });
+        expect(list.find((p) => p.instrumentId === 'RUB')?.currentValueRub).toBe('200.00');
+      }
+      for (const result of [
+        await service.summary(),
+        await service.summary({ till: '2026-01-02' }),
+      ]) {
+        expect(result.totals).toMatchObject({
+          currentValueRub: 200,
+          unvaluedPositionCount: 1,
+          pnlRub: null,
+        });
+        DashboardSummarySchema.parse(result);
+      }
+      expect(
+        (await service.trades()).find((t) => t.instrumentId === 'USD')?.currentValueRub,
+      ).toBeNull();
+    },
+  );
+
+  it('три USD-позиции + параллельная сводка: 1 запрос, в паузе 0 новых, после паузы 1 новый', async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi.fn().mockResolvedValue({ ok: false, status: 503 });
+    vi.stubGlobal('fetch', fetchMock);
+    const facade = new QuotesService(
+      db,
+      {} as MoexProvider,
+      new CbrProvider(),
+      {} as BinanceProvider,
+      {} as PriceHistoryService,
+    );
+    service = new OperationsService(db, facade);
+    quoted(db);
+    for (const id of ['USD2', 'USD3']) {
+      db.insert(instruments).values({ id, ticker: id, type: 'Stock', currency: 'USD' }).run();
+      db.insert(operations)
+        .values({
+          id,
+          date: '2026-01-01',
+          systemId: 's1',
+          portfolioId: 'p1',
+          instrumentId: id,
+          operationType: 'Buy',
+          quantity: '1',
+          price: '10',
+          currency: 'USD',
+        })
+        .run();
+      db.insert(quotes)
+        .values({
+          instrumentId: id,
+          price: '10',
+          currency: 'USD',
+          source: 'manual',
+          asOf: '2026-01-01',
+        })
+        .run();
+    }
+    await Promise.all([service.positions(), service.summary()]);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    await Promise.all([service.positions(), service.summary()]);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    vi.advanceTimersByTime(CBR_RETRY_MS);
+    fetchMock.mockResolvedValue({
+      ok: true,
+      json: async () => ({ Valute: { USD: { Value: 95, Nominal: 1 } } }),
+    });
+    const [positions, summary] = await Promise.all([service.positions(), service.summary()]);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(positions.every((p) => p.currentValueRub === '950.00')).toBe(true);
+    expect(summary.totals.currentValueRub).toBe(2850);
+  });
+  it.each(['quotes', 'price_history'])(
+    'старая экспонента в %s не скрывает соседнюю позицию и проходит клиентские схемы',
+    async (table) => {
+      db.insert(operations)
+        .values({
+          id: 'buy2',
+          date: '2026-01-01',
+          systemId: 's1',
+          portfolioId: 'p1',
+          instrumentId: 'RUB',
+          operationType: 'Buy',
+          quantity: '1',
+          price: '100',
+          currency: 'RUB',
+        })
+        .run();
+      for (const [id, price] of [
+        ['USD', '1e-12'],
+        ['RUB', '120'],
+      ]) {
+        if (table === 'quotes') {
+          db.insert(quotes)
+            .values({
+              instrumentId: id,
+              price,
+              currency: 'RUB',
+              source: 'manual',
+              asOf: '2026-01-02',
+            })
+            .run();
+        } else {
+          db.insert(priceHistory)
+            .values({
+              instrumentId: id,
+              price,
+              currency: 'RUB',
+              source: 'manual',
+              date: '2026-01-02',
+            })
+            .run();
+        }
+      }
+      const positions = (await service.positions()).map((p) => PositionSchema.parse(p));
+      const trades = (await service.trades()).map((t) => TradeSchema.parse(t));
+      expect(positions).toHaveLength(2);
+      expect(trades).toHaveLength(2);
+      for (const rows of [positions, trades]) {
+        expect(rows.find((p) => p.instrumentId === 'USD')?.currentPrice).toBe('0.000000000001');
+        expect(rows.find((p) => p.instrumentId === 'RUB')?.currentPrice).toBe('120');
+      }
+      const historical = (await service.positions(service.list(), '2026-01-03')).map((p) =>
+        PositionSchema.parse(p),
+      );
+      expect(historical.find((p) => p.instrumentId === 'USD')).toMatchObject({
+        currentPrice: '0.000000000001',
+        currentValueRub: '0.00',
+        valuationIssue: null,
+      });
+    },
+  );
+  it('валютная продажа: портфель и сделки дают +1000 реализации, 9000 остатка, 2000 полного результата', async () => {
+    db.update(operations).set({ quantity: '2', price: '100', fxRate: '90', currency: 'USD' }).run();
+    db.insert(operations)
+      .values({
+        id: 'partial-fx',
+        date: '2026-01-02',
+        systemId: 's1',
+        portfolioId: 'p1',
+        instrumentId: 'USD',
+        operationType: 'Sell',
+        quantity: '1',
+        price: '100',
+        fxRate: '100',
+        currency: 'USD',
+      })
+      .run();
+    quoted(db, 'USD');
+    db.update(quotes).set({ price: '100' }).run();
+    fx = 100;
+    const [position] = await service.positions();
+    const [trade] = await service.trades();
+    expect(position).toMatchObject({
+      investedRub: '9000.00',
+      realizedPnlRub: '1000.00',
+      unrealizedPnlRub: '1000.00',
+      pnlRub: '2000.00',
+    });
+    expect(trade).toMatchObject({
+      investedRub: '9000.00',
+      purchasesRub: '18000.00',
+      realizedPnlRub: '1000.00',
+      realizedPnlCcy: '0.00',
+      pnlRub: '2000.00',
+    });
+    TradeSchema.parse(trade);
+    expect((await service.summary()).totals).toMatchObject({ realizedPnlRub: 1000, pnlRub: 2000 });
   });
 });

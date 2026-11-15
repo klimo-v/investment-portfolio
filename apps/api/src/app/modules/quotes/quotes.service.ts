@@ -1,5 +1,11 @@
-import { calendarDate } from '@core';
-import { BadRequestException, Inject, Injectable, NotFoundException } from '@nestjs/common';
+import { calendarDate, plainQuoteDecimal, quoteValuesIssue } from '@core';
+import {
+  BadRequestException,
+  Inject,
+  Injectable,
+  InternalServerErrorException,
+  NotFoundException,
+} from '@nestjs/common';
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
 import { eq } from 'drizzle-orm';
 import { ManualPriceSchema } from '@core';
@@ -8,7 +14,7 @@ import { DB } from '../../db/drizzle.module';
 import { MoexProvider } from './moex.provider';
 import { CbrProvider } from './cbr.provider';
 import { BinanceProvider } from './binance.provider';
-import type { PriceProvider } from './price-provider';
+import type { PriceProvider, Quote } from './price-provider';
 import { PriceHistoryService } from './price-history.service';
 import { fxInstrumentId, type PriceSource, type QuoteRefreshResult } from '@core';
 
@@ -35,9 +41,61 @@ export class QuotesService {
     this.providers = [this.moex, this.binance];
   }
 
+  /** Проверка обоих путей выполняется до первой записи, десятичные строки сохраняются точно. */
+  private prepareQuote(inst: typeof instruments.$inferSelect, quote: Quote): QuoteRow {
+    const issue = quoteValuesIssue(quote.price, quote.accruedInterest, inst.type === 'Future');
+    if (issue) throw new Error(issue);
+    if (!['moex', 'binance', 'cbr'].includes(quote.source))
+      throw new Error('Некорректный источник котировки');
+    if (!Number.isFinite(Date.parse(quote.asOf))) throw new Error('Некорректная дата котировки');
+    const currency = quote.currency || inst.currency;
+    const accruedInterest =
+      quote.accruedInterest == null ? null : plainQuoteDecimal(quote.accruedInterest);
+    return {
+      instrumentId: inst.id,
+      price: plainQuoteDecimal(quote.price),
+      currency,
+      accruedInterest,
+      accruedCurrency:
+        accruedInterest === null ? null : (quote.accruedInterestCurrency ?? currency),
+      source: quote.source,
+      asOf: quote.asOf,
+    };
+  }
+
+  /** Одна SQLite-транзакция для котировки, истории (с её приоритетом) и источника. */
+  private saveQuote(row: QuoteRow, changeSource = false): void {
+    this.db.transaction((tx) => {
+      tx.insert(quotes)
+        .values(row)
+        .onConflictDoUpdate({ target: quotes.instrumentId, set: row })
+        .run();
+      this.recordHistory(row.instrumentId, row);
+      if (changeSource && row.source !== 'broker-report') {
+        tx.update(instruments)
+          .set({ marketSource: row.source })
+          .where(eq(instruments.id, row.instrumentId))
+          .run();
+      }
+    });
+  }
+
   /** Текущие кэшированные котировки */
   list(): QuoteRow[] {
-    return this.db.select().from(quotes).all();
+    return this.db
+      .select()
+      .from(quotes)
+      .all()
+      .map((row) =>
+        quoteValuesIssue(row.price, row.accruedInterest, true)
+          ? row
+          : {
+              ...row,
+              price: plainQuoteDecimal(row.price),
+              accruedInterest:
+                row.accruedInterest === null ? null : plainQuoteDecimal(row.accruedInterest),
+            },
+      );
   }
 
   /** Курс валюты или null, если ЦЕНТРОБАНК недоступен/валюты нет (без подмены единицей) */
@@ -110,71 +168,22 @@ export class QuotesService {
       }
       total++;
       const provider = this.providers.find((p) => p.supports(inst.marketSource));
-      let quote;
       try {
         if (!provider) throw new Error('Источник не поддерживает обновление цены');
-        quote = await provider.getQuote(inst.ticker);
+        const quote = await provider.getQuote(inst.ticker);
         if (!quote) throw new Error('Источник не вернул цену');
+        const row = this.prepareQuote(inst, quote);
+        this.saveQuote(row);
+        currencies.add(row.currency);
+        if (row.accruedCurrency) currencies.add(row.accruedCurrency);
+        updated++;
       } catch (error) {
         failures.push({
           ticker: inst.ticker,
           source: inst.marketSource,
           reason: error instanceof Error ? error.message : 'Не удалось получить цену',
         });
-        continue;
       }
-
-      /*
-       * Валюта — та, в которой цену отдал источник, и только при её отсутствии
-       * валюта инструмента. Раньше здесь всегда стояла валюта инструмента, потому
-       * что MOEX ISS «не отдаёт валюту котировки»; на самом деле отдаёт — в
-       * FACEUNIT облигации (см. moex.provider.ts). Разница принципиальна для
-       * замещающих облигаций: цена приходит в долларах, а инструмент в справочнике
-       * может числиться рублёвым (сделки-то рублёвые), и пересчёт по курсу
-       * инструмента занижал стоимость позиции в десятки раз.
-       */
-      const currency = quote.currency || inst.currency;
-      const accruedInterest = quote.accruedInterest ?? null;
-      // валюта НКД своя (см. quotes.accruedCurrency); нет НКД — нет и валюты
-      const accruedCurrency =
-        accruedInterest === null ? null : (quote.accruedInterestCurrency ?? currency);
-
-      this.db
-        .insert(quotes)
-        .values({
-          instrumentId: inst.id,
-          price: quote.price,
-          currency,
-          accruedInterest,
-          accruedCurrency,
-          source: quote.source,
-          asOf: quote.asOf,
-        })
-        .onConflictDoUpdate({
-          target: quotes.instrumentId,
-          // accruedInterest перезаписываем всегда, в том числе в null: после выплаты
-          // купона НКД обнуляется, и «прилипший» прошлый завышал бы стоимость
-          set: {
-            price: quote.price,
-            currency,
-            accruedInterest,
-            accruedCurrency,
-            source: quote.source,
-            asOf: quote.asOf,
-          },
-        })
-        .run();
-      this.recordHistory(inst.id, {
-        price: quote.price,
-        currency,
-        accruedInterest,
-        accruedCurrency,
-        source: quote.source,
-        asOf: quote.asOf,
-      });
-      currencies.add(currency);
-      if (accruedCurrency) currencies.add(accruedCurrency);
-      updated++;
     }
     await this.recordFxToday(currencies);
 
@@ -201,36 +210,14 @@ export class QuotesService {
       );
     }
 
+    const issue = quoteValuesIssue(price, null, inst.type === 'Future');
+    if (issue) throw new BadRequestException(issue);
+
     const asOf = new Date().toISOString();
     const currency = inst.type === 'Future' ? 'RUB' : inst.currency;
-    // Ручная цена — в валюте инструмента, у фьючерса в ₽ за контракт.
-    // НКД для неё неоткуда взять, поэтому явно сбрасываем в null.
-    this.db
-      .insert(quotes)
-      .values({
-        instrumentId,
-        price,
-        currency,
-        accruedInterest: null,
-        accruedCurrency: null,
-        source: 'manual',
-        asOf,
-      })
-      .onConflictDoUpdate({
-        target: quotes.instrumentId,
-        set: {
-          price,
-          currency,
-          accruedInterest: null,
-          accruedCurrency: null,
-          source: 'manual',
-          asOf,
-        },
-      })
-      .run();
-
-    this.recordHistory(instrumentId, {
-      price,
+    this.saveQuote({
+      instrumentId,
+      price: plainQuoteDecimal(price),
       currency,
       accruedInterest: null,
       accruedCurrency: null,
@@ -262,54 +249,24 @@ export class QuotesService {
     }
 
     for (const provider of this.providers) {
-      // Неудача одной площадки не мешает поиску на следующей.
-      const quote = await provider.getQuote(inst.ticker).catch(() => null);
-      if (!quote) continue;
-
-      // валюта и НКД — от источника, как и в refreshAll()
-      const currency = quote.currency || inst.currency;
-      const accruedInterest = quote.accruedInterest ?? null;
-      const accruedCurrency =
-        accruedInterest === null ? null : (quote.accruedInterestCurrency ?? currency);
-
-      this.db
-        .update(instruments)
-        .set({ marketSource: quote.source })
-        .where(eq(instruments.id, instrumentId))
-        .run();
-      this.db
-        .insert(quotes)
-        .values({
-          instrumentId,
-          price: quote.price,
-          currency,
-          accruedInterest,
-          accruedCurrency,
-          source: quote.source,
-          asOf: quote.asOf,
-        })
-        .onConflictDoUpdate({
-          target: quotes.instrumentId,
-          set: {
-            price: quote.price,
-            currency,
-            accruedInterest,
-            accruedCurrency,
-            source: quote.source,
-            asOf: quote.asOf,
-          },
-        })
-        .run();
-
-      this.recordHistory(instrumentId, {
-        price: quote.price,
-        currency,
-        accruedInterest,
-        accruedCurrency,
-        source: quote.source,
-        asOf: quote.asOf,
-      });
-      return { price: quote.price, source: quote.source };
+      let row: QuoteRow;
+      try {
+        const quote = await provider.getQuote(inst.ticker);
+        if (!quote) continue;
+        row = this.prepareQuote(inst, quote);
+      } catch {
+        // Только отсутствие/непригодность ответа разрешает поиск на следующей площадке.
+        continue;
+      }
+      try {
+        this.saveQuote(row, true);
+      } catch (cause) {
+        throw new InternalServerErrorException(
+          `Цена для «${inst.ticker}» найдена (${row.source}), но сохранить её не удалось. Предыдущая цена сохранена.`,
+          { cause },
+        );
+      }
+      return { price: row.price, source: row.source };
     }
 
     throw new NotFoundException(
