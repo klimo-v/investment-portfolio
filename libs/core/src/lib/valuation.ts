@@ -241,11 +241,11 @@ export function valuationSeries(
     )
     .sort(compareOperations);
 
-  // выплаты без инструмента (+) и отдельные налоги/комиссии (−) — потоки в «зафиксированное» группы
+  // Выплаты по дате зачисления (+) и отдельные налоги/комиссии (−) — потоки в «зафиксированное» группы
   const incomeOps = operations
     .filter(
       (o) =>
-        (isUnattributedIncome(o) || isStandaloneCost(o, options.futureIds)) &&
+        (o.operationType === 'Dividend' || o.operationType === 'Coupon' || isStandaloneCost(o, options.futureIds)) &&
         o.date <= options.till &&
         (!options.systemId || o.systemId === options.systemId) &&
         (!options.portfolioId || o.portfolioId === options.portfolioId),
@@ -278,6 +278,7 @@ export function valuationSeries(
 
   const fixedByKey = new Map<string, Decimal>(keys.map((k) => [k, ZERO]));
   const ledger = new TradeLedger({ futureIds: options.futureIds }, (trade, event) => {
+    if (event.kind === 'income') return; // Выплаты учтены по журналу, включая выплаты без сделки.
     const k = keyOf(trade);
     fixedByKey.set(k, (fixedByKey.get(k) ?? ZERO).plus(event.rub));
   });

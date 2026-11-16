@@ -473,7 +473,18 @@ export const SystemPerformanceSchema = z.object({
   reconciliation: z
     .array(SettlementCheckSchema.extend({ ticker: z.string(), portfolioId: z.string() }))
     .default([]),
+  /** Денежный результат за выбранный интервал, относительно дня до его начала. */
   summary: z.object({
+    totalRub: decimalString,
+    tradingRub: decimalString,
+    incomeRub: decimalString,
+    standaloneCostsRub: decimalString,
+    revaluationRub: decimalString,
+    valuationIssues: z.array(CarriedPriceSchema.extend({ date: z.string() })),
+    hasActivity: z.boolean(),
+  }),
+  /** Суммы за жизнь сделок, попавших в срез. */
+  tradeSummary: z.object({
     /** реализованный результат закрытых сделок, после комиссий */
     netPnlRub: decimalString,
     /** до комиссий: net + комиссии закрытых сделок */
@@ -487,7 +498,7 @@ export const SystemPerformanceSchema = z.object({
     /** уже зафиксированное по открытым сделкам (комиссии входа, частичные закрытия) */
     openRealizedRub: decimalString,
     /** нереализованный результат открытых сделок по расчётной цене */
-    unrealizedRub: decimalString,
+    unrealizedRub: decimalString.nullable(),
     /** дивиденды и купоны по всем сделкам (налог уже удержан брокером) */
     incomeRub: decimalString,
     /** net закрытых + их дивиденды и купоны: «закрытые сделки» целиком */
@@ -497,9 +508,9 @@ export const SystemPerformanceSchema = z.object({
     /** из них по открытым сделкам */
     openIncomeRub: decimalString,
     /** нереализованный + уже зафиксированное (частичные продажи, комиссии) + выплаты по открытым: «открытые позиции» целиком; closedResult + openResult = totalRub */
-    openResultRub: decimalString,
+    openResultRub: decimalString.nullable(),
     /** net закрытых + openRealized + unrealized + income */
-    totalRub: decimalString,
+    totalRub: decimalString.nullable(),
     openCount: z.number(),
   }),
   /** Метрики по закрытым сделкам: качество входов и выходов; базис подписан */

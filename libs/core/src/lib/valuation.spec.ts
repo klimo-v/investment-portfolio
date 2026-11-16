@@ -60,7 +60,7 @@ const sum = (s: ValuationSeries, i: number, field: 'investedRub' | 'marketValueR
   s.groups.reduce((acc, g) => acc.plus(g.points[i][field]), new Decimal(0)).toFixed(2);
 
 describe('valuationSeries: инварианты', () => {
-  it('точка «сегодня» при текущих ценах = итог по сделкам (systemPerformance.summary.totalRub) по каждой системе', () => {
+  it('точка «сегодня» при текущих ценах = итог по сделкам (systemPerformance.tradeSummary.totalRub) по каждой системе', () => {
     const series = valuationSeries(OPS, PRICES, opts('system'));
     for (const systemId of ['s1', 's2']) {
       const trades = calculateTrades(OPS.filter((o) => o.systemId === systemId), { futureIds: FUT });
@@ -75,7 +75,7 @@ describe('valuationSeries: инварианты', () => {
         }
         return null;
       };
-      const expected = systemPerformance(trades, { unrealizedOf: unrealized }).summary.totalRub;
+      const expected = systemPerformance(trades, { unrealizedOf: unrealized }).tradeSummary.totalRub;
       expect(last(series, systemId).totalRub).toBe(expected);
     }
   });
@@ -215,7 +215,7 @@ describe('выплата после закрытия позиции', () => {
     expect(t.status).toBe('Closed');
     expect(t.dividendsRub.toString()).toBe('70');
     const perf = systemPerformance([t]);
-    expect(perf.summary).toMatchObject({ netPnlRub: '100.00', closedIncomeRub: '70.00', closedResultRub: '170.00', totalRub: '170.00' });
+    expect(perf.tradeSummary).toMatchObject({ netPnlRub: '100.00', closedIncomeRub: '70.00', closedResultRub: '170.00', totalRub: '170.00' });
 
     const series = valuationSeries(ops, [], { till: '2026-03-20', groupBy: 'system' });
     const pts = series.groups[0].points;
@@ -267,7 +267,7 @@ describe('выплаты без инструмента', () => {
   it('итог системы: перечисленные в option выплаты входят в «Всего» и в «Результат (закрытые)»', () => {
     const trades = calculateTrades(ops.filter((o) => o.instrumentId));
     const p = systemPerformance(trades, { unrealizedOf: () => new Decimal(30), unattributedIncomeRub: '500' });
-    expect(p.summary).toMatchObject({ incomeRub: '500.00', closedIncomeRub: '500.00', closedResultRub: '500.00', openResultRub: '30.00', totalRub: '530.00' });
+    expect(p.tradeSummary).toMatchObject({ incomeRub: '500.00', closedIncomeRub: '500.00', closedResultRub: '500.00', openResultRub: '30.00', totalRub: '530.00' });
   });
 });
 

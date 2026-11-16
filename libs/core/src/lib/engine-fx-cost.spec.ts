@@ -65,7 +65,7 @@ describe('Историческая рублёвая себестоимость �
     const performance = systemPerformance(calculateTrades(ops), {
       unrealizedOf: (t) => new Decimal(10000).minus(t.investedRub),
     });
-    expect(performance.summary.totalRub).toBe('2000.00');
+    expect(performance.tradeSummary.totalRub).toBe('2000.00');
   });
   it('полное закрытие: ещё +1000 ₽, обе себестоимости обнуляются, сумма покупок остаётся', () => {
     const ledger = new TradeLedger();

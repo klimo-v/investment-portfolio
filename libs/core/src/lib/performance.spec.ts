@@ -23,7 +23,7 @@ function curveOf(trades: readonly TradeResult[]): ValuationPoint[] {
   const day = (iso: string, n: number) => new Date(Date.parse(iso) + n * 86_400_000).toISOString().slice(0, 10);
   const points: ValuationPoint[] = [];
   let acc = new Decimal(0);
-  for (let d = day(days[0], -1); d <= days[days.length - 1]; d = day(d, 1)) {
+  for (let d = days[0]; d <= days[days.length - 1]; d = day(d, 1)) {
     acc = acc.plus(byDay.get(d) ?? 0);
     points.push({ date: d, investedRub: '0.00', marketValueRub: '0.00', fixedRub: acc.toFixed(2), unrealizedRub: '0.00', totalRub: acc.toFixed(2), carried: [] });
   }
@@ -81,24 +81,24 @@ describe('systemPerformance: эталон отчёта SESPS (CNY-12.26)', () =>
   const p = perf(trades, { unrealizedOf });
 
   it('сверка с вариационной маржой отчёта: −15 405 + 204 + 4 288 = −10 913', () => {
-    const sumGross = new Decimal(p.summary.grossPnlRub)
-      .plus(p.summary.openRealizedRub)
-      .plus(p.summary.feesTotalRub) // валовой результат открытой = realized + fees(открытой)
-      .minus(p.summary.feesRub)
-      .plus(p.summary.unrealizedRub);
+    const sumGross = new Decimal(p.tradeSummary.grossPnlRub)
+      .plus(p.tradeSummary.openRealizedRub)
+      .plus(p.tradeSummary.feesTotalRub) // валовой результат открытой = realized + fees(открытой)
+      .minus(p.tradeSummary.feesRub)
+      .plus(p.tradeSummary.unrealizedRub);
     expect(sumGross.toFixed(2)).toBe('-10913.00');
   });
 
   it('итог: net закрытых −15 852,46; комиссии 962,91; нереализованный +4 288', () => {
-    expect(p.summary.netPnlRub).toBe('-15852.46');
-    expect(p.summary.grossPnlRub).toBe('-15201.00');
-    expect(p.summary.feesRub).toBe('651.46');
-    expect(p.summary.feesTotalRub).toBe('962.91');
-    expect(p.summary.openRealizedRub).toBe('-311.45');
-    expect(p.summary.unrealizedRub).toBe('4288.00');
-    expect(p.summary.totalRub).toBe('-11875.91');
-    expect(p.summary.openCount).toBe(1);
-    expect(p.summary.feeSharePct).toBeNull(); // gross < 0
+    expect(p.tradeSummary.netPnlRub).toBe('-15852.46');
+    expect(p.tradeSummary.grossPnlRub).toBe('-15201.00');
+    expect(p.tradeSummary.feesRub).toBe('651.46');
+    expect(p.tradeSummary.feesTotalRub).toBe('962.91');
+    expect(p.tradeSummary.openRealizedRub).toBe('-311.45');
+    expect(p.tradeSummary.unrealizedRub).toBe('4288.00');
+    expect(p.tradeSummary.totalRub).toBe('-11875.91');
+    expect(p.tradeSummary.openCount).toBe(1);
+    expect(p.tradeSummary.feeSharePct).toBeNull(); // gross < 0
   });
 
   it('сделки: 2 закрытых, win rate 50 %, лонг 1/1, шорт 1/0', () => {
@@ -177,9 +177,9 @@ describe('systemPerformance: цикл закрывается следующим 
     expect(trades.map((t) => t.status)).toEqual(['Closed', 'Closed', 'Closed']);
     expect(trades[2].realizedPnlRub.toFixed(2)).toBe('1672.55');
     expect(trades[2].realizedPnlRub.plus(trades[2].feesRub).toNumber()).toBe(1984);
-    expect(p.summary.openCount).toBe(0);
-    expect(p.summary.unrealizedRub).toBe('0.00');
-    expect(p.summary.netPnlRub).toBe('-14179.91');
+    expect(p.tradeSummary.openCount).toBe(0);
+    expect(p.tradeSummary.unrealizedRub).toBe('0.00');
+    expect(p.tradeSummary.netPnlRub).toBe('-14179.91');
   });
 
   it('статистика: 3 сделки, 2 прибыльных, серия, просадка неглубже и без восстановления', () => {
@@ -233,7 +233,7 @@ function trade(pnl: string, closedAt: string, over: Partial<TradeResult> = {}): 
 describe('systemPerformance: краевые случаи', () => {
   it('нет сделок → валидный DTO с нулями и пустыми рядами', () => {
     const p = perf([]);
-    expect(p.summary.netPnlRub).toBe('0.00');
+    expect(p.tradeSummary.netPnlRub).toBe('0.00');
     expect(p.tradeMetrics.trades.closed).toBe(0);
     expect(p.tradeMetrics.trades.winRatePct).toBeNull();
     expect(p.tradeMetrics.quality.profitFactor).toBeNull();
@@ -258,7 +258,7 @@ describe('systemPerformance: краевые случаи', () => {
     const open = trade('-10', '2026-01-05', { status: 'Open', closedAt: null, quantity: new Decimal(-2), feesRub: new Decimal(10) });
     const p = perf([open], { unrealizedOf: () => new Decimal(35) });
     expect(p.tradeMetrics.trades.closed).toBe(0);
-    expect(p.summary).toMatchObject({ netPnlRub: '0.00', openRealizedRub: '-10.00', unrealizedRub: '35.00', openResultRub: '25.00', totalRub: '25.00', openCount: 1 });
+    expect(p.tradeSummary).toMatchObject({ netPnlRub: '0.00', openRealizedRub: '-10.00', unrealizedRub: '35.00', openResultRub: '25.00', totalRub: '25.00', openCount: 1 });
   });
 
   it('дивиденды и купоны входят в «Всего», но не в результат закрытых и не в нереализованный', () => {
@@ -269,18 +269,18 @@ describe('systemPerformance: краевые случаи', () => {
       couponsRub: new Decimal(20),
     });
     const p = perf([open], { unrealizedOf: () => new Decimal(-50) });
-    expect(p.summary).toMatchObject({ netPnlRub: '0.00', unrealizedRub: '-50.00', incomeRub: '120.00', openIncomeRub: '120.00', closedResultRub: '0.00', closedIncomeRub: '0.00', openRealizedRub: '40.00', openResultRub: '110.00', totalRub: '110.00' });
+    expect(p.tradeSummary).toMatchObject({ netPnlRub: '0.00', unrealizedRub: '-50.00', incomeRub: '120.00', openIncomeRub: '120.00', closedResultRub: '0.00', closedIncomeRub: '0.00', openRealizedRub: '40.00', openResultRub: '110.00', totalRub: '110.00' });
   });
 
   it('дивиденды закрытой сделки входят в closedResultRub, netPnlRub не меняется', () => {
     const closed = trade('100', '2026-01-05', { dividendsRub: new Decimal(30) });
     const p = perf([closed]);
-    expect(p.summary).toMatchObject({ netPnlRub: '100.00', closedIncomeRub: '30.00', closedResultRub: '130.00', totalRub: '130.00' });
+    expect(p.tradeSummary).toMatchObject({ netPnlRub: '100.00', closedIncomeRub: '30.00', closedResultRub: '130.00', totalRub: '130.00' });
   });
 
-  it('открытая без оценки: нереализованный = 0, не падает', () => {
+  it('открытая без оценки: нереализованный и полный результат неизвестны', () => {
     const open = trade('0', '2026-01-05', { status: 'Partial', closedAt: null });
-    expect(perf([open]).summary.unrealizedRub).toBe('0.00');
+    expect(perf([open]).tradeSummary).toMatchObject({ unrealizedRub: null, totalRub: null });
   });
 
   it('переворот лонг → шорт даёт две сделки с разным направлением', () => {
@@ -395,7 +395,7 @@ describe('кривая «Результат системы» и её метри�
 
   it('эталон CNY: последняя точка кривой = «Всего» (−11 875,91) = зафиксированное + переоценка 4 288', () => {
     const last = p.series.result[p.series.result.length - 1];
-    expect(last.totalRub).toBe(p.summary.totalRub);
+    expect(last.totalRub).toBe(p.tradeSummary.totalRub);
     expect(last.totalRub).toBe('-11875.91');
     expect(last.unrealizedRub).toBe('4288.00');
     expect(new Decimal(last.fixedRub).plus(last.unrealizedRub).toFixed(2)).toBe(last.totalRub);
@@ -423,14 +423,25 @@ describe('кривая «Результат системы» и её метри�
     });
     // пн–ср: 0, +100, +40 (дно просадки 60), +120 (восстановилась выше пика 100)
     const m = equityCurveMetrics([pt('2026-03-02', '0'), pt('2026-03-03', '100'), pt('2026-03-04', '40'), pt('2026-03-05', '120')]);
-    expect(m.metrics).toMatchObject({ maxDrawdownRub: '60.00', peakDate: '2026-03-03', troughDate: '2026-03-04', recoveryDate: '2026-03-05', drawdownDays: 2, days: 3 });
+    expect(m.metrics).toMatchObject({ maxDrawdownRub: '60.00', peakDate: '2026-03-03', troughDate: '2026-03-04', recoveryDate: '2026-03-05', drawdownDays: 2, days: 4 });
     expect(m.metrics.recoveryFactor).toBeCloseTo(120 / 60, 10);
-    const changes = [100, -60, 80];
-    const mu = 120 / 3;
-    const sigma = Math.sqrt(changes.reduce((s, x) => s + (x - mu) ** 2, 0) / 2);
+    const changes = [0, 100, -60, 80];
+    const mu = 120 / 4;
+    const sigma = Math.sqrt(changes.reduce((s, x) => s + (x - mu) ** 2, 0) / (changes.length - 1));
     expect(m.metrics.sharpe).toBeCloseTo((mu / sigma) * Math.sqrt(252), 8);
-    expect(m.metrics.sortino).toBeCloseTo((mu / Math.sqrt(60 ** 2 / 3)) * Math.sqrt(252), 8);
+    expect(m.metrics.sortino).toBeCloseTo((mu / Math.sqrt(60 ** 2 / 4)) * Math.sqrt(252), 8);
     expect(m.drawdownRub).toEqual(['0.00', '0.00', '-60.00', '0.00']);
+  });
+
+  it('первый убыток измеряется от нуля накануне, включая первое дневное изменение', () => {
+    const first = { ...daily[0], date: '2026-03-02', totalRub: '-100' };
+    const second = { ...first, date: '2026-03-03', totalRub: '-50' };
+    const result = equityCurveMetrics([first, second]);
+    expect(result.drawdownRub).toEqual(['-100.00', '-50.00']);
+    expect(result.metrics).toMatchObject({
+      maxDrawdownRub: '100.00', recoveryFactor: -0.5, peakDate: '2026-03-01',
+      troughDate: first.date, recoveryDate: null, days: 2,
+    });
   });
 
   it('пустая кривая: метрики нулевые и DTO валиден', () => {

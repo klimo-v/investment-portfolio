@@ -36,6 +36,11 @@ export interface ExecutionFill {
 }
 
 export interface PerformanceOptions {
+  /** Выплаты за интервал, отдельно от выплат за срок жизни выбранных сделок. */
+  periodIncomeRub?: Decimal.Value;
+  /** Точка перед началом интервала: удержания накопительные, качество базы влияет на результат. */
+  base?: ValuationPoint;
+  hasCashActivity?: boolean;
   /** аннотации исполнения; без них (или без пересечения со сделками) блока «Исполнение» нет */
   fills?: readonly ExecutionFill[];
   /**
@@ -310,7 +315,7 @@ export const TRADE_METRICS_BASIS =
 
 /** Подпись базиса метрик кривой */
 export const EQUITY_METRICS_BASIS =
-  'Дневная кривая «Результат системы»: зафиксированное (продажи, в т.ч. частичные; дивиденды и купоны; комиссии) плюс переоценка остатка по цене дня.';
+  'Дневная кривая «Результат системы»: зафиксированное (продажи, в т.ч. частичные; дивиденды и купоны; налоги и комиссии) плюс переоценка остатка по цене дня.';
 
 type EquityMetrics = SystemPerformanceBody['equityMetrics'];
 
@@ -323,9 +328,9 @@ export function equityCurveMetrics(daily: readonly ValuationPoint[]): {
   metrics: EquityMetrics;
   drawdownRub: string[];
 } {
-  const totals = daily.map((p) => new Decimal(p.totalRub));
+  const totals = [ZERO, ...daily.map((p) => new Decimal(p.totalRub))];
   const dd = absoluteDrawdown(totals);
-  const dates = daily.map((p) => p.date);
+  const dates = daily.length ? [addDays(daily[0].date, -1), ...daily.map((p) => p.date)] : [];
   const recoveryDate = dd.recoveryIndex === null ? null : dates[dd.recoveryIndex];
   const lastDate = dates[dates.length - 1];
 
@@ -345,10 +350,10 @@ export function equityCurveMetrics(daily: readonly ValuationPoint[]): {
     const downside = Math.sqrt(changes.reduce((s, x) => s + Math.min(x, 0) ** 2, 0) / changes.length);
     if (downside > 0) sortino = (mu / downside) * Math.sqrt(252);
   }
-  const net = totals.length > 0 ? totals[totals.length - 1].minus(totals[0]) : ZERO;
+  const net = totals[totals.length - 1];
 
   return {
-    drawdownRub: dd.series.map(money),
+    drawdownRub: dd.series.slice(1).map(money),
     metrics: {
       basis: EQUITY_METRICS_BASIS,
       days: changes.length,
@@ -387,10 +392,10 @@ export function systemPerformance(
   const unattributed = new Decimal(options.unattributedIncomeRub ?? 0);
   const income = trades.reduce((s, t) => s.plus(t.dividendsRub).plus(t.couponsRub), unattributed);
   const openIncome = open.reduce((s, t) => s.plus(t.dividendsRub).plus(t.couponsRub), ZERO);
-  const unrealized = open.reduce(
-    (s, t) => s.plus(options.unrealizedOf?.(t) ?? ZERO),
-    ZERO,
-  );
+  const unrealized = open.reduce<Decimal | null>((sum, t) => {
+    const value = options.unrealizedOf?.(t);
+    return sum && value != null ? sum.plus(value) : null;
+  }, ZERO);
 
   // ── качество
   const wins = pnls.filter((x) => x.gt(0));
@@ -472,24 +477,40 @@ export function systemPerformance(
     weekly.set(w, { pnl: wb.pnl.plus(t.realizedPnlRub), n: wb.n + 1 });
   }
 
-  const curve = equityCurveMetrics(options.daily ?? []);
+  const daily = options.daily ?? [];
+  const curve = equityCurveMetrics(daily);
+  const end = daily.at(-1);
+  const periodIncome = new Decimal(options.periodIncomeRub ?? 0);
+  const costs = new Decimal(end?.standaloneCostsRub ?? 0).minus(options.base?.standaloneCostsRub ?? 0);
+  const valuationIssues = [options.base, end].flatMap(point =>
+    point ? point.carried.map(issue => ({ ...issue, date: point.date })) : [],
+  );
   const last = pnls[pnls.length - 1];
   return {
     execution: executionStats(trades, closed, options.fills),
     summary: {
+      totalRub: end?.totalRub ?? '0.00',
+      tradingRub: money(new Decimal(end?.fixedRub ?? 0).minus(periodIncome).plus(costs)),
+      incomeRub: money(periodIncome),
+      standaloneCostsRub: money(costs),
+      revaluationRub: end?.unrealizedRub ?? '0.00',
+      valuationIssues,
+      hasActivity: trades.length > 0 || !!options.hasCashActivity,
+    },
+    tradeSummary: {
       netPnlRub: money(net),
       grossPnlRub: money(gross),
       feesRub: money(feesClosed),
       feesTotalRub: money(feesTotal),
       feeSharePct: gross.gt(0) ? feesClosed.div(gross).mul(100).toNumber() : null,
       openRealizedRub: money(openRealized),
-      unrealizedRub: money(unrealized),
+      unrealizedRub: unrealized && money(unrealized),
       incomeRub: money(income),
       closedResultRub: money(net.plus(income).minus(openIncome)),
       closedIncomeRub: money(income.minus(openIncome)),
       openIncomeRub: money(openIncome),
-      openResultRub: money(unrealized.plus(openRealized).plus(openIncome)),
-      totalRub: money(net.plus(openRealized).plus(unrealized).plus(income)),
+      openResultRub: unrealized && money(unrealized.plus(openRealized).plus(openIncome)),
+      totalRub: unrealized && money(net.plus(openRealized).plus(unrealized).plus(income)),
       openCount: open.length,
     },
     tradeMetrics: {
