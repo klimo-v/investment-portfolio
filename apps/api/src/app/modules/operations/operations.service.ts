@@ -478,7 +478,11 @@ export class OperationsService {
    * открывается первой покупкой и закрывается, когда остаток уходит в ноль.
    * Открытые сделки обогащаем текущей ценой/P&L, как и позиции.
    */
-  async trades(): Promise<Trade[]> {
+  async trades(filter: TradeFilter = {}): Promise<Trade[]> {
+    if (filter.systemId || filter.portfolioId || filter.from || filter.till) {
+      const today = calendarDate();
+      filter = { ...filter, till: filter.till && filter.till < today ? filter.till : today };
+    }
     const instrumentById = new Map(
       this.db
         .select()
@@ -486,7 +490,7 @@ export class OperationsService {
         .all()
         .map((i) => [i.id, i]),
     );
-    return (await this.valuedTrades()).map(
+    return (await this.valuedTrades(filter)).map(
       ({ trade: t, currentPrice, priceCurrency, currentValueRub, valuationIssue }) => {
         const instrument = instrumentById.get(t.instrumentId);
         const currency = instrument?.currency ?? 'RUB';
@@ -552,7 +556,7 @@ export class OperationsService {
    * сделки, закрытые раньше начала периода, — открытые остаются всегда (это состояние
    * «сейчас»). Историю до `from` движку отдаём целиком: от неё зависит средняя цена.
    */
-  async valuedTrades(filter: TradeFilter = {}): Promise<ValuedTrade[]> {
+  async valuedTrades(filter: TradeFilter = {}, historyPrepared = false): Promise<ValuedTrade[]> {
     const ops = this.list().filter(
       (o) =>
         (!filter.systemId || o.systemId === filter.systemId) &&
@@ -567,17 +571,15 @@ export class OperationsService {
         .all()
         .map((i) => [i.id, i]),
     );
-    const quoteByInstrument = this.currentQuotes();
-
-    // Котировки только текущие. Если `till` в прошлом, сделки «открытые на till» нельзя
-    // честно оценить сегодняшней ценой (смесь прошлого и настоящего) — оценку не даём
-    const pastTill = !!filter.till && filter.till < calendarDate();
+    if (filter.till && !historyPrepared) await this.ensureHistoricalPrices(ops, filter.till);
+    const historical = filter.till ? this.historicalQuotes(filter.till) : null;
+    const quoteByInstrument = historical?.quotes ?? this.currentQuotes();
 
     const result: ValuedTrade[] = [];
     for (const t of calculateTrades(ops, { futureIds })) {
       if (filter.from && t.closedAt && t.closedAt < filter.from) continue;
       const currency = instrumentById.get(t.instrumentId)?.currency ?? 'RUB';
-      let quote = pastTill ? undefined : quoteByInstrument.get(t.instrumentId);
+      let quote = quoteByInstrument.get(t.instrumentId);
       const quoteIssue = quote
         ? quoteValuesIssue(quote.price, quote.accruedInterest, futureIds.has(t.instrumentId))
         : null;
@@ -607,11 +609,22 @@ export class OperationsService {
           t.quantity,
           quote,
           currency,
+          historical?.rate,
         ));
       }
       result.push({ trade: t, currentPrice, priceCurrency, currentValueRub, valuationIssue });
     }
     return result;
+  }
+
+  private async ensureHistoricalPrices(ops: Operation[], day: string): Promise<void> {
+    const first = new Map<string, string>();
+    for (const op of ops) {
+      if (!op.instrumentId || op.operationType === 'Transfer') continue;
+      const previous = first.get(op.instrumentId);
+      if (!previous || op.date < previous) first.set(op.instrumentId, op.date);
+    }
+    await this.priceHistory?.ensureForInstruments(first, day);
   }
 
   /**
@@ -650,17 +663,7 @@ export class OperationsService {
     );
     const periodOps = opsUpTo.filter((o) => !filter.from || o.date >= filter.from);
     if (valuationDate && this.priceHistory) {
-      const first = new Map<string, string>();
-      for (const op of opsUpTo) {
-        if (
-          op.instrumentId &&
-          (!first.has(op.instrumentId) || op.date < (first.get(op.instrumentId) as string))
-        )
-          first.set(op.instrumentId, op.date);
-      }
-      // Как у ValuationService: сначала подготовить историю, затем прочитать оценки.
-      // Сводка не зависит от того, какой параллельный HTTP-запрос первым догрузил цены.
-      await this.priceHistory.ensureForInstruments(first, valuationDate);
+      await this.ensureHistoricalPrices(opsUpTo, valuationDate);
     }
     const positions = await this.positions(opsUpTo, valuationDate ?? undefined);
     const futureIds = this.futureIds();

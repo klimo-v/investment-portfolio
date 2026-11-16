@@ -67,7 +67,9 @@ export class OperationsController {
   }
 
   @Get('trades')
-  trades(): Promise<Trade[]> {
-    return this.service.trades();
+  trades(@Query() query: unknown): Promise<Trade[]> {
+    const filter = SummaryQuerySchema.safeParse(query);
+    if (!filter.success) throw new BadRequestException(filter.error.issues);
+    return this.service.trades(filter.data);
   }
 }

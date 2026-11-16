@@ -92,7 +92,7 @@ describe('SystemPerformanceService', () => {
   it('эталон: net закрытых −15 852,46, комиссии 962,91, нереализованный +4 288, сверка с ВМ −10 913', async () => {
     const p = await service.performance('sys', {});
     expect(p).toMatchObject({ systemId: 'sys', systemName: 'ЮВ1' });
-    expect(p.summary).toMatchObject({
+    expect(p.tradeSummary).toMatchObject({
       netPnlRub: '-15852.46',
       feesTotalRub: '962.91',
       openRealizedRub: '-311.45',
@@ -100,7 +100,7 @@ describe('SystemPerformanceService', () => {
       openCount: 1,
     });
     // валовый результат по ценам сделок + нереализованный = вариационная маржа отчёта
-    const gross = Number(p.summary.netPnlRub) + Number(p.summary.openRealizedRub) + Number(p.summary.feesTotalRub) + Number(p.summary.unrealizedRub);
+    const gross = Number(p.tradeSummary.netPnlRub) + Number(p.tradeSummary.openRealizedRub) + Number(p.tradeSummary.feesTotalRub) + Number(p.summary.revaluationRub);
     expect(gross).toBeCloseTo(-10913, 6);
     expect(p.tradeMetrics.trades).toMatchObject({ closed: 2, winRatePct: 50 });
   });
@@ -111,7 +111,7 @@ describe('SystemPerformanceService', () => {
     expect(p.series.result[0].date).toBe('2026-10-29');
     expect(last.totalRub).toBe(p.summary.totalRub);
     expect(last.totalRub).toBe('-11875.91');
-    expect(last.unrealizedRub).toBe(p.summary.unrealizedRub);
+    expect(last.unrealizedRub).toBe(p.summary.revaluationRub);
     expect(p.equityMetrics.basis).toBeTruthy();
   });
 
@@ -123,7 +123,7 @@ describe('SystemPerformanceService', () => {
     expect(p.summary.incomeRub).toBe('500.00');
     expect(p.summary.totalRub).toBe('-11375.91'); // −11 875,91 + 500
     expect(p.series.result.at(-1)!.totalRub).toBe(p.summary.totalRub);
-    expect(new Decimal(p.summary.closedResultRub).plus(p.summary.openResultRub).toFixed(2)).toBe(p.summary.totalRub);
+    expect(new Decimal(p.tradeSummary.closedResultRub).plus(p.tradeSummary.openResultRub!).toFixed(2)).toBe(p.summary.totalRub);
     // другой портфель этой выплаты не видит
     const other = await service.performance('sys', { portfolioId: 'pf2' });
     expect(other.summary.incomeRub).toBe('0.00');
@@ -153,11 +153,12 @@ describe('SystemPerformanceService', () => {
     expect(last.carried).toEqual([{ instrumentId: 'CNY-12.26', reason: 'no-price', priceDate: null }]);
   });
 
-  it('без расчётной цены нереализованный = 0, остальное считается', async () => {
+  it('без расчётной цены оценка остатка неизвестна, остальное считается', async () => {
     db.delete(quotes).run();
     const p = await service.performance('sys', {});
-    expect(p.summary.unrealizedRub).toBe('0.00');
-    expect(p.summary.netPnlRub).toBe('-15852.46');
+    expect(p.tradeSummary.unrealizedRub).toBeNull();
+    expect(p.summary.valuationIssues.some(i => i.reason === 'no-price')).toBe(true);
+    expect(p.tradeSummary.netPnlRub).toBe('-15852.46');
   });
 
   it('фильтр портфеля: чужой портфель даёт пустую статистику', async () => {
@@ -169,21 +170,71 @@ describe('SystemPerformanceService', () => {
   it('фильтр периода: from=05.11 оставляет только сделку, закрытую 05.11 (и открытую)', async () => {
     const p = await service.performance('sys', { from: '2026-11-05' });
     expect(p.tradeMetrics.trades.closed).toBe(1);
-    expect(p.summary.netPnlRub).toBe('-16037.16');
-    expect(p.summary.openCount).toBe(1);
+    expect(p.tradeSummary.netPnlRub).toBe('-16037.16');
+    expect(p.tradeSummary.openCount).toBe(1);
   });
 
   it('till=30.10: видна только первая сделка, шортов ещё нет', async () => {
     const p = await service.performance('sys', { till: '2026-10-30' });
     expect(p.tradeMetrics.trades.closed).toBe(1);
-    expect(p.summary.netPnlRub).toBe('184.70');
-    expect(p.summary.openCount).toBe(0);
+    expect(p.tradeSummary.netPnlRub).toBe('184.70');
+    expect(p.tradeSummary.openCount).toBe(0);
   });
 
   it('till в прошлом: открытые сделки без оценки по сегодняшней цене', async () => {
     const p = await service.performance('sys', { till: '2026-11-04' });
-    expect(p.summary.openCount).toBe(1); // шорт открыт 04.11
-    expect(p.summary.unrealizedRub).toBe('0.00');
+    expect(p.tradeSummary.openCount).toBe(1); // шорт открыт 04.11
+    expect(p.tradeSummary.unrealizedRub).toBeNull();
+    expect(p.summary.valuationIssues.some(i => i.reason === 'no-price')).toBe(true);
+  });
+
+  it('денежный период без сделок: прошлые выплаты и удержания исключены, налог и комиссия учтены один раз', async () => {
+    const cash = (date: string, operationType: 'Dividend' | 'Coupon' | 'Tax' | 'Fee', price: string) =>
+      ({ id: randomUUID(), date, systemId: 'empty', portfolioId: 'pf', instrumentId: null,
+        operationType, quantity: '1', price, currency: 'RUB' });
+    db.insert(operations).values([
+      cash('2025-12-31', 'Dividend', '100'), cash('2025-12-31', 'Tax', '10'),
+      cash('2026-01-01', 'Coupon', '50'), cash('2026-01-01', 'Tax', '8'),
+      cash('2026-01-01', 'Fee', '2'),
+      { ...cash('2026-01-01', 'Dividend', '1000'), portfolioId: 'pf2' },
+    ]).run();
+    const p = await service.performance('empty', { portfolioId: 'pf', from: '2026-01-01', till: '2026-01-01' });
+    expect(p.summary).toMatchObject({ incomeRub: '50.00', standaloneCostsRub: '10.00',
+      tradingRub: '0.00', revaluationRub: '0.00', totalRub: '40.00', hasActivity: true });
+    expect(p.series.result).toHaveLength(1);
+    expect(p.series.result[0].totalRub).toBe(p.summary.totalRub);
+    expect(p.tradeMetrics.trades.closed).toBe(0);
+    const quiet = await service.performance('empty', { from: '2026-01-02', till: '2026-01-03' });
+    expect(quiet.summary.hasActivity).toBe(false);
+  });
+
+  it('статус, журнал и котировка строки на дату совпадают со срезом KPI', async () => {
+    db.insert(instruments).values({ id: 'S', ticker: 'S', type: 'Stock', currency: 'RUB' }).run();
+    const op = (date: string, operationType: 'Buy' | 'Sell' | 'Dividend', price: string) => ({
+      id: randomUUID(), date, portfolioId: 'pf', systemId: 'empty', instrumentId: 'S',
+      quantity: '1', price, currency: 'RUB', operationType,
+    });
+    const bought = op('2025-12-10', 'Buy', '100');
+    db.insert(operations).values([bought, op('2025-12-30', 'Dividend', '70'),
+      op('2026-06-10', 'Dividend', '20'), op('2026-09-07', 'Sell', '95')]).run();
+    db.insert(quotes).values({ instrumentId: 'S', price: '80', currency: 'RUB', source: 'manual',
+      asOf: '2026-06-30T00:00:00.000Z' }).run();
+    const scope = { from: '2026-01-01', till: '2026-06-30', portfolioId: 'pf' };
+    const p = await service.performance('empty', scope);
+    const rows = await ops.trades({ ...scope, systemId: 'empty' });
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ id: bought.id, status: 'Open', closedAt: null, currentPrice: '80' });
+    expect(rows[0].operationIds).toHaveLength(3);
+    expect(p.tradeMetrics.trades.closed).toBe(0);
+    expect(p.tradeSummary.openCount).toBe(1);
+    expect(p.summary).toMatchObject({ totalRub: '0.00', incomeRub: '20.00', revaluationRub: '-20.00' });
+    expect(p.summary.valuationIssues).toContainEqual({
+      date: '2025-12-31', instrumentId: 'S', reason: 'no-price', priceDate: null,
+    });
+    expect(p.summary.totalRub).toBe(p.series.result.at(-1)?.totalRub);
+    const closed = await service.performance('empty', { ...scope, till: '2026-09-07' });
+    expect(closed.tradeMetrics.trades.closed).toBe(1);
+    expect(closed.summary).toMatchObject({ incomeRub: '20.00', totalRub: '15.00' });
   });
 
   it('пустая система — валидный DTO с нулями', async () => {

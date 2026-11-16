@@ -3,6 +3,8 @@ import { eq } from 'drizzle-orm';
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
 import Decimal from 'decimal.js';
 import {
+  isStandaloneCost,
+  payoutsInPeriod,
   incomeAmountRub,
   isUnattributedIncome,
   rebaseToPeriod,
@@ -36,7 +38,11 @@ export class SystemPerformanceService {
     const [system] = this.db.select().from(systems).where(eq(systems.id, systemId)).all();
     if (!system) throw new NotFoundException(`Система «${systemId}» не найдена`);
 
-    const valued = await this.operations.valuedTrades({ systemId, ...query });
+    const till = this.valuation.cap(query.till);
+    const scope = { systemId, portfolioId: query.portfolioId };
+    const inputs = await this.valuation.prepare(till, scope);
+    const curve = this.valuation.build(inputs, { ...scope, groupBy: 'system', till });
+    const valued = await this.operations.valuedTrades({ ...scope, from: query.from, till }, true);
     // нереализованный результат = рыночная стоимость остатка − себестоимость остатка
     // (у фьючерса себестоимость 0, а «стоимость» — уже нереализованный результат)
     const unrealized = new Map<TradeResult, Decimal>(
@@ -45,39 +51,33 @@ export class SystemPerformanceService {
         .map((v) => [v.trade, new Decimal(v.currentValueRub as string).minus(v.trade.investedRub)]),
     );
 
-    // дневная кривая той же системы и того же среза — из единого valuationSeries
-    const curve = await this.valuation.series({
-      groupBy: 'system',
-      systemId,
-      portfolioId: query.portfolioId,
-      till: query.till,
-    });
     const full = curve.groups.find((g) => g.key === systemId)?.points ?? [];
     // фильтр периода: кривая — результат ЗА период (от нуля на день до `from`), а не накопленный
     // с начала истории; метрики кривой (просадка, Sharpe) считаются по этому окну
     const daily = query.from ? rebaseToPeriod(full, query.from) : full;
     // выплаты без инструмента: к сделкам не относятся, но в сводке дашборда они есть
-    const unattributedIncomeRub = this.operations
-      .list()
-      .filter(
-        (o) =>
-          isUnattributedIncome(o) &&
-          o.systemId === systemId &&
-          (!query.portfolioId || o.portfolioId === query.portfolioId) &&
-          (!query.from || o.date >= query.from) &&
-          (!query.till || o.date <= query.till),
-      )
-      .reduce((sum, o) => sum.plus(incomeAmountRub(o)), new Decimal(0));
-
-    const body = systemPerformance(
-      valued.map((v) => v.trade),
-      { unrealizedOf: (t) => unrealized.get(t) ?? null, daily, unattributedIncomeRub, fills: this.executionFills(valued.map((v) => v.trade)) },
-    );
+    const periodOps = inputs.ops.filter(o => o.date <= till && (!query.from || o.date >= query.from));
+    const futureIds = this.operations.futureIds();
+    // rebaseToPeriod возвращает хвост полного ряда, начальная оценка — предыдущая точка.
+    const base = daily.length ? full[full.length - daily.length - 1] : undefined;
+    const trades = valued.map(v => v.trade);
+    const body = systemPerformance(trades, {
+      daily,
+      base,
+      periodIncomeRub: payoutsInPeriod(periodOps, { till }),
+      hasCashActivity: periodOps.some(o =>
+        o.operationType === 'Dividend' || o.operationType === 'Coupon' || isStandaloneCost(o, futureIds)),
+      unattributedIncomeRub: periodOps.filter(isUnattributedIncome)
+        .reduce((sum, o) => sum.plus(incomeAmountRub(o)), new Decimal(0)),
+      unrealizedOf: t => unrealized.get(t) ?? null,
+      fills: this.executionFills(trades),
+    });
     // ВМ брокера привязана к счёту и инструменту, а не к системе: показываем сверку
     // только там, где весь инструмент в портфеле принадлежит этой системе
     const reconciliation = [...this.operations.settlementChecks().values()]
       .filter(
         (c) =>
+          c.asOf <= till &&
           c.systemIds.size === 1 &&
           c.systemIds.has(systemId) &&
           (!query.portfolioId || c.portfolioId === query.portfolioId),
