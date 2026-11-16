@@ -1,7 +1,7 @@
-import { Injectable, inject } from '@angular/core';
+import { Injectable, inject, type Signal } from '@angular/core';
 import { httpResource } from '@angular/common/http';
 import { z } from 'zod';
-import { TradeSchema, type Trade } from '@core';
+import { TradeSchema, type SystemPerformanceQuery, type Trade } from '@core';
 import { DataRevision } from '../../shared/data-revision';
 
 /**
@@ -14,15 +14,23 @@ import { DataRevision } from '../../shared/data-revision';
  */
 @Injectable({ providedIn: 'root' })
 export class TradeApi {
-  private readonly revision = inject(DataRevision);
+  readonly trades = tradesResource();
+}
 
-  readonly trades = httpResource(
-    () => {
-      this.revision.value();
-      return '/api/operations/trades';
-    },
-    { parse: z.array(TradeSchema).parse },
-  );
+/** Без фильтра — журнал сделок; с фильтром — состояние на конец выбранного периода. */
+export function tradesResource(filter?: Signal<(SystemPerformanceQuery & { systemId: string }) | null>) {
+  const revision = inject(DataRevision);
+  return httpResource(() => {
+    revision.value();
+    if (!filter) return '/api/operations/trades';
+    const value = filter();
+    if (!value) return undefined;
+    const params = new URLSearchParams({ systemId: value.systemId });
+    if (value.portfolioId) params.set('portfolioId', value.portfolioId);
+    if (value.from) params.set('from', value.from);
+    if (value.till) params.set('till', value.till);
+    return `/api/operations/trades?${params}`;
+  }, { parse: z.array(TradeSchema).parse });
 }
 
 export type { Trade };

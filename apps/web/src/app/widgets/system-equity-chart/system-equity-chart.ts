@@ -85,21 +85,17 @@ export class SystemEquityChart {
 
   protected readonly periodNote = computed(() => {
     const from = this.periodFrom();
-    // «до сегодня» (пресеты ytd/1y) — не отдельное ограничение: переоценка остатка есть
-    const tillRaw = this.periodTill();
-    const till = tillRaw && tillRaw < new Date().toISOString().slice(0, 10) ? tillRaw : null;
+    const till = this.periodTill();
     if (this.curve() !== 'result' || (!from && !till)) return '';
     const parts: string[] = [];
-    if (from) parts.push(`Кривая начинается с нуля на ${from}: это результат за период, а не накопленный с начала истории.`);
-    if (till) {
-      parts.push(`Конец периода ${till}: кривая оценена по ценам из истории на эти даты, а плашки «Открытые позиции» и «Всего» — без переоценки остатка (котировки только текущие).`);
-    }
+    if (from) parts.push(`Результат считается относительно начала дня ${from}.`);
+    if (till) parts.push(`Конец периода — ${till}.`);
     return parts.join(' ');
   });
 
   protected readonly note = computed(() =>
     this.curve() === 'result'
-      ? 'Зафиксированное (все продажи, в т.ч. частичные; дивиденды и купоны; за вычетом комиссий) плюс переоценка остатка по цене дня. Янтарные точки — дни, где цена не найдена или взята от более ранней даты. Просадка — от пика кривой.'
+      ? 'Зафиксированное (все продажи, в т.ч. частичные; дивиденды и купоны; за вычетом налогов и комиссий) плюс переоценка остатка по цене дня. Янтарные точки — дни, где цена не найдена или взята от более ранней даты. Просадка — от пика кривой.'
       : 'Накопленный результат по дате закрытия каждой сделки. Показывает качество входов и выходов, без дивидендов и открытых позиций.',
   );
   protected readonly emptyHint = computed(() =>
@@ -120,7 +116,7 @@ export class SystemEquityChart {
    */
   private readonly resultConfig = computed<ChartConfiguration<'line'> | null>(() => {
     const points = this.performance().series.result;
-    if (points.length < 2) return null;
+    if (!points.length) return null;
     const cc = this.cc();
     const flagged = (i: number): boolean => points[i].carried.length > 0;
     const describe = (c: SystemPerformance['series']['result'][number]['carried'][number]): string => {
@@ -138,7 +134,7 @@ export class SystemEquityChart {
             data: points.map((p) => Number(p.totalRub)),
             borderColor: cc.total,
             backgroundColor: cc.total,
-            pointRadius: (c) => (flagged(c.dataIndex) ? 3 : 0),
+            pointRadius: (c) => (flagged(c.dataIndex) || points.length === 1 ? 3 : 0),
             pointHoverRadius: 4,
             pointBackgroundColor: (c) => (flagged(c.dataIndex) ? cc.benchmark : cc.total),
             pointBorderColor: (c) => (flagged(c.dataIndex) ? cc.benchmark : cc.total),

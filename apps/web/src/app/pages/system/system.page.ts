@@ -1,13 +1,10 @@
 import { ChangeDetectionStrategy, Component, computed, inject, input } from '@angular/core';
 import { RouterLink } from '@angular/router';
-import { MatButtonToggleModule } from '@angular/material/button-toggle';
-import { MatFormFieldModule } from '@angular/material/form-field';
-import { MatSelectModule } from '@angular/material/select';
 import { MatIconModule } from '@angular/material/icon';
 import { formatMoney, StateMessage } from '@web-shared';
-import { OperationApi } from '../../entities/operation/operation.api';
 import { ReferenceApi } from '../../entities/reference/reference.api';
-import { TradeApi } from '../../entities/trade/trade.api';
+import { DashboardFilters } from '../../widgets/dashboard-filters/dashboard-filters';
+import { tradesResource } from '../../entities/trade/trade.api';
 import {
   systemPerformanceResource,
   type SystemPerformanceFilter,
@@ -41,10 +38,8 @@ import { TradesTable } from '../../widgets/trades-table/trades-table';
   selector: 'app-system-page',
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
+    DashboardFilters,
     RouterLink,
-    MatButtonToggleModule,
-    MatFormFieldModule,
-    MatSelectModule,
     MatIconModule,
     StateMessage,
     SystemKpis,
@@ -57,7 +52,7 @@ import { TradesTable } from '../../widgets/trades-table/trades-table';
   template: `
     <div class="page-header">
       <h1 class="page-title">
-        <a class="back" routerLink="/dashboard" aria-label="К дашборду"
+        <a class="back" routerLink="/dashboard" [queryParams]="filter.linkParams()" aria-label="К дашборду"
           ><mat-icon>arrow_back</mat-icon></a
         >
         {{ title() }}
@@ -65,36 +60,7 @@ import { TradesTable } from '../../widgets/trades-table/trades-table';
           <span class="period-range">({{ label }})</span>
         }
       </h1>
-      <div class="filters">
-        <mat-form-field appearance="outline" subscriptSizing="dynamic">
-          <mat-label>Портфель</mat-label>
-          <mat-select
-            [value]="filter.portfolio()"
-            (selectionChange)="filter.setPortfolio($event.value)"
-          >
-            <mat-option [value]="null">Все</mat-option>
-            @for (
-              p of reference.portfolios.hasValue() ? reference.portfolios.value() : [];
-              track p.id
-            ) {
-              <mat-option [value]="p.id">{{ p.name }}</mat-option>
-            }
-          </mat-select>
-        </mat-form-field>
-        <mat-button-toggle-group
-          [value]="filter.period()"
-          (change)="filter.setPeriod($event.value)"
-          hideSingleSelectionIndicator
-          aria-label="Период"
-        >
-          <mat-button-toggle value="ytd">YTD</mat-button-toggle>
-          <mat-button-toggle value="1y">1 год</mat-button-toggle>
-          <mat-button-toggle value="all">Всё время</mat-button-toggle>
-          @if (filter.period() === 'custom') {
-            <mat-button-toggle value="custom">Произвольный</mat-button-toggle>
-          }
-        </mat-button-toggle-group>
-      </div>
+      <app-dashboard-filters [showSystem]="false" />
     </div>
 
     @if (filter.calendarError()) {
@@ -107,11 +73,9 @@ import { TradesTable } from '../../widgets/trades-table/trades-table';
       />
     } @else if (filter.calendarLoading()) {
       <p role="status">Загрузка календаря портфеля…</p>
-    } @else if (!filter.ready()) {
-      <p>{{ filter.error() ?? 'Укажите обе даты периода.' }}</p>
-    } @else if (performance.isLoading()) {
+    } @else if (filter.ready() && performance.isLoading()) {
       <p>Загрузка выбранного периода…</p>
-    } @else if (performance.error()) {
+    } @else if (filter.ready() && performance.error()) {
       <!-- 404: такой системы нет; прочее — сервер недоступен -->
       <app-state-message
         kind="error"
@@ -124,15 +88,15 @@ import { TradesTable } from '../../widgets/trades-table/trades-table';
         [retryLabel]="notFound() ? '' : 'Повторить'"
         (retry)="performance.reload()"
       />
-    } @else if (performance.hasValue()) {
+    } @else if (filter.ready() && performance.hasValue()) {
       <!-- hasValue(), а не !isLoading(): при смене фильтра прежние цифры остаются на экране -->
       @let p = performance.value();
-      @if (p.tradeMetrics.trades.closed === 0 && p.summary.openCount === 0) {
+      @if (!p.summary.hasActivity) {
         <app-state-message
           kind="empty"
           icon="query_stats"
-          title="Нет сделок"
-          hint="По этой системе за выбранный срез нет ни закрытых, ни открытых сделок. Импортируйте отчёт брокера или расширьте период."
+          title="Нет данных за период"
+          hint="За этот период нет сделок, выплат или удержаний. Выберите другой период."
         />
       } @else {
         @if (p.tradeMetrics.trades.closed === 0) {
@@ -140,7 +104,7 @@ import { TradesTable } from '../../widgets/trades-table/trades-table';
             kind="empty"
             icon="query_stats"
             title="Нет закрытых сделок"
-            hint="Показатели качества считаются только по закрытым сделкам. Открытая позиция показана в плашке «Открытые позиции»."
+            hint="Показатели качества появятся после закрытия сделки."
           />
         }
         @for (rec of p.reconciliation; track rec.ticker + rec.portfolioId) {
@@ -184,15 +148,17 @@ import { TradesTable } from '../../widgets/trades-table/trades-table';
               <div class="chart-box"></div>
             }
           </div>
-          @defer (on viewport) {
-            <app-system-pnl-breakdown [performance]="p" />
-          } @placeholder {
-            <div class="chart-box"></div>
-          }
-          @defer (on viewport) {
-            <app-system-trade-distribution [performance]="p" />
-          } @placeholder {
-            <div class="chart-box"></div>
+          @if (p.tradeMetrics.trades.closed > 0) {
+            @defer (on viewport) {
+              <app-system-pnl-breakdown [performance]="p" />
+            } @placeholder {
+              <div class="chart-box"></div>
+            }
+            @defer (on viewport) {
+              <app-system-trade-distribution [performance]="p" />
+            } @placeholder {
+              <div class="chart-box"></div>
+            }
           }
         </div>
 
@@ -202,17 +168,17 @@ import { TradesTable } from '../../widgets/trades-table/trades-table';
 
         <h2 class="section-title">Сделки системы</h2>
         <section class="system-trades" aria-label="Сделки системы">
-          @if (tradeApi.trades.isLoading()) {
+          @if (trades.isLoading()) {
             <p role="status">Загружаем сделки системы…</p>
-          } @else if (tradeApi.trades.error()) {
+          } @else if (trades.error()) {
             <app-state-message
               kind="error"
               title="Не удалось загрузить сделки системы"
               retryLabel="Повторить"
-              (retry)="tradeApi.trades.reload()"
+              (retry)="trades.reload()"
             />
-          } @else if (tradeApi.trades.hasValue()) {
-            <app-trades-table [trades]="systemTrades()" />
+          } @else if (trades.hasValue()) {
+            <app-trades-table [trades]="trades.value()" />
           }
         </section>
       }
@@ -228,7 +194,7 @@ import { TradesTable } from '../../widgets/trades-table/trades-table';
       }
       .charts {
         display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+        grid-template-columns: repeat(auto-fit, minmax(min(100%, 360px), 1fr));
         gap: 16px;
         margin-bottom: 16px;
       }
@@ -262,8 +228,6 @@ export class SystemPage {
 
   protected readonly reference = inject(ReferenceApi);
   protected readonly money = (v: string): string => formatMoney(v, 'RUB');
-  protected readonly operationApi = inject(OperationApi);
-  protected readonly tradeApi = inject(TradeApi);
   protected readonly filter = dashboardFilter();
 
   /** Какая кривая на графике: по закрытым сделкам или результат системы. Живёт в адресе (?curve=) */
@@ -303,16 +267,9 @@ export class SystemPage {
     return err?.status === 404;
   });
 
-  /** Сделки этой системы в выбранном портфеле/периоде — для таблицы под графиками */
-  protected readonly systemTrades = computed(() => {
-    const portfolio = this.filter.portfolio();
-    const { from, till } = this.filter.range();
-    return (this.tradeApi.trades.hasValue() ? this.tradeApi.trades.value() : []).filter(
-      (t) =>
-        t.systemId === this.systemId() &&
-        (!portfolio || t.portfolioId === portfolio) &&
-        (!from || !t.closedAt || t.closedAt >= from) &&
-        (!till || t.openedAt <= till),
-    );
-  });
+  protected readonly trades = tradesResource(computed(() => {
+    const filter = this.performanceFilter();
+    return filter && this.performance.hasValue() && !this.performance.isLoading()
+      ? { ...filter, systemId: this.systemId() } : null;
+  }));
 }

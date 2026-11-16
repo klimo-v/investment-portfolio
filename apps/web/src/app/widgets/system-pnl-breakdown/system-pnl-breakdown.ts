@@ -22,8 +22,9 @@ type Mode = 'month' | 'weekday';
       <mat-button-toggle value="month">По месяцам</mat-button-toggle>
       <mat-button-toggle value="weekday">По дням недели</mat-button-toggle>
     </mat-button-toggle-group>
+    <p>Торговый результат после комиссий по дате закрытия сделки. Дивиденды, купоны и открытые позиции исключены.</p>
     <app-pnl-bar-chart
-      [title]="mode() === 'month' ? 'Результат по месяцам' : 'Результат по дням недели'"
+      [title]="mode() === 'month' ? 'Закрытые сделки по месяцам' : 'Закрытые сделки по дням недели'"
       [bars]="bars()"
       emptyTitle="Нет закрытых сделок"
       emptyHint="Разрез появится после первой закрытой сделки."

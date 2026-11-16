@@ -119,6 +119,7 @@ export function dashboardFilter(): DashboardFilter {
       (period() !== 'custom' || (!!customFrom() && !!customTill())),
   );
   const linkParams = computed(() => ({
+    ...(system() ? { system: system()! } : {}),
     ...(portfolio() ? { portfolio: portfolio()! } : {}),
     period: period(),
     ...(period() === 'custom' ? { from: rawFrom() ?? '', till: rawTill() ?? '' } : {}),

@@ -89,54 +89,43 @@ export class SystemKpis {
     // на нескольких днях отношение среднего к σ — шум: не показываем
     const enough = r.days >= MIN_RATIO_DAYS;
     const sparse = enough ? undefined : `мало данных: ${r.days} дн. из ${MIN_RATIO_DAYS}`;
-    return [
+    const issues = s.valuationIssues.map(issue => {
+      const reason = issue.reason === 'no-price' ? 'нет цены'
+        : issue.reason === 'no-fx' ? 'нет курса' : `цена от ${issue.priceDate}`;
+      return `${issue.instrumentId} (${issue.date}, ${reason})`;
+    });
+    const incomplete = s.valuationIssues.some(issue => issue.reason !== 'carried');
+    const trade = p.tradeSummary;
+    const groups: KpiGroup[] = [
       {
-        title: 'Итог',
+        title: 'Результат за период',
+        basis: issues.length ? `${incomplete ? 'Неполная оценка' : 'Использованы ранее известные цены'}. ${issues.join(', ')}.` : undefined,
         items: [
-          {
-            label: 'Результат (закрытые)',
-            value: rub(s.closedResultRub),
-            tone: toneOfStr(s.closedResultRub),
-            sub: `сделки ${rub(s.netPnlRub)} · выплаты ${rub(s.closedIncomeRub)}`,
-            hint: 'Результат закрытых сделок после комиссий плюс дивиденды и купоны, полученные по ним.',
-          },
-          {
-            label: 'Открытые позиции',
-            value: rub(s.openResultRub),
-            tone: toneOfStr(s.openResultRub),
-            sub:
-              s.openCount > 0
-                ? `цена ${rub(s.unrealizedRub)} · продано ${rub(s.openRealizedRub)} · выплаты ${rub(s.openIncomeRub)}`
-                : 'открытых нет',
-            hint: 'Изменение цены остатка плюс уже зафиксированное по этим сделкам (частично проданное, комиссии входа) плюс дивиденды и купоны. «Результат (закрытые)» + «Открытые позиции» = «Всего».',
-          },
-          {
-            label: 'Дивиденды и купоны',
-            value: rub(s.incomeRub),
-            tone: toneOfStr(s.incomeRub),
-            hint: 'Выплаты по всем сделкам системы, включая закрытые. Часть по открытым уже входит в «Открытые позиции».',
-          },
-          {
-            label: 'Всего',
-            value: rub(s.totalRub),
-            tone: toneOfStr(s.totalRub),
-            hint: 'Сумма карточек «Результат (закрытые)» и «Открытые позиции».',
-          },
-          {
-            label: 'Комиссии',
-            value: rub(s.feesTotalRub),
-            sub:
-              s.feeSharePct === null
-                ? 'доля от gross не определена'
-                : `закрытые: ${rub(s.feesRub)} — ${s.feeSharePct.toFixed(1)}% от gross`,
-            hint: 'Фактические комиссии из отчёта брокера (брокер + биржа). Уже вычтены из результата.',
-          },
+          { label: 'Всего', value: rub(s.totalRub), tone: toneOfStr(s.totalRub),
+            sub: incomplete ? 'Неполная оценка' : undefined },
+          { label: 'Торговый результат', value: rub(s.tradingRub), tone: toneOfStr(s.tradingRub),
+            hint: 'Зафиксированный торговый результат за период с учётом комиссий по сделкам.' },
+          { label: 'Дивиденды и купоны', value: rub(s.incomeRub), tone: toneOfStr(s.incomeRub),
+            hint: 'Выплаты по датам зачисления в выбранном периоде.' },
+          { label: 'Отдельные удержания', value: rub(s.standaloneCostsRub),
+            hint: 'Отдельные налоги и комиссии за период. Эта сумма вычтена из итога.' },
+          { label: 'Изменение переоценки', value: rub(s.revaluationRub), tone: toneOfStr(s.revaluationRub),
+            sub: incomplete ? 'Неполная оценка' : undefined,
+            hint: 'Разница между переоценкой на конец и на начало периода.' },
         ],
       },
       {
         title: 'Сделки',
         basis: tm.basis,
         items: [
+          { label: 'Открыто на конец периода', value: String(trade.openCount) },
+          { label: 'Результат закрытых сделок', value: rub(trade.netPnlRub), tone: toneOfStr(trade.netPnlRub),
+            hint: 'Торговый результат за весь срок сделок, закрытых в выбранном периоде.' },
+          { label: 'Результат открытых сделок', value: trade.openResultRub === null ? '—' : rub(trade.openResultRub),
+            sub: trade.openResultRub === null ? 'Не хватает цены или курса на конец периода' : undefined,
+            hint: 'Переоценка остатка, реализованная часть и выплаты за весь срок сделок, открытых на конец периода.' },
+          { label: 'Комиссии по закрытым сделкам', value: rub(trade.feesRub),
+            sub: trade.feeSharePct === null ? undefined : `${trade.feeSharePct.toFixed(1)}% от результата до комиссий` },
           { label: 'Закрытых сделок', value: String(t.closed), sub: `прибыльных ${t.wins} · убыточных ${t.losses}` },
           { label: 'Win rate', value: pct(t.winRatePct) },
           {
@@ -201,5 +190,8 @@ export class SystemKpis {
         ],
       },
     ];
+    if (!t.closed) return groups.filter(g => g.title === 'Результат за период' || g.title === 'Риск' ||
+      (g.title === 'Сделки' && trade.openCount > 0));
+    return groups;
   });
 }

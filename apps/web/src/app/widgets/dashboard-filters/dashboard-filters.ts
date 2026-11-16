@@ -1,4 +1,4 @@
-import { ChangeDetectionStrategy, Component, effect, signal } from '@angular/core';
+import { ChangeDetectionStrategy, Component, effect, input, signal } from '@angular/core';
 import { MatButtonToggleModule } from '@angular/material/button-toggle';
 import { MatFormFieldModule } from '@angular/material/form-field';
 import { MatSelectModule } from '@angular/material/select';
@@ -28,15 +28,17 @@ import { dashboardFilter } from './dashboard-filter.state';
   imports: [MatButtonToggleModule, MatFormFieldModule, MatSelectModule, MatDatepickerModule, Hint],
   template: `
     <div class="filters">
-      <mat-form-field appearance="outline" subscriptSizing="dynamic">
-        <mat-label>Система</mat-label>
-        <mat-select [value]="filter.system()" (selectionChange)="filter.setSystem($event.value)">
-          <mat-option [value]="null">Все</mat-option>
-          @for (s of reference.systems.value(); track s.id) {
-            <mat-option [value]="s.id">{{ s.name }}</mat-option>
-          }
-        </mat-select>
-      </mat-form-field>
+      @if (showSystem()) {
+        <mat-form-field appearance="outline" subscriptSizing="dynamic">
+          <mat-label>Система</mat-label>
+          <mat-select [value]="filter.system()" (selectionChange)="filter.setSystem($event.value)">
+            <mat-option [value]="null">Все</mat-option>
+            @for (s of reference.systems.hasValue() ? reference.systems.value() : []; track s.id) {
+              <mat-option [value]="s.id">{{ s.name }}</mat-option>
+            }
+          </mat-select>
+        </mat-form-field>
+      }
       <mat-form-field appearance="outline" subscriptSizing="dynamic">
         <mat-label>Портфель</mat-label>
         <mat-select
@@ -44,7 +46,7 @@ import { dashboardFilter } from './dashboard-filter.state';
           (selectionChange)="filter.setPortfolio($event.value)"
         >
           <mat-option [value]="null">Все</mat-option>
-          @for (p of reference.portfolios.value(); track p.id) {
+          @for (p of reference.portfolios.hasValue() ? reference.portfolios.value() : []; track p.id) {
             <mat-option [value]="p.id">{{ p.name }}</mat-option>
           }
         </mat-select>
@@ -60,10 +62,12 @@ import { dashboardFilter } from './dashboard-filter.state';
         <mat-button-toggle value="all">Всё время</mat-button-toggle>
         <mat-button-toggle value="custom">Произвольный</mat-button-toggle>
       </mat-button-toggle-group>
-      <app-hint
-        label="Период"
-        text="Период сужает окно: Результат, TWR, доходность денег и помесячный график считаются именно за выбранный отрезок — прибыль, заработанная до его начала, в них не входит (капитал на начало берётся по рыночной стоимости). Вложено, Стоимость и свободные деньги — состояние на конец выбранного периода. Если период короче года, доходность денег показывается за период, а не в годовых."
-      />
+      @if (showSystem()) {
+        <app-hint
+          label="Период"
+          text="Период сужает окно: Результат, TWR, доходность денег и помесячный график считаются именно за выбранный отрезок — прибыль, заработанная до его начала, в них не входит (капитал на начало берётся по рыночной стоимости). Вложено, Стоимость и свободные деньги — состояние на конец выбранного периода. Если период короче года, доходность денег показывается за период, а не в годовых."
+        />
+      }
       @if (filter.period() === 'custom') {
         <mat-form-field appearance="outline" subscriptSizing="dynamic" class="range-field">
           <mat-label>Диапазон</mat-label>
@@ -120,6 +124,7 @@ import { dashboardFilter } from './dashboard-filter.state';
   ],
 })
 export class DashboardFilters {
+  readonly showSystem = input(true);
   protected readonly reference = inject(ReferenceApi);
   protected readonly filter = dashboardFilter();
   private readonly dates = inject<DateAdapter<Date>>(DateAdapter);
