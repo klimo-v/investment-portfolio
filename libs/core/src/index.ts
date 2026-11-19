@@ -32,3 +32,5 @@ export * from './lib/journal-completeness';
 export * from './lib/calendar';
 
 export * from './lib/quote-values';
+
+export * from './lib/tbank-history';

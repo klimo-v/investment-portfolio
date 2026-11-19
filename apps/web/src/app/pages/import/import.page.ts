@@ -1,4 +1,4 @@
-import type { CurrencyMismatch } from '@core';
+import type { CurrencyMismatch, TbankHistoryPreview, TbankHistoryRow } from '@core';
 import { ChangeDetectionStrategy, Component, computed, inject, linkedSignal, signal } from '@angular/core';
 import { MatCardModule } from '@angular/material/card';
 import { MatButtonModule } from '@angular/material/button';
@@ -121,11 +121,17 @@ export function defaultSyncRange(
         }
       } @else {
         <p>
-          Операции берутся напрямую из T-Invest API по токену <b>только для чтения</b>:
-          приложение читает историю счёта и не может выставлять заявки. Сделки, уже
-          загруженные из отчёта, распознаются как дубли по номеру сделки.
+          Операции загружаются из T-Invest API по токену <b>только для чтения</b>.
         </p>
 
+        <mat-button-toggle-group
+          aria-label="Режим работы с историей Т-Банка"
+          [value]="tbankMode()"
+          (valueChange)="setTbankMode($event)"
+        >
+          <mat-button-toggle value="import">Импортировать новые операции</mat-button-toggle>
+          <mat-button-toggle value="history">Уточнить суммы по облигациям</mat-button-toggle>
+        </mat-button-toggle-group>
         <div class="batch">
           <mat-form-field appearance="outline">
             <mat-label>Счёт у брокера</mat-label>
@@ -149,10 +155,10 @@ export function defaultSyncRange(
         <button
           mat-flat-button
           color="primary"
-          [disabled]="fetching() || !accountId() || !from() || !to()"
+          [disabled]="fetching() || applyingHistory() || !accountId() || !from() || !to() || (historyMode() && !portfolioId())"
           (click)="fetchFromTbank()"
         >
-          {{ fetching() ? 'Загрузка…' : 'Загрузить операции' }}
+          {{ fetching() ? 'Загрузка…' : historyMode() ? 'Проверить историю' : 'Загрузить операции' }}
         </button>
         @if (accounts().length === 0 && !accountsLoading()) {
           <p class="warn-note">Брокер не вернул ни одного счёта — проверьте токен.</p>
@@ -168,23 +174,66 @@ export function defaultSyncRange(
             }
           </mat-select>
         </mat-form-field>
-        <mat-form-field appearance="outline">
-          <mat-label>Система</mat-label>
-          <mat-select [value]="systemId()" (valueChange)="setSystem($event)">
-            @for (s of systems(); track s.id) {
-              <mat-option [value]="s.id">{{ s.name }}</mat-option>
-            }
-          </mat-select>
-        </mat-form-field>
+        @if (!historyMode()) {
+          <mat-form-field appearance="outline">
+            <mat-label>Система</mat-label>
+            <mat-select [value]="systemId()" (valueChange)="setSystem($event)">
+              @for (s of systems(); track s.id) {
+                <mat-option [value]="s.id">{{ s.name }}</mat-option>
+              }
+            </mat-select>
+          </mat-form-field>
+        }
       </div>
 
-      @if (!batchReady()) {
+      @if (!historyMode() && !batchReady()) {
         <p class="warn-note">
           Выберите портфель и систему — они применятся ко всем операциям
           {{ source() === 'file' ? 'файла' : 'выгрузки' }}.
         </p>
       }
     </mat-card>
+
+    @if (historyPreview(); as history) {
+      <mat-card class="summary">
+        @if (history.bindingIssue) {
+          <p role="alert">{{ history.bindingIssue }}</p>
+        } @else {
+          <app-status-chip tone="info">Обновятся: {{ history.summary.update }}</app-status-chip>
+          <app-status-chip tone="success">Совпали: {{ history.summary.matched }}</app-status-chip>
+          <app-status-chip tone="neutral">Без пары: {{ history.summary.unmatched }}</app-status-chip>
+          <app-status-chip tone="danger">Конфликты: {{ history.summary.conflict }}</app-status-chip>
+          <app-status-chip tone="warn">Сумма неизвестна: {{ history.summary.unknown }}</app-status-chip>
+          <span class="spacer"></span>
+          <button mat-flat-button [disabled]="applyingHistory() || !history.summary.update" (click)="applyHistory()">
+            {{ applyingHistory() ? 'Сохранение…' : 'Обновить суммы (' + history.summary.update + ')' }}
+          </button>
+        }
+      </mat-card>
+      @if (historyUpdated() !== null) {
+        <p role="status">Обновлено сделок: {{ historyUpdated() }}.</p>
+      }
+      @if (history.rows.length) {
+        <mat-card class="rules">
+          <ul>
+            @for (row of history.rows; track $index) {
+              <li>
+                <strong>{{ historyStatus[row.status] }}</strong>
+                · {{ row.date }} {{ row.ticker }} {{ row.executionRef }}
+                @if (row.status === 'conflict' && row.previousAmount && row.amount) {
+                  · в журнале {{ row.previousAmount }} ₽, в API {{ row.amount }} ₽
+                }
+                @if (row.amount && (row.status === 'update' || row.status === 'matched')) {
+                  · {{ row.amount }} ₽
+                  ({{ row.source === 'tbank-payment' ? 'платёж API' : 'сверено с платежом API' }})
+                }
+                @if (row.reason) { · {{ row.reason }} }
+              </li>
+            }
+          </ul>
+        </mat-card>
+      }
+    }
 
     @for (m of currencyMismatches(); track m.currency) {
       <mat-card class="currency-warning">
@@ -193,7 +242,7 @@ export function defaultSyncRange(
       </mat-card>
     }
 
-    @if (preview()) {
+    @if (!historyMode() && preview()) {
       <mat-card class="summary">
         <app-status-chip tone="success">Распознано: {{ preview()!.summary.ok }}</app-status-chip>
         <app-status-chip tone="warn">Проверить: {{ preview()!.summary.warn }}</app-status-chip>
@@ -467,6 +516,18 @@ export class ImportPage {
 
   /** Источник строк: файл-отчёт или прямая выгрузка из T-Invest API */
   protected readonly source = signal<ImportSource>('file');
+  protected readonly tbankMode = signal<'import' | 'history'>('import');
+  protected readonly historyMode = computed(() => this.source() === 'tbank' && this.tbankMode() === 'history');
+  protected readonly applyingHistory = signal(false);
+  protected readonly historyUpdated = signal<number | null>(null);
+  protected readonly historyStatus: Record<TbankHistoryRow['status'], string> = {
+    update: 'Обновится', matched: 'Совпала', unmatched: 'Без пары', conflict: 'Конфликт', unknown: 'Сумма неизвестна',
+  };
+  private readonly historyResponse = signal<{ key: string; value: TbankHistoryPreview } | null>(null);
+  protected readonly historyPreview = computed(() => {
+    const response = this.historyResponse();
+    return this.historyMode() && response?.key === JSON.stringify(this.historyRequest()) ? response.value : null;
+  });
   protected readonly fetching = signal(false);
   protected readonly accountId = signal<string | undefined>(undefined);
 
@@ -554,6 +615,40 @@ export class ImportPage {
     this.format.set('csv');
   }
 
+  protected setTbankMode(mode: 'import' | 'history'): void {
+    if (mode === this.tbankMode()) return;
+    this.tbankMode.set(mode);
+    this.resetInput();
+  }
+
+  private historyRequest() {
+    const accountId = this.accountId();
+    const portfolioId = this.portfolioId();
+    const from = this.from();
+    const to = this.to();
+    return accountId && portfolioId && from && to
+      ? { accountId, portfolioId, from: toIsoDate(from), to: toIsoDate(to) }
+      : null;
+  }
+
+  protected async applyHistory(): Promise<void> {
+    const preview = this.historyPreview();
+    const key = JSON.stringify(this.historyRequest());
+    if (!preview?.summary.update || this.applyingHistory()) return;
+    this.errorMessage.set('');
+    this.applyingHistory.set(true);
+    try {
+      const result = await this.api.tbankHistoryCommit(preview.previewId);
+      if (this.historyPreview()?.previewId !== preview.previewId) return;
+      this.historyResponse.set({ key, value: result.preview });
+      this.historyUpdated.set(result.updated);
+    } catch (e: unknown) {
+      this.errorMessage.set(extractErrorMessage(e, 'Не удалось обновить суммы исполнений.'));
+    } finally {
+      this.applyingHistory.set(false);
+    }
+  }
+
   /**
    * Выгрузка операций из T-Invest API. Кнопка заблокирована на время запроса —
    * повторный клик не должен запускать вторую синхронизацию (CLAUDE.md §5,
@@ -564,16 +659,28 @@ export class ImportPage {
     const accountId = this.accountId();
     const from = this.from();
     const to = this.to();
-    if (!accountId || !from || !to || this.fetching()) return;
+    if (!accountId || !from || !to || this.fetching() || this.applyingHistory()) return;
+    const historyRequest = this.historyMode() ? this.historyRequest() : null;
+    if (this.historyMode() && !historyRequest) return;
 
     this.fetching.set(true);
     this.resetInput();
     try {
+      if (historyRequest) {
+        const value = await this.api.tbankHistoryPreview(historyRequest);
+        const key = JSON.stringify(historyRequest);
+        if (this.historyMode() && key === JSON.stringify(this.historyRequest())) {
+          this.historyResponse.set({ key, value });
+        }
+        return;
+      }
       const result = await this.api.tbankFetch({
         accountId,
         from: toIsoDate(from),
         to: toIsoDate(to),
       });
+      if (this.source() !== 'tbank' || this.historyMode() || accountId !== this.accountId() ||
+          from !== this.from() || to !== this.to()) return;
       this.uploadId = result.uploadId;
       if (result.rows === 0) {
         this.errorMessage.set('За выбранный период у брокера нет операций.');
@@ -601,6 +708,8 @@ export class ImportPage {
   /** Сброс состояния предыдущей загрузки (общий для обоих источников) */
   private resetInput(): void {
     this.errorMessage.set('');
+    this.historyResponse.set(null);
+    this.historyUpdated.set(null);
     this.currencyMismatches.set([]);
     this.lastBatch.set(null);
     this.preview.set(null);
@@ -682,10 +791,11 @@ export class ImportPage {
 
   /** Предпросмотр запускается автоматически, когда есть данные и достаточно разметки */
   private async tryPreview(): Promise<void> {
-    if ((!this.fileContent && !this.uploadId) || !this.batchReady()) return;
+    if (this.historyMode() || (!this.fileContent && !this.uploadId) || !this.batchReady()) return;
     this.errorMessage.set('');
     try {
       const result = await this.api.preview(this.request());
+      if (this.historyMode()) return;
       this.uploadId = result.uploadId;
       this.seenUnresolved.update((m) => ({
         ...m,
@@ -705,7 +815,7 @@ export class ImportPage {
   }
 
   protected async commit(): Promise<void> {
-    if (!this.batchReady()) return;
+    if (this.historyMode() || !this.batchReady()) return;
     this.importing.set(true);
     this.errorMessage.set('');
     try {

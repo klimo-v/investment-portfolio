@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { AnnotationImportService } from './annotation-import.service';
 import { ImportService, type ImportFormat, type PreviewResult } from './import.service';
 import { TbankConfig } from './tbank/tbank.config';
+import { TbankHistoryService } from './tbank/tbank-history.service';
 import { TbankSyncService } from './tbank/tbank-sync.service';
 
 /**
@@ -32,8 +33,8 @@ interface ImportBody {
  */
 const TbankFetchSchema = z.object({
   accountId: z.string().min(1, 'Не выбран счёт'),
-  from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Дата начала: ожидается YYYY-MM-DD'),
-  to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Дата конца: ожидается YYYY-MM-DD'),
+  from: z.iso.date('Дата начала: ожидается YYYY-MM-DD'),
+  to: z.iso.date('Дата конца: ожидается YYYY-MM-DD'),
 });
 
 const AnnotationBodySchema = z.object({
@@ -48,6 +49,7 @@ export class ImportController {
     private readonly tbankConfig: TbankConfig,
     private readonly tbankSync: TbankSyncService,
     private readonly annotations: AnnotationImportService,
+    private readonly tbankHistory: TbankHistoryService,
   ) {}
 
   /** Предпросмотр: распознать строки без записи */
@@ -133,6 +135,22 @@ export class ImportController {
   async tbankCurrencyCheck(@Query('accountId') accountId?: string) {
     if (!accountId) throw new BadRequestException('Укажите accountId');
     return this.tbankSync.currencyCheck(accountId, this.service.journalCurrencyBalancesByAccount(accountId));
+  }
+
+  @Post('tbank/history/preview')
+  tbankHistoryPreview(@Body() body: unknown) {
+    const parsed = TbankFetchSchema.extend({ portfolioId: z.string().min(1, 'Не выбран портфель') })
+      .safeParse(body);
+    if (!parsed.success) throw new BadRequestException(parsed.error.issues.map((i) => i.message).join('; '));
+    if (parsed.data.from > parsed.data.to) throw new BadRequestException('Начало периода позже его конца');
+    return this.tbankHistory.preview(parsed.data);
+  }
+
+  @Post('tbank/history/commit')
+  tbankHistoryCommit(@Body() body: unknown) {
+    const parsed = z.object({ previewId: z.uuid() }).safeParse(body);
+    if (!parsed.success) throw new BadRequestException('Некорректный идентификатор предпросмотра.');
+    return this.tbankHistory.commit(parsed.data.previewId);
   }
 
   /**

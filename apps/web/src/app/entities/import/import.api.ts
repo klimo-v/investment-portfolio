@@ -2,7 +2,7 @@ import { Injectable, inject } from '@angular/core';
 import { HttpClient, httpResource } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
 import { z } from 'zod';
-import type { CurrencyMismatch, Operation } from '@core';
+import type { CurrencyMismatch, Operation, TbankHistoryPreview, TbankHistoryRequest, TbankHistoryResult } from '@core';
 import { withToastSuccess } from '@web-shared';
 
 /**
@@ -158,6 +158,14 @@ export class ImportApi {
     return firstValueFrom(
       this.http.post<{ uploadId: string; rows: number }>('/api/import/tbank/fetch', req),
     );
+  }
+
+  tbankHistoryPreview(req: TbankHistoryRequest): Promise<TbankHistoryPreview> {
+    return firstValueFrom(this.http.post<TbankHistoryPreview>('/api/import/tbank/history/preview', req));
+  }
+
+  tbankHistoryCommit(previewId: string): Promise<TbankHistoryResult> {
+    return firstValueFrom(this.http.post<TbankHistoryResult>('/api/import/tbank/history/commit', { previewId }));
   }
 
   /** Сверка валютных остатков журнала с брокером (только расхождения; пусто — всё сходится) */
