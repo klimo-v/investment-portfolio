@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { BadGatewayException, Injectable } from '@nestjs/common';
 import { mapTbankOperations, reconcileCurrencyBalances, type CurrencyBalance, type CurrencyMismatch, type RawRow, type TbankInstrumentRef, type TbankOperationItem } from '@core';
 import { TbankApiClient, type TbankAccount } from './tbank-api.client';
 
@@ -55,6 +55,7 @@ export class TbankSyncService {
   ): Promise<TbankOperationItem[]> {
     const items: TbankOperationItem[] = [];
     let cursor: string | undefined;
+    const cursors = new Set<string>();
 
     for (let page = 0; page < MAX_PAGES; page++) {
       const res = await this.api.getOperationsPage({
@@ -67,12 +68,15 @@ export class TbankSyncService {
       });
       items.push(...res.items);
 
-      // курсор не сдвинулся — дальше идти некуда, иначе запрашивали бы ту же страницу
-      if (!res.hasNext || !res.nextCursor || res.nextCursor === cursor) break;
+      if (!res.hasNext) return items;
+      if (!res.nextCursor || cursors.has(res.nextCursor)) {
+        throw new BadGatewayException('Т‑Банк вернул неполную историю: курсор не продвинулся.');
+      }
+      cursors.add(res.nextCursor);
       cursor = res.nextCursor;
     }
 
-    return items;
+    throw new BadGatewayException('Т‑Банк вернул слишком много страниц. Сократите период синхронизации.');
   }
 
   /**

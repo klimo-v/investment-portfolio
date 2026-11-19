@@ -55,10 +55,10 @@ describe('TbankSyncService — пагинация по курсору', () => {
     const page: OperationsPage = { items: [item('a')], hasNext: true, nextCursor: undefined };
     const { client, getOperationsPage } = clientWithPages([page, page, page]);
 
-    const rows = await new TbankSyncService(client).fetchRawRows('acc-1', '2026-01-01', '2026-12-31');
+    await expect(new TbankSyncService(client).fetchRawRows('acc-1', '2026-01-01', '2026-12-31'))
+      .rejects.toThrow('Т‑Банк вернул неполную историю');
 
     expect(getOperationsPage).toHaveBeenCalledTimes(1);
-    expect(rows).toHaveLength(1);
   });
 
   it('запрашивает период целиком по датам, включая последний день', async () => {

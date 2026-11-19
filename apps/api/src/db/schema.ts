@@ -80,6 +80,10 @@ export const operations = sqliteTable('operations', {
   transferGroup: text('transfer_group'),
   /** код, с которым операция пришла из импорта (`scheme:value`); нужен для разделения/отката слияния */
   sourceCode: text('source_code'),
+  grossTradeAmount: text('gross_trade_amount'),
+  grossTradeAmountSource: text('gross_trade_amount_source', {
+    enum: ['tbank-payment', 'tbank-reconciled'],
+  }),
   tradeId: text('trade_id'),
   note: text('note'),
   brokerRef: text('broker_ref'),

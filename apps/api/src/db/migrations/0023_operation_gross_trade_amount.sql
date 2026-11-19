@@ -1,0 +1,1 @@
+ALTER TABLE `operations` ADD `gross_trade_amount` text;

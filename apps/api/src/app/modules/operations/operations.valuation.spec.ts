@@ -18,6 +18,7 @@ import type { BinanceProvider } from '../quotes/binance.provider';
 import type { PriceHistoryService } from '../quotes/price-history.service';
 import { CbrProvider, CBR_RETRY_MS } from '../quotes/cbr.provider';
 import { OperationsService } from './operations.service';
+import { ValuationService } from '../valuation/valuation.service';
 
 describe('Оценка позиций и сделок без курса и частичные итоги', () => {
   let sqlite: Database.Database;
@@ -449,6 +450,39 @@ describe('Оценка позиций и сделок без курса и ча�
     expect((await service.summary()).totals.currentValueRub).toBe(0);
     expect((await service.positions())[0].quantity).toBe('0');
   });
+  it('согласует свободные деньги и стоимость с последней точкой ряда после покупки и частичной продажи', async () => {
+    db.update(operations).set({
+      quantity: '10', price: '40', fee: '2', grossTradeAmount: '420', grossTradeAmountSource: 'tbank-payment',
+    }).where(eq(operations.id, 'buy')).run();
+    const common = { systemId: 's1', portfolioId: 'p1', currency: 'RUB' };
+    db.insert(operations).values([
+      { ...common, id: 'cash', date: '2025-12-31', operationType: 'Deposit', quantity: '1', price: '1000' },
+      { ...common, id: 'coupon', date: '2026-01-02', operationType: 'Coupon', instrumentId: 'USD', quantity: '1', price: '30' },
+      { ...common, id: 'sale', date: '2026-01-03', operationType: 'Sell', instrumentId: 'USD', quantity: '4', price: '49', fee: '1', grossTradeAmount: '205' },
+      { ...common, id: 'elsewhere', portfolioId: 'p2', date: '2026-01-02', operationType: 'Deposit', quantity: '1', price: '700' },
+    ]).run();
+    const observations = [{
+      instrumentId: 'USD', date: '2026-01-03', price: '50', currency: 'RUB',
+      accruedInterest: '2', accruedCurrency: 'RUB',
+    }];
+    db.insert(priceHistory).values({ ...observations[0], source: 'manual' }).run();
+    const valuation = new ValuationService(db, service, {} as PriceHistoryService, {} as QuotesService);
+    const filters = { from: '2026-01-02', till: '2026-01-03', portfolioId: 'p1' };
+    const summary = await service.summary(filters);
+    const series = valuation.build({ till: filters.till, ops: service.list(), observations, empty: false }, {
+      ...filters, groupBy: 'portfolio',
+    });
+    expect(service.list().find(op => op.id === 'buy')).toMatchObject({
+      price: '40', grossTradeAmount: '420', grossTradeAmountSource: 'tbank-payment',
+    });
+    expect(summary.cash).toEqual({ cashRub: 812, totalValueRub: 1124 });
+    expect(Number(series.cashRub?.at(-1))).toBe(summary.cash.cashRub);
+    const positions = Number(series.groups[0].points.at(-1)?.marketValueRub);
+    expect(positions).toBe(summary.totals.currentValueRub);
+    expect(summary.cash.totalValueRub).toBe(positions + summary.cash.cashRub);
+    expect(summary.totals.realizedPnlRub).toBe(35.2);
+  });
+
   it('историческая валюта и НКД: курс после till и текущий курс не используются', async () => {
     db.insert(priceHistory)
       .values([

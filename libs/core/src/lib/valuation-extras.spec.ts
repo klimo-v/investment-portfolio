@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import type { Operation } from './schemas';
-import { cashBalanceRub, dailyCash, orphanSellsRub } from './cash';
+import { calculatePositions, calculateTrades, realizedPnlInRange } from './engine';
+import { cashBalanceRub, cashDelta, dailyCash, orphanSellsRub } from './cash';
+import { periodPerformance, payoutsInPeriod } from './period-performance';
 import { cashSeries, valuationEvents } from './valuation-extras';
 import { valuationSeries, type PriceObservation } from './valuation';
 
@@ -135,5 +137,65 @@ describe('valuationEvents: выплаты и продажи для маркер�
   it('фильтры периода и системы', () => {
     const ev = valuationEvents(OPS, { from: '2026-03-01', till: '2026-04-30', systemId: 's1', futureIds: FUT });
     expect(ev.map((e) => e.date)).toEqual(['2026-03-01', '2026-04-01']);
+  });
+});
+
+describe('спот с известной суммой исполнения', () => {
+  const scope = { portfolioId: 'p1' };
+  const from = '2026-07-02';
+  const ops = [
+    mk({ date: '2026-06-30', operationType: 'Deposit', price: '1000' }),
+    mk({ date: '2026-07-01', operationType: 'Buy', instrumentId: 'BOND', quantity: '10', price: '40', fee: '2', grossTradeAmount: '420' }),
+    mk({ date: from, operationType: 'Coupon', instrumentId: 'BOND', price: '30' }),
+    mk({ date: '2026-07-03', operationType: 'Sell', instrumentId: 'BOND', quantity: '4', price: '49', fee: '1', grossTradeAmount: '205' }),
+    mk({ date: '2026-07-06', operationType: 'Sell', instrumentId: 'BOND', quantity: '6', price: '49', fee: '3', grossTradeAmount: '315' }),
+    mk({ date: '2026-07-07', operationType: 'Withdraw', price: '100' }),
+  ];
+  const prices = [{ ...px('BOND', '2026-07-01', '50'), accruedInterest: '2', accruedCurrency: 'RUB' }];
+  const at = (till: string, periodFrom = from) =>
+    valuationSeries(ops, prices, { ...scope, groupBy: 'portfolio', from: periodFrom, till });
+  const point = (s: ReturnType<typeof at>) => s.groups[0].points.at(-1);
+
+  it('согласует деньги, рыночную оценку с НКД, среднюю себестоимость и доходность после обеих продаж', () => {
+    const bought = at('2026-07-01', '2026-07-01');
+    expect(point(bought)).toMatchObject({ purchasesRub: '422.00', investedRub: '422.00', marketValueRub: '520.00' });
+    const partial = at('2026-07-03');
+    expect(point(partial)).toMatchObject({ investedRub: '253.20', marketValueRub: '312.00', fixedRub: '65.20', totalRub: '124.00' });
+    const cash = cashBalanceRub(ops.filter(o => o.date <= partial.till));
+    expect(cashSeries(partial, ops, scope).at(-1)).toBe(cash.toFixed(2));
+    expect(cash.plus(point(partial)!.marketValueRub).toFixed(2)).toBe('1124.00');
+    const position = calculatePositions(ops.filter(o => o.date <= partial.till))[0];
+    expect(position.avgBuyPrice.toFixed()).toBe('42.2');
+
+    const closed = at('2026-07-07');
+    expect(point(closed)).toMatchObject({ investedRub: '0.00', marketValueRub: '0.00', fixedRub: '124.00', totalRub: '124.00' });
+    expect(cashSeries(closed, ops, scope).at(-1)).toBe('1024.00');
+    expect(cashBalanceRub(ops).toFixed(2)).toBe('1024.00');
+    expect(closed.netContributionsRub.at(-1)).toBe('900.00');
+    const [result] = realizedPnlInRange(ops, from, closed.till);
+    const [trade] = calculateTrades(ops);
+    expect(result.realizedPnlRub.toFixed(2)).toBe('94.00');
+    expect(trade.realizedPnlRub.eq(result.realizedPnlRub)).toBe(true);
+    expect(trade.couponsRub.toFixed(2)).toBe('30.00');
+    const performance = periodPerformance(at(closed.till, '2026-06-30'), {
+      from, contour: 'wealth', payoutsRub: payoutsInPeriod(ops, { from, till: closed.till }),
+    });
+    expect(performance).toMatchObject({
+      startValueRub: '1098.00', endValueRub: '1024.00', netFlowRub: '-100.00', resultRub: '26.00',
+      breakdown: { fixedRub: '124.00', payoutsRub: '30.00', realizedRub: '94.00', revaluationRub: '-98.00' },
+    });
+    expect(performance.twr.pct).toBeCloseTo((1124 / 1098 - 1) * 100, 8);
+    expect(valuationEvents(ops, { ...scope, from, till: closed.till }).map(e => e.amountRub))
+      .toEqual(['30.00', '205.00', '315.00']);
+  });
+
+  it('конвертирует выручку от продажи без позиции по историческому курсу один раз', () => {
+    const orphan = mk({
+      date: '2026-07-06', operationType: 'Sell', instrumentId: 'OTHER', quantity: '6',
+      price: '49', fee: '3', grossTradeAmount: '315', fxRate: '90', currency: 'USD',
+    });
+    expect(cashDelta(orphan).toFixed()).toBe('28080');
+    expect(orphanSellsRub([orphan]).toFixed()).toBe('28080');
+    expect(valuationEvents([orphan], { till: orphan.date })[0].amountRub).toBe('28350.00');
   });
 });

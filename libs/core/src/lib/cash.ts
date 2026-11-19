@@ -1,3 +1,4 @@
+import { grossTradeAmount } from './trade-amount';
 import Decimal from 'decimal.js';
 import type { Operation } from './schemas';
 import { TradeLedger } from './engine';
@@ -47,7 +48,7 @@ const CASH_SIGN: Record<Operation['operationType'], number> = {
 export function cashDelta(op: Operation, futureIds?: ReadonlySet<string>): Decimal {
   if (futureIds && op.instrumentId && futureIds.has(op.instrumentId)) return new Decimal(0);
   const fxRate = new Decimal(op.fxRate ?? '1');
-  const amount = new Decimal(op.quantity).mul(op.price).mul(fxRate);
+  const amount = grossTradeAmount(op).mul(fxRate);
   const fee = new Decimal(op.fee ?? '0').mul(fxRate);
   return amount.mul(CASH_SIGN[op.operationType]).minus(fee);
 }

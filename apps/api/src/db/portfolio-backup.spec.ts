@@ -101,7 +101,7 @@ describe('автономная SQLite-копия и атомарная заме�
     expect(b.db.pragma('foreign_keys', { simple: true })).toBe(1);
     backups.clear(b.db);
     expect(b.db.prepare('SELECT * FROM operations').all()).toEqual([]);
-    expect(b.db.prepare('SELECT * FROM __drizzle_migrations').all()).toHaveLength(23);
+    expect(b.db.prepare('SELECT * FROM __drizzle_migrations').all()).toHaveLength(25);
     seed(b.db, 'FIRST');
   });
   it('отклоняет новую, неизвестную, чужую и повреждённую БД без изменения рабочей', async () => {
@@ -194,7 +194,7 @@ describe('автономная SQLite-копия и атомарная заме�
     old.close();
     expect(backups.prepare(file).operations).toBe(0);
     backups.replace(a.db, file);
-    expect(a.db.prepare('SELECT * FROM __drizzle_migrations').all()).toHaveLength(23);
+    expect(a.db.prepare('SELECT * FROM __drizzle_migrations').all()).toHaveLength(25);
   });
 
   it('принимает прежний хеш 0011 без изменения истории, сохраняя строгую проверку схемы', async () => {
@@ -205,7 +205,7 @@ describe('автономная SQLite-копия и атомарная заме�
     a.db.prepare('UPDATE __drizzle_migrations SET hash=? WHERE created_at=?')
       .run(legacyHash, createdAt);
     const before = dump(a.db);
-    expect(backups.inspect(a.file)).toEqual({ appliedMigrations: 23, availableMigrations: 23 });
+    expect(backups.inspect(a.file)).toEqual({ appliedMigrations: 25, availableMigrations: 25 });
     const file = join(a.directory, 'legacy.sqlite');
     await backups.backup(a.db, file);
     expect(backups.prepare(file)).toEqual({ accounts: 1, operations: 1, systems: 1 });

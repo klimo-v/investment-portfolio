@@ -6,7 +6,7 @@ import type { RawRow } from '@core';
  */
 
 /** Строковые поля RawRow, которые может задать колонка CSV (accountKind — не строка, из CSV не приходит) */
-type CsvField = Exclude<keyof RawRow, 'accountKind' | 'identifiers'>;
+type CsvField = Exclude<keyof RawRow, 'accountKind' | 'identifiers' | 'grossTradeAmountSource'>;
 
 /** Синонимы заголовков → канонический ключ RawRow */
 const HEADER_MAP: Record<string, CsvField> = {

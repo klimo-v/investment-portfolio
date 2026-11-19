@@ -75,11 +75,25 @@ describe('ImportService — обновление операций при пов�
     expect(op).toMatchObject({ fee: '8.52', systemId: 'sys-2', note: 'моя заметка' });
   });
 
-  it('та же операция в другом портфеле — не обновление, а дубль (как раньше)', async () => {
-    db.insert(portfolios).values({ id: 'pf-2', name: 'Другой счёт' }).run();
-    await service.commit({ ...opts, content: report('3.69') });
-    const p = await service.preview({ ...opts, portfolioId: 'pf-2', content: report('7.40').replace('SESPS', 'XXXX') });
-    expect(p.summary.update).toBe(0);
+  it('одинаковый номер исполнения на двух привязанных счетах создаёт две операции', async () => {
+    db.update(portfolios).set({ accountRef: 'account-a' }).where(eq(portfolios.id, 'pf-1')).run();
+    db.insert(portfolios).values({ id: 'pf-2', name: 'Второй', accountRef: 'account-b' }).run();
+    const rows = ['account-a', 'account-b'].map((accountRef): RawRow => ({
+      date: '2026-07-06', accountRef, ticker: 'BOND', instrumentType: 'Bond', tradeType: 'buy',
+      currency: 'RUB', quantity: '2', price: '100', brokerRef: 'fill', executionRef: 'fill',
+      grossTradeAmount: '201', grossTradeAmountSource: 'tbank-payment',
+    }));
+    const importRows = () => service.commit({ ...opts, uploadId: service.stashRawRows(rows) });
+    expect(await importRows()).toMatchObject({ imported: 2, updated: 0 });
+    expect(await importRows()).toMatchObject({ imported: 0, updated: 0 });
+    expect(db.select().from(operations).all().map(o => o.portfolioId).sort()).toEqual(['pf-1', 'pf-2']);
+
+    const conflicting = { ...opts, uploadId: service.stashRawRows([{ ...rows[0], quantity: '3' }]) };
+    expect((await service.preview(conflicting)).summary.error).toBe(1);
+    expect(await service.commit(conflicting)).toMatchObject({ imported: 0, updated: 0 });
+
+    const wrongAccount = { ...opts, uploadId: service.stashRawRows([{ ...rows[0], accountRef: 'unbound' }]) };
+    expect((await service.preview(wrongAccount)).summary.error).toBe(1);
   });
 });
 

@@ -1,5 +1,6 @@
 import { dataGate } from '../../../data-management/data-gate';
 import { randomUUID } from 'node:crypto';
+import Decimal from 'decimal.js';
 import { BadRequestException, Inject, Injectable } from '@nestjs/common';
 import { and, desc, eq, isNull, lte, notLike, or } from 'drizzle-orm';
 import {
@@ -39,6 +40,7 @@ import {
 import { DB } from '../../db/drizzle.module';
 import { InstrumentIdentityService } from '../instruments/instrument-identity.service';
 import { recordPrice } from '../../../db/price-history-store';
+import { rowToOperation } from '../../../db/operation-row';
 import { parseCsv } from './csv-parser';
 
 /** Результат разбора файла, лежащий в кэше загрузок */
@@ -300,6 +302,7 @@ export class ImportService {
     const tickerOverrides = new Map(
       Object.entries(defaults?.tickerSystemOverrides ?? {}).map(([t, s]) => [t.toLowerCase(), s]),
     );
+    const accountsByPortfolio = new Map(portfolioRows.map((p) => [p.id, p.accountRef]));
     const portfolioByName = new Map(portfolioRows.map((p) => [p.name.toLowerCase(), p.id]));
     // persisted-маппинг «счёт отчёта → портфель» (docs/04-roadmap.md §3.1) — один
     // раз выбрали портфель для незнакомого accountRef при commit(), дальше резолвится сам
@@ -324,7 +327,10 @@ export class ImportService {
           // сначала точный persisted-маппинг, затем эвристика по имени портфеля
           // (полезна до первого commit(), пока маппинга ещё нет)
           const hit = portfolioByAccountRef.get(accountRef) ?? portfolioByName.get(accountRef.toLowerCase());
-          if (hit) return hit;
+          const id = hit ?? defaults?.portfolioId;
+          if (!id) return null;
+          const bound = accountsByPortfolio.get(id);
+          return bound && bound !== accountRef ? null : id;
         }
         return defaults?.portfolioId ?? null;
       },
@@ -366,23 +372,13 @@ export class ImportService {
   }
 
   /** Существующие операции по ключу дедупликации (чтобы не задвоить и находить кандидатов на обновление) */
-  private existingByDedupeKey(): Map<string, OperationRow> {
-    const map = new Map<string, OperationRow>();
+  private existingByDedupeKey(): Map<string, OperationRow[]> {
+    const map = new Map<string, OperationRow[]>();
     for (const o of this.db.select().from(operations).all()) {
-      const key = makeDedupeKey({
-        date: o.date,
-        systemId: o.systemId,
-        portfolioId: o.portfolioId,
-        instrumentId: o.instrumentId,
-        operationType: o.operationType as Operation['operationType'],
-        quantity: o.quantity,
-        price: o.price,
-        fee: o.fee,
-        fxRate: o.fxRate,
-        currency: o.currency,
-        brokerRef: o.brokerRef ?? undefined,
-      });
-      if (!map.has(key)) map.set(key, o);
+      const key = makeDedupeKey(rowToOperation(o));
+      const matches = map.get(key);
+      if (matches) matches.push(o);
+      else map.set(key, [o]);
     }
     return map;
   }
@@ -417,9 +413,22 @@ export class ImportService {
       const ticker = res.operation.instrumentId ?? identityKey(raw);
       // уже есть в базе: полное совпадение — дубль; тот же номер у брокера в том же портфеле
       // с другими значениями (комиссия пришла позже и т. п.) — обновление существующей
-      const stored = existing.get(res.dedupeKey);
+      const matches = existing.get(res.dedupeKey);
+      if (res.operation.brokerRef && matches && matches.length > 1) {
+        return { confidence: 'error', reason: 'Номер исполнения повторяется в журнале этого счёта.', ticker };
+      }
+      const stored = matches?.[0];
       if (stored && res.operation.brokerRef && stored.portfolioId === res.operation.portfolioId && !seenInBatch.has(res.dedupeKey)) {
         const changes = mergeBrokerFields(stored, res.operation);
+        if (stored.grossTradeAmount != null) {
+          const incoming = res.operation;
+          if (stored.instrumentId !== incoming.instrumentId || stored.operationType !== incoming.operationType ||
+              stored.currency !== incoming.currency || stored.date !== incoming.date ||
+              !new Decimal(stored.quantity).eq(incoming.quantity) ||
+              (incoming.grossTradeAmount != null && !new Decimal(stored.grossTradeAmount).eq(incoming.grossTradeAmount))) {
+            return { confidence: 'error', reason: 'Данные исполнения расходятся с подтверждённой сделкой в журнале.', ticker };
+          }
+        }
         if (changes.length > 0) {
           seenInBatch.add(res.dedupeKey);
           return {
@@ -427,7 +436,8 @@ export class ImportService {
             confidence: 'update',
             existingId: stored.id,
             changes,
-            reason: 'Данные брокера изменились — операция будет обновлена',
+            reason: ['Данные брокера изменились — операция будет обновлена', raw.grossTradeAmountIssue]
+              .filter(Boolean).join('. '),
             accountRef: raw.accountRef,
             ticker,
             systemUncertain: false,
@@ -439,7 +449,7 @@ export class ImportService {
         return {
           operation: res.operation,
           confidence: 'duplicate',
-          reason: 'Уже есть в базе',
+          reason: raw.grossTradeAmountIssue ? `Уже есть в базе. ${raw.grossTradeAmountIssue}` : 'Уже есть в базе',
           accountRef: raw.accountRef,
           ticker,
           systemUncertain: res.systemUncertain,
@@ -528,6 +538,8 @@ export class ImportService {
           quantity: row.operation.quantity,
           price: row.operation.price,
           fee: row.operation.fee ?? '0',
+          grossTradeAmount: row.operation.grossTradeAmount ?? null,
+          grossTradeAmountSource: row.operation.grossTradeAmountSource ?? null,
           fxRate: row.operation.fxRate ?? '1',
           currency: row.operation.currency,
           note: row.operation.note ?? null,

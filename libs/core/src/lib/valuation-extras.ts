@@ -1,3 +1,4 @@
+import { grossTradeAmount } from './trade-amount';
 import Decimal from 'decimal.js';
 import type { Operation } from './schemas';
 import { dailyCash, dailyCashAt } from './cash';
@@ -72,7 +73,7 @@ export function valuationEvents(operations: readonly Operation[], range: Valuati
     if (kind === 'sale' && (!o.instrumentId || range.futureIds?.has(o.instrumentId))) continue;
     const key = `${o.date}|${kind}|${o.instrumentId ?? ''}`;
     const entry = sums.get(key) ?? { date: o.date, kind, instrumentId: o.instrumentId ?? null, amountRub: '0', sum: ZERO };
-    entry.sum = entry.sum.plus(incomeAmountRub(o));
+    entry.sum = entry.sum.plus(kind === 'sale' ? grossTradeAmount(o).mul(o.fxRate ?? '1') : incomeAmountRub(o));
     sums.set(key, entry);
   }
   return [...sums.values()]

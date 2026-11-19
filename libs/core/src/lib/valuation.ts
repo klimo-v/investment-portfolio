@@ -1,3 +1,4 @@
+import { grossTradeAmount } from './trade-amount';
 import { quoteValuesIssue } from './quote-values';
 import Decimal from 'decimal.js';
 import type { Operation } from './schemas';
@@ -299,7 +300,7 @@ export function valuationSeries(
       // валовая покупка дня (спот): себестоимость + комиссия — то, что попадает в investedRub
       if (o.operationType === 'Buy' && !(options.futureIds && o.instrumentId && options.futureIds.has(o.instrumentId))) {
         const fx = new Decimal(o.fxRate ?? '1');
-        const cost = new Decimal(o.quantity).mul(o.price).plus(new Decimal(o.fee ?? '0')).mul(fx);
+        const cost = grossTradeAmount(o).plus(o.fee ?? '0').mul(fx);
         purchasesToday.set(keyOf(o), (purchasesToday.get(keyOf(o)) ?? ZERO).plus(cost));
       }
     }

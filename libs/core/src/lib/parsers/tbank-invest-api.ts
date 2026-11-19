@@ -59,6 +59,7 @@ export interface TbankOperationItem {
   /** НКД по облигации — в цену НЕ входит (как и в XLSX-отчёте) */
   accruedInt?: TbankMoneyValue;
   quantity?: string;
+  quantityDone?: string;
   tradesInfo?: { trades?: TbankOperationTrade[] };
 }
 
@@ -146,12 +147,16 @@ function signedAmount(tradeType: string, payment: Decimal): Decimal {
   return EXPENSE_TYPES.has(tradeType) ? payment.neg() : payment;
 }
 
-/** Время операции «ЧЧ:ММ:СС» по Москве (как в отчётах брокера) из метки UTC `2025-04-01T07:15:30Z` */
-function toMskTime(raw: string | undefined): string | undefined {
+function moscowTimestamp(raw: string | undefined): string | undefined {
   if (!raw) return undefined;
-  const ms = Date.parse(raw);
-  if (Number.isNaN(ms)) return undefined;
-  return new Date(ms + 3 * 3_600_000).toISOString().slice(11, 19);
+  const timestamp = Date.parse(raw);
+  if (Number.isNaN(timestamp)) return undefined;
+  return new Date(timestamp + 3 * 3_600_000).toISOString();
+}
+
+/** Время операции «ЧЧ:ММ:СС» по Москве (как в отчётах брокера) из метки UTC. */
+function toMskTime(raw: string | undefined): string | undefined {
+  return moscowTimestamp(raw)?.slice(11, 19);
 }
 
 /** Типы инструментов брокера → типы справочника (schemas.ts, InstrumentSchema) */
@@ -187,9 +192,88 @@ export function moneyToDecimal(value: TbankMoneyValue | undefined): Decimal {
   return units.plus(nano);
 }
 
-/** Абсолютное значение денежной величины десятичной строкой */
-function absMoney(value: TbankMoneyValue | undefined): string {
-  return moneyToDecimal(value).abs().toFixed();
+function reportedMoney(value: TbankMoneyValue | undefined): Decimal | undefined {
+  if (!value || (value.units === undefined && value.nano === undefined)) return undefined;
+  if (value.units !== undefined && (typeof value.units !== 'string' || !/^-?\d+$/.test(value.units))) {
+    return undefined;
+  }
+  const nano = value.nano === undefined ? 0 : value.nano;
+  if (!Number.isInteger(nano) || Math.abs(nano) >= 1_000_000_000) return undefined;
+  const units = new Decimal(value.units ?? '0');
+  if ((units.gt(0) && nano < 0) || (units.lt(0) && nano > 0)) return undefined;
+  return moneyToDecimal(value);
+}
+
+function positiveQuantity(value: string | undefined): Decimal | undefined {
+  if (typeof value !== 'string' || !/^\d+$/.test(value)) return undefined;
+  const quantity = new Decimal(value);
+  return quantity.gt(0) ? quantity : undefined;
+}
+
+const executionNumber = (trade: TbankOperationTrade): string | undefined =>
+  trade.num?.trim() || trade.tradeId?.trim() || undefined;
+
+function grossAmounts(
+  item: TbankOperationItem,
+  trades: TbankOperationTrade[],
+  currency: string,
+  groupIssue: string | undefined,
+): { amounts: Decimal[]; source: NonNullable<RawRow['grossTradeAmountSource']> } | { problem: string } {
+  if (groupIssue) return { problem: groupIssue };
+  const prices = trades.map((trade) => trade.price);
+  for (const [label, value] of [
+    ['платежа', item.payment], ['цены операции', item.price], ['НКД', item.accruedInt],
+    ...prices.map((price) => ['цены исполнения', price] as const),
+  ] as const) {
+    if (value && value.currency?.toUpperCase() !== currency) {
+      return { problem: `Валюта ${label} неизвестна или отличается от ${currency}` };
+    }
+  }
+  if (OPERATION_TYPE_MAP[item.type ?? ''] === 'sell') {
+    return { problem: 'Знак и состав сделки продажи в payment не подтверждены' };
+  }
+  if (item.type !== 'OPERATION_TYPE_BUY' || currency !== 'RUB') {
+    return { problem: 'Состав платежа для этого вида сделки или валюты не подтверждён' };
+  }
+
+  const payment = reportedMoney(item.payment)?.neg();
+  if (!payment?.gt(0) || payment.decimalPlaces() > 2) {
+    return { problem: 'Некорректный платёж покупки (payment)' };
+  }
+
+  if (trades.some((trade) => !executionNumber(trade))) {
+    return { problem: 'Биржевые номера исполнений отсутствуют или повторяются' };
+  }
+  const quantities = trades.flatMap((trade) => positiveQuantity(trade.quantity) ?? []);
+  const done = positiveQuantity(item.quantityDone);
+  if (!trades.length || !done || quantities.length !== trades.length || !Decimal.sum(...quantities).eq(done)) {
+    return { problem: 'Список исполнений не совпадает с исполненным объёмом (quantityDone)' };
+  }
+  const cleanPrices = prices.flatMap((price) => {
+    const amount = reportedMoney(price);
+    return amount?.gt(0) ? [amount] : [];
+  });
+  if (cleanPrices.length !== trades.length) return { problem: 'Некорректная чистая цена исполнения' };
+  const accrued = reportedMoney(item.accruedInt);
+  if (item.accruedInt && (!accrued || accrued.lt(0))) return { problem: 'Некорректный НКД (accruedInt)' };
+  if (trades.length === 1) return { amounts: [payment], source: 'tbank-payment' };
+
+  const days = trades.map((trade) => moscowTimestamp(trade.date)?.slice(0, 10));
+  if (!days[0] || days.some((day) => day !== days[0]) || cleanPrices.some((price) => !price.eq(cleanPrices[0]))) {
+    return { problem: 'Исполнения группы имеют разные даты или цены либо дата неизвестна' };
+  }
+  if (!accrued) return { problem: 'В API нет НКД по группе исполнений (accruedInt)' };
+  const accruedPerUnit = accrued.div(done);
+  if (accruedPerUnit.decimalPlaces() > 2 || !accruedPerUnit.mul(done).eq(accrued)) {
+    return { problem: 'НКД на бумагу не подтверждён с точностью до копейки' };
+  }
+  const amounts = quantities.map((qty, i) =>
+    cleanPrices[i].mul(qty).toDecimalPlaces(2, Decimal.ROUND_HALF_UP).plus(accruedPerUnit.mul(qty)),
+  );
+  if (!Decimal.sum(...amounts).eq(payment)) {
+    return { problem: 'Сумма исполнений с НКД расходится с payment до копейки' };
+  }
+  return { amounts, source: 'tbank-reconciled' };
 }
 
 /** `2024-03-15T10:30:00Z` → `2024-03-15` (normalizeDate ждёт ISO-дату) */
@@ -267,18 +351,20 @@ export function mapTbankOperations(
   // `commission` сделки и дочерней операцией BROKER_FEE (на реальных данных суммы совпадают в 76
   // из 76 случаев). Берём сумму дочерних BROKER_FEE, если они есть (факт списания), иначе
   // `commission`. Никогда не складываем. Дочерняя комиссия отдельной строкой не идёт.
-  const childFeeByParent = new Map<string, Decimal>();
+  const childFeeByParent = new Map<string, TbankMoneyValue[]>();
+  const foldedFees = new Set<TbankOperationItem>();
   const foldedFeeIds = new Set<string>();
   for (const item of executed) {
     if (item.type !== 'OPERATION_TYPE_BROKER_FEE' || !item.parentOperationId) continue;
     const parent = byId.get(item.parentOperationId);
     if (!parent || !BUY_SELL.has(OPERATION_TYPE_MAP[parent.type ?? ''] ?? '')) continue;
-    const prev = childFeeByParent.get(item.parentOperationId) ?? new Decimal(0);
-    childFeeByParent.set(item.parentOperationId, prev.plus(moneyToDecimal(item.payment).neg()));
+    foldedFees.add(item);
+    if (item.id && foldedFeeIds.has(item.id)) continue;
     if (item.id) foldedFeeIds.add(item.id);
+    const fees = childFeeByParent.get(item.parentOperationId) ?? [];
+    fees.push(item.payment ?? {});
+    childFeeByParent.set(item.parentOperationId, fees);
   }
-  const tradeFee = (item: TbankOperationItem): Decimal =>
-    (item.id ? childFeeByParent.get(item.id) : undefined) ?? moneyToDecimal(item.commission).abs();
 
   // Налог «на карту»: API присылает его отдельной строкой без ссылки на выплату — ищем по
   // инструменту и дню. Если в тот же день есть и обычная выплата по бумаге, налог делится
@@ -302,7 +388,7 @@ export function mapTbankOperations(
 
   const rows: RawRow[] = [];
   for (const item of executed) {
-    if (item.id && foldedFeeIds.has(item.id)) continue;
+    if (foldedFees.has(item)) continue;
     // налог, уже учтённый в нетто-сумме родительской выплаты — отдельной строкой не идёт
     if (item.parentOperationId && WITHHOLDING_TAX_TYPES.has(item.type ?? '') && byId.has(item.parentOperationId)) continue;
 
@@ -312,7 +398,8 @@ export function mapTbankOperations(
     // проверку (TCS00A10B4K3), — внутренний код брокера, а не ISIN.
     const ticker = instrument?.ticker || undefined;
     const identifiers = tbankIdentifiers(item, instrument);
-    const currency = (item.payment?.currency ?? instrument?.currency ?? 'rub').toUpperCase();
+    const settlementCurrency = item.payment?.currency || instrument?.currency;
+    const currency = (settlementCurrency ?? 'rub').toUpperCase();
     const isDivExt = item.type === DIV_EXT;
     const tradeType = isDivExt ? 'dividend' : (OPERATION_TYPE_MAP[item.type ?? ''] ?? item.type ?? '');
 
@@ -375,41 +462,78 @@ export function mapTbankOperations(
     }
 
     const trades = item.tradesInfo?.trades ?? [];
-    if (!BUY_SELL.has(tradeType) || trades.length === 0) {
-      // сделка без списка исполнений (или незнакомый тип) — одна строка на операцию
-      const quantity = new Decimal(item.quantity ?? '0').abs();
+    const childFees = item.id ? childFeeByParent.get(item.id) : undefined;
+    const feeValues = childFees ?? (item.commission ? [item.commission] : []);
+    const checkFee = (value: TbankMoneyValue): string | undefined => {
+      const amount = reportedMoney(value);
+      // Некоторые ответы содержат пустой объект commission вместо отсутствующего поля.
+      if (value === item.commission && amount === undefined && Object.keys(value).length === 0) return undefined;
+      if (!amount) return 'Некорректная комиссия в ответе Т‑Банка';
+      if (amount.isZero() && !value.currency) return undefined;
+      if (value.currency?.toUpperCase() !== currency) return `Валюта комиссии неизвестна или отличается от ${currency}`;
+      return undefined;
+    };
+    const currencyIssue = base.instrumentType === 'Bond' && !settlementCurrency
+      ? 'Неизвестна валюта расчётов по облигации' : undefined;
+    const feeIssue = feeValues.map(checkFee).find(Boolean);
+    const commission = (feeIssue ? [] : feeValues).reduce((total, value) => {
+      const amount = reportedMoney(value) ?? new Decimal(0);
+      return total.plus(childFees ? amount.neg() : amount.abs());
+    }, new Decimal(0));
+    const numbers = trades.map(executionNumber);
+    // Без разных номеров импорт схлопнет несколько исполнений в одну операцию.
+    const refIssue = trades.length > 1 && (numbers.includes(undefined) || new Set(numbers).size !== trades.length)
+      ? 'Биржевые номера исполнений отсутствуют или повторяются'
+      : undefined;
+    const isTrade = BUY_SELL.has(tradeType);
+    const gross = isTrade && base.instrumentType === 'Bond'
+      ? grossAmounts(item, trades, currency, currencyIssue ?? refIssue ?? feeIssue)
+      : undefined;
+    const grossTradeAmountIssue = gross && 'problem' in gross ? gross.problem : undefined;
+    const priceIssue = (value: TbankMoneyValue | undefined): string | undefined => {
+      if (!isTrade) return undefined;
+      if (!reportedMoney(value)?.gt(0)) return 'Некорректная чистая цена сделки';
+      if (value?.currency?.toUpperCase() !== currency) return `Валюта чистой цены неизвестна или отличается от ${currency}`;
+      return undefined;
+    };
+
+    if (!isTrade || trades.length === 0) {
+      const quantity = positiveQuantity(item.quantityDone ?? item.quantity);
       rows.push({
         ...base,
-        quantity: quantity.toFixed(),
-        price: absMoney(item.price),
-        fee: tradeFee(item).toFixed(),
+        quantity: quantity?.toFixed() ?? '0',
+        price: reportedMoney(item.price)?.abs().toFixed() ?? '0',
+        fee: commission.toFixed(),
         note: item.description,
         brokerRef: item.id,
+        grossTradeAmountIssue,
+        skipReason: currencyIssue ?? feeIssue ?? priceIssue(item.price) ??
+          (isTrade && !quantity ? 'Некорректное количество сделки' : undefined),
       });
       continue;
     }
 
-    // Одна заявка исполняется несколькими сделками, у каждой свой биржевой номер.
-    // Выпускаем строку на КАЖДУЮ сделку с `brokerRef` = номер сделки: он
-    // содержится в ранее импортированных отчётах, поэтому такая сделка распознаётся
-    // как дубль, а не заводится второй раз.
-    const commission = tradeFee(item);
-    const weights = trades.map((t) =>
-      moneyToDecimal(t.price).abs().times(new Decimal(t.quantity ?? '0').abs()),
-    );
-    const fees = allocateFee(commission, weights);
-
+    const groupIssue = currencyIssue ?? refIssue ?? feeIssue ?? trades.map((trade) => priceIssue(trade.price) ??
+      (positiveQuantity(trade.quantity) ? undefined : 'Некорректное количество исполнения')).find(Boolean);
+    const fees = groupIssue ? [] : allocateFee(commission, trades.map((trade) =>
+      reportedMoney(trade.price)!.mul(positiveQuantity(trade.quantity)!),
+    ));
     trades.forEach((trade, i) => {
-      const num = trade.num || trade.tradeId;
+      const num = numbers[i];
       rows.push({
         ...base,
         date: toIsoDate(trade.date ?? item.date),
         time: toMskTime(trade.date ?? item.date),
-        quantity: new Decimal(trade.quantity ?? '0').abs().toFixed(),
-        price: absMoney(trade.price),
-        fee: fees[i].toFixed(),
+        quantity: positiveQuantity(trade.quantity)?.toFixed() ?? '0',
+        price: reportedMoney(trade.price)?.abs().toFixed() ?? '0',
+        fee: fees[i]?.toFixed() ?? '0',
         note: num ? `Сделка № ${num}` : item.description,
         brokerRef: num || item.id,
+        executionRef: num,
+        grossTradeAmount: gross && 'amounts' in gross ? gross.amounts[i].toFixed() : undefined,
+        grossTradeAmountSource: gross && 'source' in gross ? gross.source : undefined,
+        grossTradeAmountIssue,
+        skipReason: groupIssue,
       });
     });
   }

@@ -34,9 +34,9 @@ import {
   quotes,
   priceHistory,
   futuresSettlements,
-  type OperationRow,
   type QuoteRow,
 } from '../../../db/schema';
+import { rowToOperation } from '../../../db/operation-row';
 import { DB } from '../../db/drizzle.module';
 import { QuotesService } from '../quotes/quotes.service';
 
@@ -72,6 +72,8 @@ export interface ValuedTrade {
  * Сервис операций — бизнес-логика (GRASP: Controller тонкий, логика здесь).
  * Хранение — Drizzle + SQLite (Фаза 1, docs/04-roadmap.md).
  */
+const ManualOperationSchema = OperationSchema.omit({ grossTradeAmount: true, grossTradeAmountSource: true });
+
 @Injectable()
 export class OperationsService {
   constructor(
@@ -158,7 +160,7 @@ export class OperationsService {
    * каждый запрос (valuationSeries), готовых итогов в БД нет.
    */
   add(raw: unknown): Operation {
-    const parsed = OperationSchema.parse(raw);
+    const parsed = ManualOperationSchema.parse(raw);
     const id = parsed.id ?? randomUUID();
 
     this.db
@@ -813,26 +815,4 @@ export class OperationsService {
       dividendYieldPct: investedRub > 0 ? (dividendsRub / investedRub) * 100 : null,
     };
   }
-}
-
-function rowToOperation(row: OperationRow): Operation {
-  return {
-    id: row.id,
-    date: row.date,
-    systemId: row.systemId,
-    portfolioId: row.portfolioId,
-    instrumentId: row.instrumentId,
-    operationType: row.operationType as Operation['operationType'],
-    quantity: row.quantity,
-    price: row.price,
-    fee: row.fee,
-    fxRate: row.fxRate,
-    currency: row.currency,
-    transferGroup: row.transferGroup,
-    tradeId: row.tradeId,
-    note: row.note ?? undefined,
-    brokerRef: row.brokerRef ?? undefined,
-    executedAt: row.executedAt,
-    importBatchId: row.importBatchId,
-  };
 }

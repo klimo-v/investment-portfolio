@@ -7,11 +7,11 @@ import {
   cashBalanceRub,
   findPossibleDuplicates,
   normalizeCode,
-  type Operation,
   type PossibleDuplicate,
 } from '@core';
 import { InstrumentIdentityService } from '../app/modules/instruments/instrument-identity.service';
-import { instrumentIdentifiers, instruments, operations, portfolios, type OperationRow } from './schema';
+import { instrumentIdentifiers, instruments, operations, portfolios } from './schema';
+import { rowToOperation } from './operation-row';
 import { insertIdentifier } from './instrument-identifiers-store';
 
 /**
@@ -118,26 +118,6 @@ export interface Invariants {
   portfolios: PortfolioInvariants[];
 }
 
-const toOperation = (r: OperationRow): Operation => ({
-  id: r.id,
-  date: r.date,
-  systemId: r.systemId,
-  portfolioId: r.portfolioId,
-  instrumentId: r.instrumentId,
-  operationType: r.operationType as Operation['operationType'],
-  quantity: r.quantity,
-  price: r.price,
-  fee: r.fee,
-  fxRate: r.fxRate,
-  currency: r.currency,
-  transferGroup: r.transferGroup,
-  tradeId: r.tradeId,
-  note: r.note ?? undefined,
-  brokerRef: r.brokerRef ?? undefined,
-  executedAt: r.executedAt,
-  importBatchId: r.importBatchId,
-});
-
 /**
  * Что НЕ должно меняться от слияния дублей: число операций, по каждому портфелю —
  * количество позиций, вложено, реализованный P&L, доходы и кэш. Считается чистым
@@ -145,7 +125,7 @@ const toOperation = (r: OperationRow): Operation => ({
  * может только оценка инструмента, у которого появилась цена.
  */
 export function collectInvariants(db: Db): Invariants {
-  const ops = db.select().from(operations).all().map(toOperation);
+  const ops = db.select().from(operations).all().map(rowToOperation);
   const futureIds = new Set(
     db.select().from(instruments).all().filter((i) => i.type === 'Future').map((i) => i.id),
   );

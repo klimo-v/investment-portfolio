@@ -4,6 +4,7 @@ import {
   mapTbankOperations,
   moneyToDecimal,
   type TbankInstrumentRef,
+  type TbankMoneyValue,
   type TbankOperationItem,
 } from './tbank-invest-api';
 import { makeDedupeKey, normalizeRow, type RawRow } from '../import';
@@ -14,6 +15,15 @@ import { sourceCodeOf } from '../instrument-identity';
  * номера счетов и ПДн), но структура и цифры — как в настоящих ответах брокера.
  * Приоритет — денежная арифметика и дедупликация (CLAUDE.md §10).
  */
+
+function money(amount: string, currency = 'rub'): TbankMoneyValue {
+  const decimal = new Decimal(amount);
+  return {
+    currency,
+    units: decimal.trunc().toFixed(),
+    nano: decimal.minus(decimal.trunc()).mul(1_000_000_000).toNumber(),
+  };
+}
 
 const SBER: TbankInstrumentRef = {
   ticker: 'SBER',
@@ -92,6 +102,7 @@ describe('mapTbankOperations — сделки', () => {
     expect(rows.map((r) => r.brokerRef)).toEqual(['4000000001', '4000000002']);
     expect(rows.map((r) => r.quantity)).toEqual(['60', '40']);
     expect(rows.every((r) => r.tradeType === 'buy')).toBe(true);
+    expect(rows.every((r) => r.grossTradeAmountIssue === undefined)).toBe(true);
     expect(rows.every((r) => r.ticker === 'SBER')).toBe(true);
     expect(rows.every((r) => r.currency === 'RUB')).toBe(true);
     expect(rows.every((r) => r.instrumentType === 'Stock')).toBe(true);
@@ -292,7 +303,7 @@ describe('mapTbankOperations — комиссия: одно списание —
     date: '2026-03-15T10:30:00Z',
     type: 'OPERATION_TYPE_BROKER_FEE',
     state: 'OPERATION_STATE_EXECUTED',
-    payment: { currency: 'rub', units: String(-amount), nano: 0 },
+    payment: money(String(-amount)),
   });
   const totalFee = (rows: RawRow[]) => rows.reduce((sum, r) => sum.plus(r.fee ?? '0'), new Decimal(0)).toString();
 
@@ -456,7 +467,6 @@ describe('дедупликация с файловым импортом', () => 
     const apiKey = makeDedupeKey((api as { operation: never }).operation);
     const xlsxKey = makeDedupeKey((xlsx as { operation: never }).operation);
     expect(apiKey).toBe(xlsxKey);
-    expect(apiKey).toBe('ref:4000000001');
   });
 
   it('разные исполнения одной заявки не схлопываются в дубль', () => {
@@ -482,5 +492,119 @@ describe('происхождение операции (sourceCode)', () => {
     for (const r of rows) expect(sourceCodeOf(r)).toMatch(/^(tbank_uid|figi|isin|ticker):/);
     const res = normalizeRow(rows[0], { resolveSystem: () => 's', resolvePortfolio: () => 'p', resolveInstrument: (r: RawRow) => ({ instrumentId: r.ticker ?? null }) });
     expect('operation' in res && res.operation.sourceCode).toBeTruthy();
+  });
+});
+
+describe('подтверждённая сумма исполнения покупки облигации', () => {
+  const date = '2026-07-06T08:00:00Z';
+  function bondBuy(quantities: number[]): TbankOperationItem {
+    const done = quantities.reduce((sum, qty) => sum + qty, 0);
+    const price = '101.237';
+    const payment = quantities.reduce((sum, qty) =>
+      sum.plus(new Decimal(price).mul(qty).toDecimalPlaces(2)).plus(new Decimal('2.43').mul(qty)),
+    new Decimal(0));
+    return {
+      id: 'parent',
+      type: 'OPERATION_TYPE_BUY',
+      state: 'OPERATION_STATE_EXECUTED',
+      instrumentType: 'bond',
+      date,
+      quantity: '30',
+      quantityDone: String(done),
+      payment: money(payment.neg().toFixed()),
+      price: money(price),
+      accruedInt: money(new Decimal('2.43').mul(done).toFixed()),
+      commission: money('-3.17'),
+      tradesInfo: {
+        trades: quantities.map((qty, i) => ({
+          num: 'fill-' + i, date, quantity: String(qty), price: money(price),
+        })),
+      },
+    };
+  }
+
+  it('использует payment по исполненным 7 из 30 бумаг и учитывает дочернюю комиссию ровно один раз', () => {
+    const item = bondBuy([7]);
+    const child: TbankOperationItem = {
+      type: 'OPERATION_TYPE_BROKER_FEE', state: item.state, parentOperationId: item.id,
+      payment: money('-3.17'),
+    };
+    const rows = mapTbankOperations([item, child], 'account');
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      quantity: '7', executionRef: 'fill-0', price: '101.237', fee: '3.17',
+      grossTradeAmount: '725.67', grossTradeAmountSource: 'tbank-payment',
+    });
+  });
+
+  it('сверяет все 23 июльских исполнения с суммами брокера до копейки', () => {
+    // Числовые поля 14 операций GetOperationsByCursor; в последней заявке исполнено 7 из 30.
+    // Суммы отдельных исполнений в последней колонке взяты из независимой сверки.
+    const groups: [price: string, accrued: string, payment: string, qty: number[], expected: string[]][] = [
+      ['1325.00973', '364.4', '-26864.59', [20], ['26864.59']],
+      ['1032.45', '847.2', '-21496.2', [20], ['21496.2']],
+      ['1584.983618', '367.2', '-32066.87', [20], ['32066.87']],
+      ['1030.55', '847.2', '-21458.2', [7, 12, 1], ['7510.37', '12874.92', '1072.91']],
+      ['981.100294', '105.5', '-24633.01', [25], ['24633.01']],
+      ['1324.59549', '364.4', '-26856.31', [20], ['26856.31']],
+      ['993.85', '590.2', '-20467.2', [5, 2, 2, 1, 1, 6, 3],
+        ['5116.8', '2046.72', '2046.72', '1023.36', '1023.36', '6140.16', '3070.08']],
+      ['993.51', '747.5', '-25585.25', [25], ['25585.25']],
+      ['993.53', '1495', '-51171.5', [50], ['51171.5']],
+      ['992.74', '1534', '-51171', [50], ['51171']],
+      ['993', '920.4', '-30710.4', [28, 2], ['28663.04', '2047.36']],
+      ['993', '935.25', '-29732.25', [29], ['29732.25']],
+      ['1586.7908', '598.2', '-48201.92', [30], ['48201.92']],
+      ['1581.53072', '139.58', '-11210.3', [7], ['11210.3']],
+    ];
+    let gross = new Decimal(0);
+    let delta = new Decimal(0);
+    for (const [price, accrued, payment, qty, expected] of groups) {
+      const item = bondBuy(qty);
+      item.payment = money(payment);
+      item.accruedInt = money(accrued);
+      item.quantity = qty.length === 1 && qty[0] === 7 ? '30' : item.quantityDone;
+      for (const fill of item.tradesInfo!.trades!) fill.price = money(price);
+      const rows = mapTbankOperations([item], 'account');
+      expect(rows.map(r => r.grossTradeAmount)).toEqual(expected);
+      for (const row of rows) {
+        expect(row.grossTradeAmountSource).toBe(qty.length === 1 ? 'tbank-payment' : 'tbank-reconciled');
+        gross = gross.plus(row.grossTradeAmount!);
+        delta = delta.plus(row.grossTradeAmount!).minus(new Decimal(row.quantity!).mul(row.price!));
+      }
+    }
+    expect(gross.toFixed(2)).toBe('421625.00');
+    expect(delta.toFixed(6)).toBe('9856.026850');
+  });
+
+  it('не подставляет родительский ID за отсутствующий биржевой номер', () => {
+    const item = bondBuy([2, 3]);
+    delete item.tradesInfo!.trades![0].num;
+    const rows = mapTbankOperations([item], 'account');
+    expect(rows[0]).toMatchObject({ brokerRef: 'parent', grossTradeAmountIssue: expect.stringContaining('номера') });
+    expect(rows[0].executionRef).toBeUndefined();
+    expect(rows.every((row) => row.skipReason?.includes('номера'))).toBe(true);
+    expect(rows.every((row) => row.grossTradeAmount === undefined)).toBe(true);
+  });
+
+  it.each([
+    ['неполная группа', (item: TbankOperationItem) => item.tradesInfo!.trades!.pop(), /quantityDone/],
+    ['остаточная копейка', (item: TbankOperationItem) => { item.payment = money(moneyToDecimal(item.payment).minus('0.01').toFixed()); }, /расходится/],
+    ['повторный номер', (item: TbankOperationItem) => { item.tradesInfo!.trades![1].num = 'fill-0'; }, /повторяются/],
+    ['пропавший НКД', (item: TbankOperationItem) => { delete item.accruedInt; }, /нет НКД/],
+    ['чужая валюта НКД', (item: TbankOperationItem) => { item.accruedInt!.currency = 'usd'; }, /Валюта НКД/],
+    ['чужая валюта цены', (item: TbankOperationItem) => { item.tradesInfo!.trades![1].price!.currency = 'usd'; }, /Валюта цены/],
+    ['чужая валюта комиссии', (item: TbankOperationItem) => { item.commission!.currency = 'usd'; }, /Валюта комиссии/],
+    ['пустой платёж', (item: TbankOperationItem) => { item.payment = { currency: 'rub' }; }, /Некорректный платёж/],
+    ['продажа', (item: TbankOperationItem) => { item.type = 'OPERATION_TYPE_SELL'; item.payment = money('518.34'); }, /состав сделки продажи/],
+  ] as const)('оставляет сумму неизвестной: %s', (_, change, issue) => {
+    const item = bondBuy([2, 3]);
+    change(item);
+    const rows = mapTbankOperations([item], 'account');
+    for (const row of rows) {
+      expect(row.grossTradeAmount).toBeUndefined();
+      expect(row.grossTradeAmountSource).toBeUndefined();
+      expect(row.grossTradeAmountIssue).toMatch(issue);
+    }
   });
 });

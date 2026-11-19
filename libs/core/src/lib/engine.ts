@@ -1,3 +1,4 @@
+import { grossTradeAmount } from './trade-amount';
 import Decimal from 'decimal.js';
 import type { Operation } from './schemas';
 import { applyFutureFill, type FuturePosition } from './futures-engine';
@@ -168,7 +169,7 @@ export function calculatePositions(
 
     switch (op.operationType) {
       case 'Buy': {
-        const cost = qty.mul(price).plus(fee);
+        const cost = grossTradeAmount(op).plus(fee);
         // среднюю формируют ОСТАВШИЕСЯ лоты, поэтому валюта — из последней покупки:
         // если бумагу когда-то брали за другую валюту, актуальна валюта тех лотов,
         // что сейчас в остатке
@@ -186,7 +187,7 @@ export function calculatePositions(
         // себестоимость проданной части по средней цене
         const costOfSold = soldCost(pos.investedCcy, pos.quantity, qty);
         const costOfSoldRub = soldCost(pos.investedRub, pos.quantity, qty);
-        const proceeds = qty.mul(price).minus(fee);
+        const proceeds = grossTradeAmount(op).minus(fee);
         pos.realizedPnlCcy = pos.realizedPnlCcy.plus(proceeds.minus(costOfSold));
         pos.realizedPnlRub = pos.realizedPnlRub.plus(proceeds.mul(fxRate).minus(costOfSoldRub));
         pos.quantity = pos.quantity.minus(qty);
@@ -295,7 +296,7 @@ export function realizedPnlInRange(
     }
 
     if (op.operationType === 'Buy') {
-      const cost = qty.mul(price).plus(fee);
+      const cost = grossTradeAmount(op).plus(fee);
       pos.investedCcy = pos.investedCcy.plus(cost);
       pos.investedRub = pos.investedRub.plus(cost.mul(fxRate));
       pos.quantity = pos.quantity.plus(qty);
@@ -303,7 +304,7 @@ export function realizedPnlInRange(
     } else if (op.operationType === 'Sell') {
       const costOfSold = soldCost(pos.investedCcy, pos.quantity, qty);
       const costOfSoldRub = soldCost(pos.investedRub, pos.quantity, qty);
-      const proceeds = qty.mul(price).minus(fee);
+      const proceeds = grossTradeAmount(op).minus(fee);
       if (!from || op.date >= from) {
         pos.realizedPnlRub = pos.realizedPnlRub.plus(proceeds.mul(fxRate).minus(costOfSoldRub));
       }
@@ -493,7 +494,7 @@ export class TradeLedger {
         open.set(key, trade);
       }
       trade.tradeCurrency = op.currency;
-      const cost = qty.mul(price).plus(fee);
+      const cost = grossTradeAmount(op).plus(fee);
       trade.investedCcy = trade.investedCcy.plus(cost);
       trade.investedRub = trade.investedRub.plus(cost.mul(fxRate));
       trade.purchasesRub = trade.purchasesRub.plus(cost.mul(fxRate));
@@ -515,14 +516,14 @@ export class TradeLedger {
         this.orphanSells.push({
           date: op.date,
           instrumentId: op.instrumentId,
-          amountRub: qty.mul(price).minus(fee).mul(fxRate),
+          amountRub: grossTradeAmount(op).minus(fee).mul(fxRate),
         });
         return;
       }
 
       const costOfSold = soldCost(trade.investedCcy, trade.quantity, qty);
       const costOfSoldRub = soldCost(trade.investedRub, trade.quantity, qty);
-      const proceeds = qty.mul(price).minus(fee);
+      const proceeds = grossTradeAmount(op).minus(fee);
       trade.realizedPnlCcy = trade.realizedPnlCcy.plus(proceeds.minus(costOfSold));
       trade.realizedPnlRub = trade.realizedPnlRub.plus(proceeds.mul(fxRate).minus(costOfSoldRub));
       this.emit(trade, {

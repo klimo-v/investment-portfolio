@@ -1,6 +1,6 @@
 import Decimal from 'decimal.js';
 import { z } from 'zod';
-import { OperationType, type Operation } from './schemas';
+import { OperationType, type GrossTradeAmountSource, type Operation } from './schemas';
 import { identityKey, sourceCodeOf, type InstrumentIdentifiers, type InstrumentSuggestion } from './instrument-identity';
 
 /**
@@ -33,6 +33,11 @@ export interface RawRow {
   quantity?: string;
   price?: string;
   fee?: string;
+  grossTradeAmount?: string;
+  grossTradeAmountSource?: GrossTradeAmountSource;
+  grossTradeAmountIssue?: string;
+  /** Биржевой номер исполнения, без подстановки номера родительской операции. */
+  executionRef?: string;
   leverage?: string;
   fxRate?: string;
   note?: string;
@@ -204,7 +209,7 @@ export function classifyOperationType(
  * есть, всегда в приоритете.
  */
 export function makeDedupeKey(op: Operation): string {
-  if (op.brokerRef) return `ref:${op.brokerRef}`;
+  if (op.brokerRef) return JSON.stringify([op.portfolioId, op.brokerRef]);
   return [op.date, op.instrumentId ?? '', op.operationType, op.quantity, op.price].join('|');
 }
 
@@ -282,6 +287,11 @@ export function normalizeRow(
     reason = `Новый инструмент «${systemKey}» — возможно, это «${similar.ticker}» (${similar.reason}). Выберите существующий или оставьте новый.`;
   }
 
+  if (raw.grossTradeAmountIssue) {
+    confidence = 'warn';
+    reason = [reason, raw.grossTradeAmountIssue].filter(Boolean).join('. ');
+  }
+
   const operation: Operation = {
     date,
     systemId,
@@ -291,6 +301,10 @@ export function normalizeRow(
     quantity: normalizeNumber(raw.quantity, '1'),
     price: normalizeNumber(raw.price, '0'),
     fee: normalizeNumber(raw.fee, '0'),
+    ...(raw.grossTradeAmountSource && {
+      grossTradeAmount: raw.grossTradeAmount,
+      grossTradeAmountSource: raw.grossTradeAmountSource,
+    }),
     fxRate: normalizeNumber(raw.fxRate, '1'),
     currency: (raw.currency ?? 'RUB').trim() || 'RUB',
     note: raw.note?.trim() || undefined,

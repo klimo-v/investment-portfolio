@@ -39,6 +39,9 @@ const decimalString = z
   .string()
   .regex(/^-?\d+(\.\d+)?$/, 'Ожидается десятичное число в виде строки');
 
+export const GrossTradeAmountSource = z.enum(['tbank-payment', 'tbank-reconciled']);
+export type GrossTradeAmountSource = z.infer<typeof GrossTradeAmountSource>;
+
 /** Операция журнала — то единственное, что вводится/импортируется */
 export const OperationSchema = z.object({
   id: z.string().min(1).optional(),
@@ -50,6 +53,8 @@ export const OperationSchema = z.object({
   quantity: decimalString,
   price: decimalString,
   fee: decimalString.default('0'),
+  grossTradeAmount: z.string().regex(/^\d+(\.\d+)?$/).nullish(),
+  grossTradeAmountSource: GrossTradeAmountSource.nullish(),
   fxRate: decimalString.default('1'),
   currency: z.string().min(1),
   transferGroup: z.string().nullish(),

@@ -162,6 +162,20 @@
       "when": 1794215650218,
       "tag": "0022_operation_source_code",
       "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "6",
+      "when": 1795089597468,
+      "tag": "0023_operation_gross_trade_amount",
+      "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "6",
+      "when": 1795089597469,
+      "tag": "0024_operation_gross_trade_amount_source",
+      "breakpoints": true
     }
   ]
 }
