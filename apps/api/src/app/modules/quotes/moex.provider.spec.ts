@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest';
-import { parseIssQuote } from './moex.provider';
+import { afterEach, describe, it, expect, vi } from 'vitest';
+import { MoexProvider, parseIssQuote } from './moex.provider';
 
 /**
  * Разбор ответа MOEX ISS на реальных формах данных (снято с биржи 13.08.2026).
@@ -16,23 +16,48 @@ const securities = (rows: (string | number | null)[][]) => ({
   data: rows,
 });
 
-describe('parseIssQuote — акции и фонды', () => {
-  it('цена берётся как есть, без пересчёта номинала', () => {
-    const quote = parseIssQuote(
-      { marketdata: marketdata([['SBMM', 'TQTF', 19.16, 19.16, 19.15]]) },
-      false,
-    );
-    expect(quote).toEqual({
-      price: '19.16',
-      currency: 'RUB',
-      accruedInterest: null,
-      accruedCurrency: null,
+function shareQuote(ticker: string, board: string, currency: string | null, prices: (number | null)[]) {
+  return {
+    securities: { columns: ['SECID', 'BOARDID', 'CURRENCYID'], data: [[ticker, board, currency]] },
+    marketdata: marketdata([[ticker, board, ...prices]]),
+  };
+}
+
+describe('MOEX — основной режим акций и фондов', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it.each([
+    ['X5', 'TQBR', 'SUR', 2318.5, 'RUB'],
+    ['CNYM', 'TQTY', 'CNY', 11.402, 'CNY'],
+    ['NEW', 'NEWBOARD', 'USD', 12, 'USD'],
+  ] as const)('запрашивает основной режим у самой биржи для %s', async (ticker, board, code, last, currency) => {
+    const fetchQuote = vi.fn(async (url: string) => {
+      const request = new URL(url);
+      expect(request.pathname).toBe(`/iss/engines/stock/markets/shares/securities/${ticker}.json`);
+      expect(request.searchParams.get('primary_board')).toBe('1');
+      expect(request.searchParams.get('securities.columns')?.split(',')).toContain('CURRENCYID');
+      return Response.json(shareQuote(ticker, board, code, [last, null, 140.65]));
     });
+    vi.stubGlobal('fetch', fetchQuote);
+    expect(await new MoexProvider().getQuote(ticker)).toMatchObject({ price: String(last), currency });
+    expect(fetchQuote).toHaveBeenCalledTimes(1);
   });
 
-  it('нет ни одной ценовой колонки — цены нет', () => {
-    expect(parseIssQuote({ marketdata: marketdata([['X', 'TQBR', null, null, null]]) }, false)).toBeNull();
-    expect(parseIssQuote({}, false)).toBeNull();
+  it('без сделок допускает LCURRENTPRICE в валюте режима', () => {
+    const q = shareQuote('CNYM', 'TQTY', 'CNY', [null, 11.376, 140.65]);
+    expect(parseIssQuote(q, 'shares')).toMatchObject({ price: '11.376', currency: 'CNY' });
+  });
+
+  it('требует единственного режима, его валюту и совпадение с описанием', () => {
+    const q = shareQuote('X5', 'TQBR', 'SUR', [2318.5, null, null]);
+    expect(parseIssQuote({ ...q, marketdata: marketdata([['X5', 'SPEQ', null, null, 2357], ...q.marketdata.data]) }, 'shares')).toBeNull();
+    expect(parseIssQuote({ ...q, marketdata: marketdata([['X5', 'SPEQ', null, null, 2357]]) }, 'shares')).toBeNull();
+    expect(parseIssQuote(shareQuote('X5', 'TQBR', null, [2318.5, null, null]), 'shares')).toBeNull();
+  });
+
+  it('не принимает рублёвый MARKETPRICE за цену в юанях', () => {
+    expect(parseIssQuote(shareQuote('CNYM', 'TQTY', 'CNY', [null, null, 140.65]), 'shares')).toBeNull();
+    expect(parseIssQuote(shareQuote('X5', 'TQBR', 'SUR', [null, null, null]), 'shares')).toBeNull();
   });
 });
 
@@ -43,7 +68,7 @@ describe('parseIssQuote — облигации', () => {
         marketdata: marketdata([['SU29015RMFS3', 'TQOB', 99.26, 99.262, 99.232]]),
         securities: securities([['SU29015RMFS3', 'TQOB', 1000, 'SUR', 14.18, 'SUR']]),
       },
-      true,
+      'bonds',
     );
     // 99.26% от номинала 1000 ₽; у рублёвой ОФЗ FACEUNIT и CURRENCYID совпадают
     expect(quote).toEqual({
@@ -60,7 +85,7 @@ describe('parseIssQuote — облигации', () => {
         marketdata: marketdata([['SU52002RMFS1', 'TQOB', 92.276, 92.29, 92.123]]),
         securities: securities([['SU52002RMFS1', 'TQOB', 1755.47, 'SUR', 2.77, 'SUR']]),
       },
-      true,
+      'bonds',
     );
     expect(Number(quote?.price)).toBeCloseTo(1619.88, 2);
   });
@@ -72,7 +97,7 @@ describe('parseIssQuote — облигации', () => {
         marketdata: marketdata([['RU000A10B4K3', 'TQCB', 100.3999, 100.3963, 99.0546]]),
         securities: securities([['RU000A10B4K3', 'TQCB', 100, 'USD', 26.97024, 'SUR']]),
       },
-      true,
+      'bonds',
     );
     expect(Number(quote?.price)).toBeCloseTo(100.3999, 4);
     expect(quote?.currency).toBe('USD');
@@ -94,7 +119,7 @@ describe('parseIssQuote — облигации', () => {
           ['RU000A10B4K3', 'TQOD', 100, 'USD', 0.32, 'USD'],
         ]),
       },
-      true,
+      'bonds',
     );
     expect(quote?.accruedInterest).toBe('0.32');
     expect(quote?.accruedCurrency).toBe('USD');
@@ -108,15 +133,15 @@ describe('parseIssQuote — запасные источники цены', () =>
         marketdata: marketdata([['SU52005RMFS4', 'TQOB', null, 101.746, 101.7]]),
         securities: securities([['SU52005RMFS4', 'TQOB', 1000, 'SUR', 8.82, 'SUR']]),
       },
-      true,
+      'bonds',
     );
     expect(Number(quote?.price)).toBeCloseTo(1017.46, 2);
   });
 
   it('MARKETPRICE — последний рубеж, когда пусты и LAST, и LCURRENTPRICE', () => {
     const quote = parseIssQuote(
-      { marketdata: marketdata([['GOLD', 'TQTF', null, null, 2.98]]) },
-      false,
+      shareQuote('GOLD', 'TQTF', 'SUR', [null, null, 2.98]),
+      'shares',
     );
     expect(quote?.price).toBe('2.98');
   });

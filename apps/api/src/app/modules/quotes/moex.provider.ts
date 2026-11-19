@@ -26,11 +26,8 @@ interface IssResponse {
 }
 
 // движки/рынки MOEX, где ищем инструмент по типам из справочника
-const MARKETS = [
-  'engines/stock/markets/shares', // акции, ETF
-  'engines/stock/markets/bonds', // облигации
-  'engines/currency/markets/selt', // валюта (GLDRUB_TOM и т.п.)
-];
+const MARKETS = ['shares', 'bonds', 'selt'] as const;
+type QuoteMarket = (typeof MARKETS)[number];
 
 /**
  * Источники цены в порядке предпочтения.
@@ -81,21 +78,27 @@ export class MoexProvider implements PriceProvider {
     return null;
   }
 
-  private async fetchQuote(market: string, ticker: string): Promise<IssQuote | null> {
-    const isBonds = market.endsWith('/bonds');
+  private async fetchQuote(market: QuoteMarket, ticker: string): Promise<IssQuote | null> {
+    const engine = market === 'selt' ? 'currency' : 'stock';
     const priceColumns = ['SECID', 'BOARDID', ...PRICE_COLUMNS].join(',');
-    const only = isBonds
-      ? 'iss.only=securities,marketdata' +
-        '&securities.columns=SECID,BOARDID,FACEVALUE,FACEUNIT,ACCRUEDINT,CURRENCYID' +
-        `&marketdata.columns=${priceColumns}`
-      : `iss.only=marketdata&marketdata.columns=${priceColumns}`;
-    const url = `https://iss.moex.com/iss/${market}/securities/${encodeURIComponent(ticker)}.json?iss.meta=off&${only}`;
+    const query = new URLSearchParams({
+      'iss.meta': 'off',
+      'iss.only': market === 'selt' ? 'marketdata' : 'securities,marketdata',
+      'marketdata.columns': priceColumns,
+    });
+    if (market === 'shares') {
+      query.set('primary_board', '1');
+      query.set('securities.columns', 'SECID,BOARDID,CURRENCYID');
+    } else if (market === 'bonds') {
+      query.set('securities.columns', 'SECID,BOARDID,FACEVALUE,FACEUNIT,ACCRUEDINT,CURRENCYID');
+    }
+    const url = `https://iss.moex.com/iss/engines/${engine}/markets/${market}/securities/${encodeURIComponent(ticker)}.json?${query}`;
     const res = await fetchWithTimeout(url);
     if (!res.ok) {
       if (res.status === 404) return null;
       throw new Error(`MOEX: HTTP ${res.status}`);
     }
-    return parseIssQuote((await res.json()) as IssResponse, isBonds);
+    return parseIssQuote((await res.json()) as IssResponse, market);
   }
 }
 
@@ -133,14 +136,35 @@ function cell(
  * а вся арифметика процентов номинала, выбора режима торгов и приоритета
  * ценовых колонок покрыта юнит-тестами без похода на биржу.
  */
-export function parseIssQuote(json: IssResponse, isBonds: boolean): IssQuote | null {
+export function parseIssQuote(json: IssResponse, market: QuoteMarket): IssQuote | null {
   const md = json.marketdata;
   if (!md) return null;
 
-  // первая строка, где есть хоть какая-то цена; колонки — в порядке предпочтения
+  if (market === 'shares') {
+    // primary_board=1 должен вернуть котировку ровно одного режима.
+    if (md.data.length !== 1) return null;
+    const board = cell(md, 0, 'BOARDID');
+    const secid = cell(md, 0, 'SECID');
+    if (!board || !secid) return null;
+    const sec = json.securities;
+    const row = sec?.data.findIndex((_, i) =>
+      cell(sec, i, 'SECID') === secid && cell(sec, i, 'BOARDID') === board);
+    if (row === undefined || row < 0) return null;
+    const code = cell(sec, row, 'CURRENCYID');
+    if (!code) return null;
+    const currency = faceUnitToCurrency(code);
+    for (const column of PRICE_COLUMNS) {
+      // В валютном режиме MARKETPRICE может дублировать рублёвую оценку (CNYM).
+      if (column === 'MARKETPRICE' && currency !== 'RUB') continue;
+      const price = cell(md, 0, column);
+      if (price !== null) return { price: String(price), currency, accruedInterest: null, accruedCurrency: null };
+    }
+    return null;
+  }
+
   let price: string | number | null = null;
   let row = -1;
-  for (let i = 0; i < md.data.length && price === null; i++) {
+  for (let i = 0; i < md.data.length; i++) {
     for (const column of PRICE_COLUMNS) {
       const value = cell(md, i, column);
       if (value !== null) {
@@ -149,10 +173,11 @@ export function parseIssQuote(json: IssResponse, isBonds: boolean): IssQuote | n
         break;
       }
     }
+    if (price !== null) break;
   }
   if (price === null) return null;
 
-  if (!isBonds)
+  if (market !== 'bonds')
     return { price: String(price), currency: 'RUB', accruedInterest: null, accruedCurrency: null };
 
   /*

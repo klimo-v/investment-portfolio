@@ -23,7 +23,7 @@ export type IssHistoryKind = 'shares' | 'bonds' | 'selt' | 'forts' | 'index';
 const PAGE = 100;
 
 /** Основные режимы торгов — тай-брейк, когда колонки оборота (VALUE) в ответе нет */
-const MAIN_BOARDS = ['TQBR', 'TQTF', 'TQIF', 'TQCB', 'TQOB', 'CETS', 'FUT'];
+const MAIN_BOARDS = ['TQCB', 'TQOB', 'CETS', 'FUT'];
 
 function faceUnitToCurrency(code: unknown): string {
   const c = String(code ?? '').toUpperCase();
@@ -41,8 +41,9 @@ function num(v: string | number | null | undefined): string | null {
  * выбор режима, проценты номинала облигаций, НКД и множитель фьючерса — здесь, под
  * юнит-тестами на зафиксированных ответах.
  *
- * На дату может быть несколько строк (режимы торгов). Берём ту, где больше оборот VALUE
- * (там реальные сделки), при равенстве/отсутствии — основной режим. Строки без цены
+ * Для акций и фондов сравниваем объём в бумагах на дату: денежный оборот режимов
+ * может быть в разных валютах. При равном объёме берём режим с большим числом сделок.
+ * Для остальных рынков используем оборот VALUE и приоритет режима. Строки без цены
  * (CLOSE пуст или 0 — «сделок не было») пропускаем.
  */
 export function parseIssHistory(
@@ -55,7 +56,8 @@ export function parseIssHistory(
   const col = (name: string) => section.columns.indexOf(name);
   const iDate = col('TRADEDATE');
   const iBoard = col('BOARDID');
-  const iValue = col('VALUE');
+  const iValue = col(kind === 'shares' ? 'VOLUME' : 'VALUE');
+  const iTrades = col('NUMTRADES');
   const iClose = col(kind === 'forts' ? 'SETTLEPRICE' : 'CLOSE');
   const iCloseFallback = kind === 'forts' ? col('CLOSE') : -1;
   const iAcc = col('ACCINT');
@@ -64,19 +66,25 @@ export function parseIssHistory(
   const iCurrencyId = col('CURRENCYID');
   if (iDate < 0 || iClose < 0) return [];
 
-  const best = new Map<string, { rank: [number, number]; row: (string | number | null)[] }>();
+  const best = new Map<string, { volume: number; priority: number; board: string; row: (string | number | null)[] }>();
   for (const row of section.data) {
     const date = row[iDate];
     const close = row[iClose] ?? (iCloseFallback >= 0 ? row[iCloseFallback] : null);
     if (typeof date !== 'string' || close === null || close === '' || Number(close) === 0) continue;
+    if (kind === 'shares' && !row[iCurrencyId]) continue;
     const value = iValue >= 0 && row[iValue] !== null ? Number(row[iValue]) : -1;
     const board = iBoard >= 0 ? String(row[iBoard]) : '';
     const boardRank = MAIN_BOARDS.indexOf(board);
-    const rank: [number, number] = [value, boardRank < 0 ? -1 : MAIN_BOARDS.length - boardRank];
+    const priority = kind === 'shares'
+      ? Number(row[iTrades] ?? 0)
+      : boardRank < 0 ? -1 : MAIN_BOARDS.length - boardRank;
     const cur = best.get(date);
-    if (!cur || rank[0] > cur.rank[0] || (rank[0] === cur.rank[0] && rank[1] > cur.rank[1])) {
-      best.set(date, { rank, row });
+    if (cur) {
+      const comparison = value - cur.volume || priority - cur.priority ||
+        (kind === 'shares' ? cur.board.localeCompare(board) : 0);
+      if (comparison <= 0) continue;
     }
+    best.set(date, { volume: value, priority, board, row });
   }
 
   const points: HistoryPoint[] = [];
@@ -119,7 +127,7 @@ export function parseIssHistory(
       points.push({
         date,
         price: new Decimal(close).toString(),
-        currency: 'RUB',
+        currency: kind === 'shares' ? faceUnitToCurrency(row[iCurrencyId]) : 'RUB',
         accruedInterest: null,
         accruedCurrency: null,
         source: 'moex',
@@ -149,7 +157,7 @@ const PATH: Record<IssHistoryKind, string> = {
 };
 
 const COLUMNS: Record<IssHistoryKind, string> = {
-  shares: 'TRADEDATE,BOARDID,CLOSE,VALUE',
+  shares: 'TRADEDATE,BOARDID,CLOSE,VOLUME,NUMTRADES,CURRENCYID',
   bonds: 'TRADEDATE,BOARDID,CLOSE,ACCINT,FACEVALUE,FACEUNIT,CURRENCYID,VALUE',
   selt: 'TRADEDATE,BOARDID,CLOSE',
   forts: 'TRADEDATE,SETTLEPRICE,CLOSE',

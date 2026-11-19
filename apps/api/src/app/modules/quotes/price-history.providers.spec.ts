@@ -13,7 +13,7 @@ const fixture = (name: string): string => readFileSync(join(__dirname, '__fixtur
 const iss = (name: string) => JSON.parse(fixture(name)) as IssHistoryResponse;
 
 describe('MOEX ISS history: акции', () => {
-  it('на дату берётся режим с наибольшим оборотом, цена — CLOSE в рублях', () => {
+  it('CLOSE в рублях по датам торгов SBER', () => {
     const points = parseIssHistory(iss('iss-shares-sber.json'), 'shares');
     expect(points.map((p) => [p.date, p.price])).toEqual([
       ['2026-10-28', '297.98'],
@@ -24,6 +24,20 @@ describe('MOEX ISS history: акции', () => {
       ['2026-11-05', '292.43'],
     ]);
     expect(points[0]).toMatchObject({ currency: 'RUB', accruedInterest: null, source: 'moex' });
+  });
+
+  it('сравнивает режимы по количеству бумаг и сохраняет валюту выбранного закрытия', () => {
+    const columns = ['TRADEDATE', 'BOARDID', 'CLOSE', 'VOLUME', 'NUMTRADES', 'CURRENCYID'];
+    const rows = [
+      ['2026-11-16', 'BOARD1', 140, 90, 3, 'SUR'],
+      ['2026-11-16', 'BOARD2', 11, 120, 4, 'CNY'],
+      ['2026-11-16', 'BOARD3', 99, 200, 5, null],
+      ['2026-11-17', 'BOARD1', 141, 130, 2, 'SUR'],
+    ];
+    for (const data of [rows, [...rows].reverse()]) {
+      const points = parseIssHistory({ history: { columns, data } }, 'shares');
+      expect(points.map((p) => [p.price, p.currency])).toEqual([['11', 'CNY'], ['141', 'RUB']]);
+    }
   });
 });
 
